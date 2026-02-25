@@ -1,0 +1,6 @@
+{
+    "name": "@cjthompson/claude-code-config",
+    "devDependencies": {
+        "@types/node": "^22"
+    }
+}
