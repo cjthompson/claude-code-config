@@ -14,8 +14,11 @@ const DIM  = '\x1b[2m';
 const PL_RIGHT = '\u25b6'; // ▶
 const PL_SOFT  = '\u2502'; // │
 
-const bg = (n: number): string => '\x1b[48;5;' + n + 'm';
-const fg = (n: number): string => '\x1b[38;5;' + n + 'm';
+const bg = (n: number) => `\x1b[48;5;${n}m`;
+const fg = (n: number) => `\x1b[38;5;${n}m`;
+// Combined sequence: reset + fg + bg (+ optional bold) in one atomic escape (survives terminal reflow)
+const combo = (fgN: number, bgN: number, bold = false) =>
+  `\x1b[0;${bold ? '1;' : ''}38;5;${fgN};48;5;${bgN}m`;
 
 // Named backgrounds
 const BG_GREEN = bg(22);
@@ -32,49 +35,79 @@ const YELLOW_FG  = fg(221);
 const RED_FG     = fg(203);
 const ORANGE_FG  = fg(215);
 const BLUE_FG    = fg(111);
-const MAGENTA_FG = fg(176);
 const GREEN_114  = fg(114);
 
 // Reset-to-background shortcuts
 const R_GREEN = RST + BG_GREEN;
 const R_DARK  = RST + BG_DARK;
 
+// ── Nerd Font Icons ──────────────────────────────────────────
+const ICON_BOLT      = '\uf0e7';  // model
+const ICON_DOLLAR    = '\uf155';  // cost
+const ICON_CLOCK     = '\uf017';  // cost rate
+const ICON_HOURGLASS = '\uf252';  // time left
+const ICON_PENCIL    = '\uf044';  // lines changed
+const ICON_FOLDER    = '\uf115';  // directory
+const ICON_GIT       = '\ue725';  // git branch
+const PCT            = '\uf295';  // powerline percent (replaces ASCII %)
+const PLUS           = '\ueb71';  // up arrow
+const MINUS          = '\ueb6e';  // down arrow
+const FIVE           = '\udb82\udf3e'; // 5
+const SEVEN          = '\udb82\udf40'; // 7
+
+// ── Multi-level icon sets ────────────────────────────────────
+// Factory: picks an icon from an array based on percentage
+const levelIcon = (icons: string[]) => (pct: number) =>
+  icons[Math.min(icons.length - 1, Math.max(0, Math.round(pct / 100 * (icons.length - 1))))];
+
+// Circle slices (8 levels) — context window
+const circleIcon = levelIcon([
+  '\uDB82\uDE9E', '\uDB82\uDE9F', '\uDB82\uDEA0', '\uDB82\uDEA1',
+  '\uDB82\uDEA2', '\uDB82\uDEA3', '\uDB82\uDEA4', '\uDB82\uDEA5',
+]);
+
+// Battery (9 levels) — 5h quota
+const batteryIcon = levelIcon([
+  '\uDB80\uDC7A', '\uDB80\uDC7B', '\uDB80\uDC7C', '\uDB80\uDC7D', '\uDB80\uDC7E',
+  '\uDB80\uDC7F', '\uDB80\uDC80', '\uDB80\uDC81', '\uDB80\uDC82',
+]);
+
+// Thermometer (5 levels) — 7d quota
+const thermoIcon = levelIcon(['\uf2cb', '\uf2ca', '\uf2c9', '\uf2c8', '\uf2c7']);
+
 // ── Utilities ─────────────────────────────────────────────────
 
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
-}
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 // ── Powerline helpers ─────────────────────────────────────────
 
-// Transition between two background colors
-function plTransition(bgNumFrom: number, bgNumTo: number): string {
-  return fg(bgNumFrom) + bg(bgNumTo) + PL_RIGHT + RST + bg(bgNumTo);
-}
+const plTransition = (bgFrom: number, bgTo: number) =>
+  `${fg(bgFrom)}${bg(bgTo)}${PL_RIGHT}${RST}${bg(bgTo)}`;
 
-// Cap off a powerline line (transition to default terminal bg)
-function plEnd(bgNum: number): string {
-  return fg(bgNum) + PL_RIGHT + RST;
-}
+const plEnd = (bgNum: number) =>
+  `${fg(bgNum)}${PL_RIGHT}${RST}`;
 
-// Join separator for powerline sections within the same background
-function joinSep(bgStr: string, sepColorNum: number): string {
-  return fg(sepColorNum) + PL_SOFT + RST + bgStr;
-}
+const joinSep = (bgStr: string, sepColor: number) =>
+  `${fg(sepColor)}${PL_SOFT}${RST}${bgStr}`;
 
-// ── Progress bar ──────────────────────────────────────────────
-function progressBar(pct: number, bgStr: string, width: number): string {
+// ── Progress bar (fractional blocks for sub-character precision) ──
+const FRAC_BLOCKS = [' ', '\u258f', '\u258e', '\u258d', '\u258c', '\u258b', '\u258a', '\u2589', '\u2588'];
+//                    0    ▏ 1/8     ▎ 1/4     ▍ 3/8     ▌ 1/2     ▋ 5/8     ▊ 3/4     ▉ 7/8     █ full
+const BAR_BG = bg(238);
+
+function progressBar(pct: number, sectionBg: string, width: number): string {
   const clamped = Math.min(100, Math.max(0, pct));
-  const filled = Math.round((clamped / 100) * width);
-  const empty = width - filled;
+  const filled = Math.round((clamped / 100) * width * 8);
+  const fullBlocks = Math.floor(filled / 8);
+  const frac = filled % 8;
+  const empty = width - fullBlocks - (frac > 0 ? 1 : 0);
 
-  let barColor: string;
-  if (pct >= 80) barColor = RED_FG;
-  else if (pct >= 60) barColor = ORANGE_FG;
-  else if (pct >= 40) barColor = YELLOW_FG;
-  else barColor = GREEN_114;
+  const barColor = pct >= 80 ? RED_FG
+    : pct >= 60 ? ORANGE_FG
+    : pct >= 40 ? YELLOW_FG
+    : GREEN_114;
 
-  return barColor + '\u2588'.repeat(filled) + fg(248) + '\u2591'.repeat(empty) + RST + bgStr;
+  return `${barColor}${BAR_BG}${'\u2588'.repeat(fullBlocks)}${frac > 0 ? FRAC_BLOCKS[frac] : ''}${' '.repeat(Math.max(0, empty))}${RST}${sectionBg}`;
 }
 
 // ── Formatters ────────────────────────────────────────────────
@@ -82,69 +115,42 @@ function formatDuration(seconds: number): string {
   if (seconds <= 0) return 'now';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '');
-  return m + 'm';
+  return h > 0 ? `${h}h${m > 0 ? `${m}m` : ''}` : `${m}m`;
 }
 
 function formatLocalTime(isoStr: string): string {
   const d = new Date(isoStr);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  h = h % 12 || 12;
-  return h + ':' + String(m).padStart(2, '0') + ampm;
+  const h = d.getHours() % 12 || 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const ampm = d.getHours() >= 12 ? 'PM' : 'AM';
+  return `${h}:${m}${ampm}`;
 }
 
 function cacheAge(mtime: number): string {
   const ageSec = Math.floor(Date.now() / 1000) - mtime;
-  if (ageSec < 60) return 'new';
-  return Math.floor(ageSec / 60) + 'm old';
+  return ageSec < 60 ? 'new' : `${Math.floor(ageSec / 60)}m old`;
 }
 
 // Shorten path: ~/dev/neat-core-js/.worktrees/sso → ~/d/n/.w/sso
-// Always shortens parent dirs: ~/dev/neat-core-js → ~/d/neat-core-js
 // Keeps only the last segment intact; shortens all parent dirs to first char (or .X for dotdirs)
 function shortenPath(p: string): string {
-  const home = process.env.HOME || '';
-  if (home && p.startsWith(home)) p = '~' + p.slice(home.length);
+  const home = process.env.HOME ?? '';
+  if (home && p.startsWith(home)) p = `~${p.slice(home.length)}`;
 
   const parts = p.split('/');
   for (let i = 0; i < parts.length - 1; i++) {
     if (parts[i] === '~' || parts[i] === '') continue;
-    if (parts[i].startsWith('.')) {
-      parts[i] = parts[i].slice(0, 2);
-    } else {
-      parts[i] = parts[i][0];
-    }
+    parts[i] = parts[i].startsWith('.') ? parts[i].slice(0, 2) : parts[i][0];
   }
   return parts.join('/');
 }
 
 // Shorten branch: chore/improve-playwright-tests → improve-playwri…
-function shortenBranch(branch: string, maxLen: number): string {
-  branch = branch.replace(/^(chore|feature|feat|fix|bugfix|hotfix|release)\//i, '');
-  if (branch.length <= maxLen) return branch;
-  return branch.slice(0, maxLen - 1) + '\u2026';
-}
+const BRANCH_PREFIXES = /^(chore|feature|feat|fix|bugfix|hotfix|release)\//i;
 
-// ── Quota window formatter ────────────────────────────────────
-function formatQuotaWindow(
-  window: Record<string, any> | undefined,
-  label: string,
-  labelColor: string,
-  isWide: boolean,
-  formatReset: (iso: string) => string,
-): string | null {
-  if (!window) return null;
-  const pct = Math.round(window.utilization);
-  let resetStr = '';
-  if (window.resets_at) {
-    resetStr = ' ' + GRAY_FG + formatReset(window.resets_at) + R_DARK;
-  }
-  return ' ' + labelColor + BOLD + label + ' ' + R_DARK +
-    WHITE + pct + '% ' + R_DARK +
-    progressBar(pct, BG_DARK, isWide ? 12 : 8) +
-    resetStr + ' ';
+function shortenBranch(branch: string, maxLen: number): string {
+  const shortened = branch.replace(BRANCH_PREFIXES, '');
+  return shortened.length <= maxLen ? shortened : `${shortened.slice(0, maxLen - 1)}\u2026`;
 }
 
 // ── Exports (for testing) ─────────────────────────────────────
@@ -159,7 +165,6 @@ export {
   plTransition,
   plEnd,
   joinSep,
-  formatQuotaWindow,
 };
 
 // ── Powerline renderer ────────────────────────────────────────
@@ -185,8 +190,8 @@ function renderPowerline(segs: PowerlineSeg[]): string {
   // Group consecutive same-section segments
   const groups: { bgNum: number; parts: string[] }[] = [];
   for (const seg of segs) {
-    const last = groups[groups.length - 1];
-    if (last && last.bgNum === seg.section) {
+    const last = groups.at(-1);
+    if (last?.bgNum === seg.section) {
       last.parts.push(seg.content);
     } else {
       groups.push({ bgNum: seg.section, parts: [seg.content] });
@@ -196,15 +201,13 @@ function renderPowerline(segs: PowerlineSeg[]): string {
   let line = '';
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
-    const style = SECTION_STYLES[g.bgNum] || { bg: bg(g.bgNum), sep: 240 };
-    if (i === 0) {
-      line += RST + bg(g.bgNum);
-    } else {
-      line += plTransition(groups[i - 1].bgNum, g.bgNum);
-    }
+    const style = SECTION_STYLES[g.bgNum] ?? { bg: bg(g.bgNum), sep: 240 };
+    line += i === 0
+      ? `${RST}${bg(g.bgNum)}`
+      : plTransition(groups[i - 1].bgNum, g.bgNum);
     line += g.parts.join(joinSep(style.bg, style.sep));
   }
-  line += RST + plEnd(groups[groups.length - 1].bgNum);
+  line += `${RST}${plEnd(groups.at(-1)!.bgNum)}`;
   return line;
 }
 
@@ -212,7 +215,6 @@ function renderPowerline(segs: PowerlineSeg[]): string {
 function fitSegments(segs: PowerlineSeg[], maxWidth: number): PowerlineSeg[] {
   const active = [...segs];
   while (active.length > 0 && stripAnsi(renderPowerline(active)).length >= maxWidth) {
-    // Find and remove the segment with the highest drop value
     let maxDrop = -1, maxIdx = -1;
     for (let i = 0; i < active.length; i++) {
       if (active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }
@@ -227,32 +229,77 @@ function quotaSeg(
   window: Record<string, any> | undefined,
   label: string,
   labelColor: string,
+  iconFn: (pct: number) => string,
   opts: { bar?: number; reset?: string },
 ): string | null {
   if (!window) return null;
   const pct = Math.round(window.utilization);
-  let s = ' ' + labelColor + BOLD + label + ' ' + R_DARK + WHITE + pct + '% ' + R_DARK;
+  let s = ` ${labelColor}${BOLD}${iconFn(pct)} ${label} ${R_DARK}${WHITE}${pct}${PCT} ${R_DARK}`;
   if (opts.bar != null) s += progressBar(pct, BG_DARK, opts.bar);
-  if (opts.reset) s += ' ' + GRAY_FG + opts.reset + R_DARK;
-  return s + ' ';
+  if (opts.reset) s += ` ${GRAY_FG}${opts.reset}${R_DARK}`;
+  return `${s} `;
 }
 
 export { renderPowerline, fitSegments, quotaSeg };
 
+// ── Quota line builder ────────────────────────────────────────
+function buildQuotaLine(
+  data: Record<string, any>,
+  cacheMtime: number,
+  barWidth: number,
+  maxWidth: number,
+): string {
+  const fiveHrFullReset = data.five_hour?.resets_at
+    ? `${formatDuration(Math.max(0, Math.floor((new Date(data.five_hour.resets_at).getTime() - Date.now()) / 1000)))} (${formatLocalTime(data.five_hour.resets_at)})`
+    : '';
+  const fiveHrTime = data.five_hour?.resets_at ? formatLocalTime(data.five_hour.resets_at) : '';
+  const sevenDayFull = data.seven_day?.resets_at
+    ? `${new Date(data.seven_day.resets_at).toLocaleDateString('en-US', { weekday: 'short' })} ${formatLocalTime(data.seven_day.resets_at)}`
+    : '';
+  const ageStr = ` ${DIM}${GRAY_FG}(${cacheAge(cacheMtime)})${R_DARK} `;
+  const sep2 = joinSep(BG_DARK, 240);
+
+  const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, `${FIVE}h`, CYAN_FG, batteryIcon, { bar: bar ? barWidth : undefined, reset });
+  const s = (bar: boolean, reset: string) => quotaSeg(data.seven_day, `${SEVEN}d`, BLUE_FG, thermoIcon, { bar: bar ? barWidth : undefined, reset });
+
+  const wrapL2 = (parts: (string | null)[]) => {
+    const valid = parts.filter(Boolean) as string[];
+    return valid.length === 0 ? '' : `${BG_DARK}${valid.join(sep2)}${plEnd(233)}`;
+  };
+
+  const tiers = [
+    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull), ageStr]),
+    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),
+    wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),
+    wrapL2([f(true, fiveHrTime),      s(true, '')]),
+    wrapL2([f(true, fiveHrTime),      s(false, '')]),
+    wrapL2([f(false, fiveHrTime),     s(false, '')]),
+    wrapL2([f(false, fiveHrTime)]),
+    wrapL2([f(false, '')]),
+  ];
+
+  return tiers.find(tier => tier && stripAnsi(tier).length < maxWidth) ?? '';
+}
+
+export { buildQuotaLine };
+
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
-  const usageCachePath: string = process.argv[2];
-  const cacheMtime: number = Number(process.argv[3]);
-  const termWidth: number = Number(process.argv[4]);
+  const usageCachePath = process.argv[2];
+  const cacheMtime = Number(process.argv[3]);
+  const termWidth = Number(process.argv[4]);
   const session: Record<string, any> = JSON.parse(process.argv[5] || '{}');
-  const gitBranch: string = process.argv[6] || '';
+  const gitBranch = process.argv[6] ?? '';
+  const hasUsage = process.argv[7] === 'true';
 
-  const data: Record<string, any> = JSON.parse(readFileSync(usageCachePath, 'utf8'));
+  const data: Record<string, any> = hasUsage
+    ? JSON.parse(readFileSync(usageCachePath, 'utf8'))
+    : {};
 
   const cost = session.cost;
   const ctx = session.context_window;
   const model = session.model;
-  const cwd: string = session.cwd || process.cwd();
+  const cwd = session.cwd ?? process.cwd();
 
   // Claude Code's right column sits inline when wide enough, wraps below when narrow
   const RIGHT_RESERVE = termWidth >= 80 ? 37 : 0;
@@ -265,31 +312,28 @@ function main(): void {
   // ════════════════════════════════════════════════════════════════
 
   const shortPath = shortenPath(cwd);
-  const branchMaxLen = isWide ? 25 : 18;
-  const shortBranch = gitBranch ? shortenBranch(gitBranch, branchMaxLen) : '';
+  const shortBranch = gitBranch ? shortenBranch(gitBranch, isWide ? 25 : 18) : '';
 
-  //                                                          drop priority:
-  //                                                          (higher = dropped first)
   const line1Segs: PowerlineSeg[] = [];
 
   if (model?.display_name)
     line1Segs.push({ section: 22, drop: 0, content:
-      WHITE + BOLD + ' ' + model.display_name + ' ' });
+      `${combo(255, 22, true)} ${ICON_BOLT} ${model.display_name} ` });
 
   if (cost?.total_cost_usd != null)
     line1Segs.push({ section: 22, drop: 5, content:
-      ' ' + GREEN_FG + BOLD + '\u0024' + cost.total_cost_usd.toFixed(2) + R_GREEN + ' ' });
+      ` ${GREEN_FG}${BOLD}${ICON_DOLLAR}${cost.total_cost_usd.toFixed(2)}${R_GREEN} ` });
 
   if (cost?.total_cost_usd != null && cost.total_duration_ms > 60_000) {
     const rate = cost.total_cost_usd / (cost.total_duration_ms / 3_600_000);
     line1Segs.push({ section: 22, drop: 10, content:
-      ' ' + GREEN_DIM + '\u0024' + rate.toFixed(2) + '/hr' + R_GREEN + ' ' });
+      ` ${GREEN_DIM}${ICON_CLOCK} \$${rate.toFixed(2)}/hr${R_GREEN} ` });
   }
 
   if (ctx?.used_percentage != null) {
     const pct = Math.round(ctx.used_percentage);
     line1Segs.push({ section: 22, drop: 2, content:
-      WHITE + ' ' + pct + '% ' + R_GREEN + progressBar(pct, BG_GREEN, 8) + ' ' });
+      ` ${WHITE}${circleIcon(pct)} ${pct}${PCT} ${R_GREEN}${progressBar(pct, BG_GREEN, 8)} ` });
   }
 
   if (ctx?.total_input_tokens > 0 && ctx?.context_window_size > 0 && cost?.total_duration_ms > 60_000) {
@@ -299,25 +343,24 @@ function main(): void {
       const tps = used / (cost.total_duration_ms / 1000);
       if (tps > 0)
         line1Segs.push({ section: 22, drop: 9, content:
-          ' ' + GREEN_DIM + '~' + formatDuration(Math.floor(rem / tps)) + ' left' + R_GREEN + ' ' });
+          ` ${GREEN_DIM}${ICON_HOURGLASS} ~${formatDuration(Math.floor(rem / tps))} left${R_GREEN} ` });
     }
   }
 
   if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0))
     line1Segs.push({ section: 22, drop: 7, content:
-      ' ' + GREEN_114 + '+' + (cost.total_lines_added || 0) + R_GREEN + ' ' +
-      RED_FG + '-' + (cost.total_lines_removed || 0) + R_GREEN + ' ' });
+      ` ${GREEN_DIM}${ICON_PENCIL} ${GREEN_114}${PLUS}${cost.total_lines_added || 0}${R_GREEN} ${RED_FG}${MINUS}${cost.total_lines_removed || 0}${R_GREEN} ` });
 
   if (cost?.total_duration_ms > 0)
     line1Segs.push({ section: 22, drop: 6, content:
-      ' ' + GREEN_DIM + formatDuration(Math.floor(cost.total_duration_ms / 1000)) + R_GREEN + ' ' });
+      ` ${GREEN_DIM}${formatDuration(Math.floor(cost.total_duration_ms / 1000))}${R_GREEN} ` });
 
   line1Segs.push({ section: 24, drop: 4, content:
-    CYAN_FG + ' \uf07c ' + WHITE + shortPath + ' ' });
+    `${CYAN_FG} ${ICON_FOLDER} ${WHITE}${shortPath} ` });
 
   if (shortBranch)
     line1Segs.push({ section: 237, drop: 3, content:
-      fg(148) + ' \ue0a0 ' + shortBranch + ' ' });
+      `${fg(148)} ${ICON_GIT} ${shortBranch} ` });
 
   const line1 = renderPowerline(fitSegments(line1Segs, maxWidth));
 
@@ -325,44 +368,7 @@ function main(): void {
   // LINE 2: Quota — pre-computed tiers from most to least detailed
   // ════════════════════════════════════════════════════════════════
 
-  // Pre-compute reset strings
-  const fiveHrFullReset = data.five_hour?.resets_at
-    ? formatDuration(Math.max(0, Math.floor((new Date(data.five_hour.resets_at).getTime() - Date.now()) / 1000)))
-      + ' (' + formatLocalTime(data.five_hour.resets_at) + ')'
-    : '';
-  const fiveHrTime = data.five_hour?.resets_at ? formatLocalTime(data.five_hour.resets_at) : '';
-  const sevenDayFull = data.seven_day?.resets_at
-    ? new Date(data.seven_day.resets_at).toLocaleDateString('en-US', { weekday: 'short' })
-      + ' ' + formatLocalTime(data.seven_day.resets_at)
-    : '';
-  const ageStr = ' ' + DIM + GRAY_FG + '(' + cacheAge(cacheMtime) + ')' + R_DARK + ' ';
-  const sep2 = joinSep(BG_DARK, 240);
-
-  const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, '5h', CYAN_FG, { bar: bar ? barWidth : undefined, reset });
-  const s = (bar: boolean, reset: string) => quotaSeg(data.seven_day, '7d', BLUE_FG, { bar: bar ? barWidth : undefined, reset });
-
-  function wrapL2(parts: (string | null)[]): string {
-    const valid = parts.filter(Boolean) as string[];
-    if (valid.length === 0) return '';
-    return BG_DARK + valid.join(sep2) + plEnd(233);
-  }
-
-  // Tiers: most detailed → least detailed
-  const line2Tiers = [
-    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull), ageStr]),   // full
-    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),           // drop cache age
-    wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),           // 5h: time only
-    wrapL2([f(true, fiveHrTime),      s(true, '')]),                     // drop 7d reset
-    wrapL2([f(true, fiveHrTime),      s(false, '')]),                    // drop 7d bar
-    wrapL2([f(false, fiveHrTime),     s(false, '')]),                    // drop 5h bar
-    wrapL2([f(false, fiveHrTime)]),                                      // drop 7d entirely
-    wrapL2([f(false, '')]),                                              // drop 5h reset
-  ];
-
-  let line2 = '';
-  for (const tier of line2Tiers) {
-    if (tier && stripAnsi(tier).length < maxWidth) { line2 = tier; break; }
-  }
+  const line2 = hasUsage ? buildQuotaLine(data, cacheMtime, barWidth, maxWidth) : '';
 
   // ════════════════════════════════════════════════════════════════
   // Output
@@ -372,6 +378,6 @@ function main(): void {
 }
 
 // Run only when executed directly (not when imported by tests)
-if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
   main();
 }

@@ -11,16 +11,21 @@ USAGE_CACHE="/tmp/claude-statusline-usage-cache"
 TOKEN_CACHE="/tmp/claude-statusline-token-cache"
 USAGE_MAX_AGE=300 # 5 minutes
 
+# Get file modification time (portable: macOS + Linux)
+file_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
 # Check if a cache file exists and is younger than max_age seconds
 is_fresh() {
   [ -f "$1" ] && {
     local now=$(date +%s)
-    local mtime=$(stat -f %m "$1" 2>/dev/null)
+    local mtime=$(file_mtime "$1")
     [ -n "$mtime" ] && [ $((now - mtime)) -lt "$2" ]
   }
 }
 
-# Get the cached OAuth token, or extract from Keychain if expired
+# Get OAuth token: env var on Linux, Keychain on macOS, with token cache
 get_token() {
   if [ -f "$TOKEN_CACHE" ]; then
     local expiry token now
@@ -33,23 +38,35 @@ get_token() {
     fi
   fi
 
-  local raw
-  raw=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | xxd -r -p)
-  [ -z "$raw" ] && return 1
-
-  local token expires_ms expires_s
-  token=$(echo "$raw" | grep -oE '"claudeAiOauth":\{"accessToken":"[^"]+"' | grep -oE 'sk-ant-oat[^"]+')
-  expires_ms=$(echo "$raw" | grep -oE '"claudeAiOauth":\{"accessToken":"[^"]+","refreshToken":"[^"]+","expiresAt":([0-9]+)' | grep -oE 'expiresAt":[0-9]+' | grep -oE '[0-9]+')
-  [ -z "$token" ] && return 1
-
-  if [ -n "$expires_ms" ]; then
-    expires_s=$((expires_ms / 1000))
-  else
-    expires_s=$(( $(date +%s) + 3600 ))
+  # Try environment variable first (works on all platforms)
+  if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    echo "$CLAUDE_CODE_OAUTH_TOKEN"
+    return 0
   fi
 
-  printf '%s\n%s\n' "$expires_s" "$token" > "$TOKEN_CACHE"
-  echo "$token"
+  # Fall back to macOS Keychain
+  if command -v security &>/dev/null; then
+    local raw
+    raw=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | xxd -r -p)
+    [ -z "$raw" ] && return 1
+
+    local token expires_ms expires_s
+    token=$(echo "$raw" | grep -oE '"claudeAiOauth":\{"accessToken":"[^"]+"' | grep -oE 'sk-ant-oat[^"]+')
+    expires_ms=$(echo "$raw" | grep -oE '"claudeAiOauth":\{"accessToken":"[^"]+","refreshToken":"[^"]+","expiresAt":([0-9]+)' | grep -oE 'expiresAt":[0-9]+' | grep -oE '[0-9]+')
+    [ -z "$token" ] && return 1
+
+    if [ -n "$expires_ms" ]; then
+      expires_s=$((expires_ms / 1000))
+    else
+      expires_s=$(( $(date +%s) + 3600 ))
+    fi
+
+    printf '%s\n%s\n' "$expires_s" "$token" > "$TOKEN_CACHE"
+    echo "$token"
+    return 0
+  fi
+
+  return 1
 }
 
 # Fetch usage from API and update cache (only overwrites on valid response)
@@ -72,18 +89,17 @@ fetch_usage() {
   fi
 }
 
-# Refresh usage cache if stale
-if ! is_fresh "$USAGE_CACHE" $USAGE_MAX_AGE; then
-  fetch_usage
-fi
-
-if [ ! -f "$USAGE_CACHE" ]; then
-  echo "Usage: unavailable"
-  exit 0
+# Refresh usage cache if stale (skip entirely if no token available)
+HAS_USAGE=false
+if get_token >/dev/null 2>&1; then
+  if ! is_fresh "$USAGE_CACHE" $USAGE_MAX_AGE; then
+    fetch_usage
+  fi
+  [ -f "$USAGE_CACHE" ] && HAS_USAGE=true
 fi
 
 # Gather environment info
-CACHE_MTIME=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || echo 0)
+CACHE_MTIME=$( $HAS_USAGE && file_mtime "$USAGE_CACHE" || echo 0)
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 # Walk up the process tree to find a parent with a real TTY, then query its size.
 # Needed because Claude Code's hook subprocess has no TTY of its own.
@@ -91,8 +107,8 @@ TERM_WIDTH=""
 _pid=$$
 for _ in 1 2 3 4 5; do
   _tty=$(ps -o tty= -p "$_pid" 2>/dev/null | tr -d ' ')
-  if [ -n "$_tty" ] && [ "$_tty" != "??" ]; then
-    # macOS ps -o tty= returns "s000" for /dev/ttys000 — prepend "tty" prefix
+  if [ -n "$_tty" ] && [ "$_tty" != "??" ] && [ "$_tty" != "?" ]; then
+    # Linux ps returns "pts/0", macOS returns "s000"
     _dev="/dev/$_tty"
     [ ! -e "$_dev" ] && _dev="/dev/tty$_tty"
     TERM_WIDTH=$(stty size <"$_dev" 2>/dev/null | awk '{print $2}')
@@ -106,5 +122,5 @@ TERM_WIDTH="${TERM_WIDTH:-80}"
 # Render statusline
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 node --experimental-strip-types "$SCRIPT_DIR/statusline-render.ts" \
-  "$USAGE_CACHE" "$CACHE_MTIME" "$TERM_WIDTH" "$input" "$GIT_BRANCH" \
+  "$USAGE_CACHE" "$CACHE_MTIME" "$TERM_WIDTH" "$input" "$GIT_BRANCH" "$HAS_USAGE" \
   2>/dev/null || echo "Usage: parse error"
