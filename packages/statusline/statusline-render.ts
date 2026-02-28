@@ -2,9 +2,9 @@
 // Claude Code statusline renderer — two-line powerline with session, environment, and quota info
 // Called by statusline.sh with args: <usage-cache-path> <cache-mtime> <term-width> <session-json> <git-branch>
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { fileURLToPath } from 'url';
 
 // ── ANSI ──────────────────────────────────────────────────────
 const RST  = '\x1b[0m';
@@ -102,22 +102,29 @@ function cacheAge(mtime: number): string {
 }
 
 // Shorten path: ~/dev/neat-core-js/.worktrees/sso → ~/d/n/.w/sso
-function shortenPath(p: string, maxLen: number): string {
+// Always shortens parent dirs: ~/dev/neat-core-js → ~/d/neat-core-js
+// Keeps only the last segment intact; shortens all parent dirs to first char (or .X for dotdirs)
+function shortenPath(p: string): string {
   const home = process.env.HOME || '';
   if (home && p.startsWith(home)) p = '~' + p.slice(home.length);
-  if (p.length <= maxLen) return p;
 
   const parts = p.split('/');
-  for (let i = 0; i < parts.length - 2; i++) {
+  for (let i = 0; i < parts.length - 1; i++) {
     if (parts[i] === '~' || parts[i] === '') continue;
     if (parts[i].startsWith('.')) {
       parts[i] = parts[i].slice(0, 2);
     } else {
       parts[i] = parts[i][0];
     }
-    if (parts.join('/').length <= maxLen) break;
   }
   return parts.join('/');
+}
+
+// Shorten branch: chore/improve-playwright-tests → improve-playwri…
+function shortenBranch(branch: string, maxLen: number): string {
+  branch = branch.replace(/^(chore|feature|feat|fix|bugfix|hotfix|release)\//i, '');
+  if (branch.length <= maxLen) return branch;
+  return branch.slice(0, maxLen - 1) + '\u2026';
 }
 
 // ── Quota window formatter ────────────────────────────────────
@@ -147,12 +154,90 @@ export {
   formatLocalTime,
   cacheAge,
   shortenPath,
+  shortenBranch,
   progressBar,
   plTransition,
   plEnd,
   joinSep,
   formatQuotaWindow,
 };
+
+// ── Powerline renderer ────────────────────────────────────────
+// Renders an array of segments into a powerline string.
+// Consecutive segments with the same section bg are joined with │ separators.
+// Different section bgs get ▶ transitions.
+
+interface PowerlineSeg {
+  section: number;  // background color number (22=green, 24=blue, 237=gray)
+  content: string;  // ANSI styled content
+  drop: number;     // higher = less important = dropped first
+}
+
+const SECTION_STYLES: Record<number, { bg: string; sep: number }> = {
+  22:  { bg: BG_GREEN, sep: 34 },
+  24:  { bg: BG_BLUE,  sep: 30 },
+  237: { bg: bg(237),  sep: 240 },
+};
+
+function renderPowerline(segs: PowerlineSeg[]): string {
+  if (segs.length === 0) return '';
+
+  // Group consecutive same-section segments
+  const groups: { bgNum: number; parts: string[] }[] = [];
+  for (const seg of segs) {
+    const last = groups[groups.length - 1];
+    if (last && last.bgNum === seg.section) {
+      last.parts.push(seg.content);
+    } else {
+      groups.push({ bgNum: seg.section, parts: [seg.content] });
+    }
+  }
+
+  let line = '';
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    const style = SECTION_STYLES[g.bgNum] || { bg: bg(g.bgNum), sep: 240 };
+    if (i === 0) {
+      line += RST + bg(g.bgNum);
+    } else {
+      line += plTransition(groups[i - 1].bgNum, g.bgNum);
+    }
+    line += g.parts.join(joinSep(style.bg, style.sep));
+  }
+  line += RST + plEnd(groups[groups.length - 1].bgNum);
+  return line;
+}
+
+// Fit segments to a width budget by dropping least-important segments first
+function fitSegments(segs: PowerlineSeg[], maxWidth: number): PowerlineSeg[] {
+  const active = [...segs];
+  while (active.length > 0 && stripAnsi(renderPowerline(active)).length >= maxWidth) {
+    // Find and remove the segment with the highest drop value
+    let maxDrop = -1, maxIdx = -1;
+    for (let i = 0; i < active.length; i++) {
+      if (active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }
+    }
+    active.splice(maxIdx, 1);
+  }
+  return active;
+}
+
+// ── Quota segment builder ─────────────────────────────────────
+function quotaSeg(
+  window: Record<string, any> | undefined,
+  label: string,
+  labelColor: string,
+  opts: { bar?: number; reset?: string },
+): string | null {
+  if (!window) return null;
+  const pct = Math.round(window.utilization);
+  let s = ' ' + labelColor + BOLD + label + ' ' + R_DARK + WHITE + pct + '% ' + R_DARK;
+  if (opts.bar != null) s += progressBar(pct, BG_DARK, opts.bar);
+  if (opts.reset) s += ' ' + GRAY_FG + opts.reset + R_DARK;
+  return s + ' ';
+}
+
+export { renderPowerline, fitSegments, quotaSeg };
 
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
@@ -164,121 +249,126 @@ function main(): void {
 
   const data: Record<string, any> = JSON.parse(readFileSync(usageCachePath, 'utf8'));
 
-  // ════════════════════════════════════════════════════════════════
-  // LINE 1: Session info (green) + Environment (blue/gray)
-  // ════════════════════════════════════════════════════════════════
-
   const cost = session.cost;
   const ctx = session.context_window;
   const model = session.model;
   const cwd: string = session.cwd || process.cwd();
 
-  const greenParts: string[] = [];
-
-  // Model name
-  if (model && model.display_name) {
-    greenParts.push(WHITE + BOLD + ' ' + model.display_name + ' ');
-  }
-
-  // Session cost
-  if (cost && cost.total_cost_usd != null) {
-    const usd: number = cost.total_cost_usd;
-    greenParts.push(' ' + GREEN_FG + BOLD + '\u0024' + usd.toFixed(2) + R_GREEN + ' ');
-
-    if (cost.total_duration_ms > 60_000) {
-      const rate = usd / (cost.total_duration_ms / 3_600_000);
-      greenParts.push(' ' + GREEN_DIM + '\u0024' + rate.toFixed(2) + '/hr' + R_GREEN + ' ');
-    }
-  }
-
-  // Context window + time-to-limit
-  if (ctx && ctx.used_percentage != null) {
-    const pct = Math.round(ctx.used_percentage);
-    let ctxStr = MAGENTA_FG + BOLD + ' context ' + R_GREEN +
-      WHITE + pct + '% ' + R_GREEN +
-      progressBar(pct, BG_GREEN, 8);
-
-    if (ctx.total_input_tokens > 0 && ctx.context_window_size > 0 && cost && cost.total_duration_ms > 60_000) {
-      const usedTokens = ctx.total_input_tokens + ctx.total_output_tokens;
-      const remaining = ctx.context_window_size - usedTokens;
-      if (remaining > 0) {
-        const tokensPerSec = usedTokens / (cost.total_duration_ms / 1000);
-        if (tokensPerSec > 0) {
-          const secsLeft = remaining / tokensPerSec;
-          ctxStr += ' ' + GREEN_DIM + '~' + formatDuration(Math.floor(secsLeft)) + ' left' + R_GREEN;
-        }
-      }
-    }
-    greenParts.push(ctxStr + ' ');
-  }
-
-  // Lines changed
-  if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0)) {
-    const added = cost.total_lines_added || 0;
-    const removed = cost.total_lines_removed || 0;
-    greenParts.push(' ' + GREEN_114 + '+' + added + R_GREEN + ' ' +
-      RED_FG + '-' + removed + R_GREEN + ' ');
-  }
-
-  // Session duration
-  if (cost && cost.total_duration_ms > 0) {
-    const totalSec = Math.floor(cost.total_duration_ms / 1000);
-    greenParts.push(' ' + GREEN_DIM + formatDuration(totalSec) + R_GREEN + ' ');
-  }
-
-  // ── Blue section: directory ──
+  // Claude Code's right column sits inline when wide enough, wraps below when narrow
+  const RIGHT_RESERVE = termWidth >= 80 ? 37 : 0;
+  const maxWidth = termWidth - RIGHT_RESERVE;
   const isWide = termWidth >= 120;
-  const pathMaxLen = isWide ? 40 : 25;
-  const shortPath = shortenPath(cwd, pathMaxLen);
-
-  // ── Gray section: git branch ──
-  const branchStr = gitBranch ? (' \ue0a0 ' + gitBranch + ' ') : '';
-
-  // Assemble line 1
-  let line1 = '';
-  if (greenParts.length > 0) {
-    line1 += BG_GREEN + greenParts.join(joinSep(BG_GREEN, 34));
-    line1 += plTransition(22, 24);
-  } else {
-    line1 += BG_BLUE;
-  }
-  line1 += CYAN_FG + ' \uf07c ' + WHITE + shortPath + ' ' + RST;
-  if (branchStr) {
-    line1 += plTransition(24, 237);
-    line1 += fg(148) + branchStr + RST;
-    line1 += plEnd(237);
-  } else {
-    line1 += plEnd(24);
-  }
+  const barWidth = isWide ? 12 : 8;
 
   // ════════════════════════════════════════════════════════════════
-  // LINE 2: Quota (dark background)
+  // LINE 1: Segments in display order, each with a drop priority
   // ════════════════════════════════════════════════════════════════
-  const quotaParts: string[] = [];
 
-  const fiveHr = formatQuotaWindow(data.five_hour, '5h', CYAN_FG, isWide, (iso) => {
-    const diff = Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000));
-    return formatDuration(diff) + ' (' + formatLocalTime(iso) + ')';
-  });
-  if (fiveHr) quotaParts.push(fiveHr);
+  const shortPath = shortenPath(cwd);
+  const branchMaxLen = isWide ? 25 : 18;
+  const shortBranch = gitBranch ? shortenBranch(gitBranch, branchMaxLen) : '';
 
-  const sevenDay = formatQuotaWindow(data.seven_day, '7d', BLUE_FG, isWide, (iso) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + formatLocalTime(iso);
-  });
-  if (sevenDay) quotaParts.push(sevenDay);
+  //                                                          drop priority:
+  //                                                          (higher = dropped first)
+  const line1Segs: PowerlineSeg[] = [];
 
-  // Cache age
-  quotaParts.push(' ' + DIM + GRAY_FG + '(' + cacheAge(cacheMtime) + ')' + R_DARK + ' ');
+  if (model?.display_name)
+    line1Segs.push({ section: 22, drop: 0, content:
+      WHITE + BOLD + ' ' + model.display_name + ' ' });
 
-  let line2 = BG_DARK + quotaParts.join(joinSep(BG_DARK, 240));
-  line2 += plEnd(233);
+  if (cost?.total_cost_usd != null)
+    line1Segs.push({ section: 22, drop: 5, content:
+      ' ' + GREEN_FG + BOLD + '\u0024' + cost.total_cost_usd.toFixed(2) + R_GREEN + ' ' });
+
+  if (cost?.total_cost_usd != null && cost.total_duration_ms > 60_000) {
+    const rate = cost.total_cost_usd / (cost.total_duration_ms / 3_600_000);
+    line1Segs.push({ section: 22, drop: 10, content:
+      ' ' + GREEN_DIM + '\u0024' + rate.toFixed(2) + '/hr' + R_GREEN + ' ' });
+  }
+
+  if (ctx?.used_percentage != null) {
+    const pct = Math.round(ctx.used_percentage);
+    line1Segs.push({ section: 22, drop: 2, content:
+      WHITE + ' ' + pct + '% ' + R_GREEN + progressBar(pct, BG_GREEN, 8) + ' ' });
+  }
+
+  if (ctx?.total_input_tokens > 0 && ctx?.context_window_size > 0 && cost?.total_duration_ms > 60_000) {
+    const used = ctx.total_input_tokens + ctx.total_output_tokens;
+    const rem = ctx.context_window_size - used;
+    if (rem > 0) {
+      const tps = used / (cost.total_duration_ms / 1000);
+      if (tps > 0)
+        line1Segs.push({ section: 22, drop: 9, content:
+          ' ' + GREEN_DIM + '~' + formatDuration(Math.floor(rem / tps)) + ' left' + R_GREEN + ' ' });
+    }
+  }
+
+  if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0))
+    line1Segs.push({ section: 22, drop: 7, content:
+      ' ' + GREEN_114 + '+' + (cost.total_lines_added || 0) + R_GREEN + ' ' +
+      RED_FG + '-' + (cost.total_lines_removed || 0) + R_GREEN + ' ' });
+
+  if (cost?.total_duration_ms > 0)
+    line1Segs.push({ section: 22, drop: 6, content:
+      ' ' + GREEN_DIM + formatDuration(Math.floor(cost.total_duration_ms / 1000)) + R_GREEN + ' ' });
+
+  line1Segs.push({ section: 24, drop: 4, content:
+    CYAN_FG + ' \uf07c ' + WHITE + shortPath + ' ' });
+
+  if (shortBranch)
+    line1Segs.push({ section: 237, drop: 3, content:
+      fg(148) + ' \ue0a0 ' + shortBranch + ' ' });
+
+  const line1 = renderPowerline(fitSegments(line1Segs, maxWidth));
+
+  // ════════════════════════════════════════════════════════════════
+  // LINE 2: Quota — pre-computed tiers from most to least detailed
+  // ════════════════════════════════════════════════════════════════
+
+  // Pre-compute reset strings
+  const fiveHrFullReset = data.five_hour?.resets_at
+    ? formatDuration(Math.max(0, Math.floor((new Date(data.five_hour.resets_at).getTime() - Date.now()) / 1000)))
+      + ' (' + formatLocalTime(data.five_hour.resets_at) + ')'
+    : '';
+  const fiveHrTime = data.five_hour?.resets_at ? formatLocalTime(data.five_hour.resets_at) : '';
+  const sevenDayFull = data.seven_day?.resets_at
+    ? new Date(data.seven_day.resets_at).toLocaleDateString('en-US', { weekday: 'short' })
+      + ' ' + formatLocalTime(data.seven_day.resets_at)
+    : '';
+  const ageStr = ' ' + DIM + GRAY_FG + '(' + cacheAge(cacheMtime) + ')' + R_DARK + ' ';
+  const sep2 = joinSep(BG_DARK, 240);
+
+  const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, '5h', CYAN_FG, { bar: bar ? barWidth : undefined, reset });
+  const s = (bar: boolean, reset: string) => quotaSeg(data.seven_day, '7d', BLUE_FG, { bar: bar ? barWidth : undefined, reset });
+
+  function wrapL2(parts: (string | null)[]): string {
+    const valid = parts.filter(Boolean) as string[];
+    if (valid.length === 0) return '';
+    return BG_DARK + valid.join(sep2) + plEnd(233);
+  }
+
+  // Tiers: most detailed → least detailed
+  const line2Tiers = [
+    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull), ageStr]),   // full
+    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),           // drop cache age
+    wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),           // 5h: time only
+    wrapL2([f(true, fiveHrTime),      s(true, '')]),                     // drop 7d reset
+    wrapL2([f(true, fiveHrTime),      s(false, '')]),                    // drop 7d bar
+    wrapL2([f(false, fiveHrTime),     s(false, '')]),                    // drop 5h bar
+    wrapL2([f(false, fiveHrTime)]),                                      // drop 7d entirely
+    wrapL2([f(false, '')]),                                              // drop 5h reset
+  ];
+
+  let line2 = '';
+  for (const tier of line2Tiers) {
+    if (tier && stripAnsi(tier).length < maxWidth) { line2 = tier; break; }
+  }
 
   // ════════════════════════════════════════════════════════════════
   // Output
   // ════════════════════════════════════════════════════════════════
   console.log(line1);
-  console.log(line2);
+  if (line2) console.log(line2);
 }
 
 // Run only when executed directly (not when imported by tests)

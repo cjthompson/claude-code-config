@@ -85,7 +85,23 @@ fi
 # Gather environment info
 CACHE_MTIME=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || echo 0)
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-TERM_WIDTH=$(tput cols 2>/dev/null || echo 120)
+# Walk up the process tree to find a parent with a real TTY, then query its size.
+# Needed because Claude Code's hook subprocess has no TTY of its own.
+TERM_WIDTH=""
+_pid=$$
+for _ in 1 2 3 4 5; do
+  _tty=$(ps -o tty= -p "$_pid" 2>/dev/null | tr -d ' ')
+  if [ -n "$_tty" ] && [ "$_tty" != "??" ]; then
+    # macOS ps -o tty= returns "s000" for /dev/ttys000 — prepend "tty" prefix
+    _dev="/dev/$_tty"
+    [ ! -e "$_dev" ] && _dev="/dev/tty$_tty"
+    TERM_WIDTH=$(stty size <"$_dev" 2>/dev/null | awk '{print $2}')
+    [ -n "$TERM_WIDTH" ] && break
+  fi
+  _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
+  [ -z "$_pid" ] || [ "$_pid" = "1" ] && break
+done
+TERM_WIDTH="${TERM_WIDTH:-80}"
 
 # Render statusline
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
