@@ -304,7 +304,7 @@ function main(): void {
   const cwd = session.cwd ?? process.cwd();
 
   // Claude Code's right column sits inline when wide enough, wraps below when narrow
-  const RIGHT_RESERVE = termWidth >= 80 ? 37 : 0;
+  const RIGHT_RESERVE = termWidth >= 80 ? 20 : 0;
   const maxWidth = termWidth - RIGHT_RESERVE;
   const isWide = termWidth >= 120;
   const barWidth = isWide ? 12 : 8;
@@ -357,12 +357,12 @@ function main(): void {
     line1Segs.push({ section: 22, drop: 6, content:
       ` ${GREEN_DIM}${formatDuration(Math.floor(cost.total_duration_ms / 1000))}${R_GREEN} ` });
 
-  line1Segs.push({ section: 24, drop: 4, content:
-    `${CYAN_FG} ${ICON_FOLDER} ${WHITE}${shortPath} ` });
-
   if (shortBranch)
-    line1Segs.push({ section: 237, drop: 3, content:
-      `${fg(148)} ${ICON_GIT} ${shortBranch} ` });
+    line1Segs.push({ section: 24, drop: 3, content:
+      `${CYAN_FG} ${ICON_GIT} ${WHITE}${shortBranch} ` });
+
+  line1Segs.push({ section: 237, drop: 4, content:
+    `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
 
   const line1 = renderPowerline(fitSegments(line1Segs, maxWidth));
 
