@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.10 - 2026-03-10
+
+### Tasks
+- Defer git commit to Accept step in project-tasks skill — subagent no longer commits; lead agent commits after user accepts
+
 ## v0.0.9 - 2026-03-10
 
 ### Features
