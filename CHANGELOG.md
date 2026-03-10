@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.13 - 2026-03-10
+
+### Tasks
+- Migrate project-tasks storage from markdown (docs/TASKS.md) to SQLite (~/.claude/tasks.db) for reduced token usage — tasks scoped per-project, queried via sqlite3 CLI, with in_changelog tracking column
+
 ## v0.0.12 - 2026-03-10
 
 ### Tasks
