@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.14 - 2026-03-10
+
+### Tasks
+- Add one-off migration script (`npm run migrate-tasks`) to migrate existing docs/TASKS.md files into the global SQLite database
+
 ## v0.0.13 - 2026-03-10
 
 ### Tasks
