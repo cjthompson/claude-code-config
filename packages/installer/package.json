@@ -3,7 +3,8 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "start": "node --experimental-strip-types src/index.ts"
+        "start": "node --experimental-strip-types src/index.ts",
+        "reinstall": "node --experimental-strip-types src/reinstall.ts"
     },
     "dependencies": {
         "ink": "^5",
