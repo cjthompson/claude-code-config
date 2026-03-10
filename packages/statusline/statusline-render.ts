@@ -54,11 +54,15 @@ const PLUS           = '\ueb71';  // up arrow
 const MINUS          = '\ueb6e';  // down arrow
 const FIVE           = '\udb82\udf3e'; // 5
 const SEVEN          = '\udb82\udf40'; // 7
+const BAR_BG         = bg(238);
 
 // ── Multi-level icon sets ────────────────────────────────────
 // Factory: picks an icon from an array based on percentage
 const levelIcon = (icons: string[]) => (pct: number) =>
   icons[Math.min(icons.length - 1, Math.max(0, Math.round(pct / 100 * (icons.length - 1))))];
+
+const FRAC_BLOCKS = [' ', '\u258f', '\u258e', '\u258d', '\u258c', '\u258b', '\u258a', '\u2589', '\u2588'];
+//                    0    ▏ 1/8     ▎ 1/4     ▍ 3/8     ▌ 1/2     ▋ 5/8     ▊ 3/4     ▉ 7/8     █ full
 
 // Circle slices (8 levels) — context window
 const circleIcon = levelIcon([
@@ -91,10 +95,6 @@ const joinSep = (bgStr: string, sepColor: number) =>
   `${fg(sepColor)}${PL_SOFT}${RST}${bgStr}`;
 
 // ── Progress bar (fractional blocks for sub-character precision) ──
-const FRAC_BLOCKS = [' ', '\u258f', '\u258e', '\u258d', '\u258c', '\u258b', '\u258a', '\u2589', '\u2588'];
-//                    0    ▏ 1/8     ▎ 1/4     ▍ 3/8     ▌ 1/2     ▋ 5/8     ▊ 3/4     ▉ 7/8     █ full
-const BAR_BG = bg(238);
-
 function progressBar(pct: number, sectionBg: string, width: number): string {
   const clamped = Math.min(100, Math.max(0, pct));
   const filled = Math.round((clamped / 100) * width * 8);
@@ -132,6 +132,7 @@ function cacheAge(mtime: number): string {
 }
 
 // Shorten path: ~/dev/neat-core-js/.worktrees/sso → ~/d/n/.w/sso
+// Always shortens parent dirs: ~/dev/neat-core-js → ~/d/neat-core-js
 // Keeps only the last segment intact; shortens all parent dirs to first char (or .X for dotdirs)
 function shortenPath(p: string): string {
   const home = process.env.HOME ?? '';
@@ -203,8 +204,8 @@ function renderPowerline(segs: PowerlineSeg[]): string {
     const g = groups[i];
     const style = SECTION_STYLES[g.bgNum] ?? { bg: bg(g.bgNum), sep: 240 };
     line += i === 0
-      ? `${RST}${bg(g.bgNum)}`
-      : plTransition(groups[i - 1].bgNum, g.bgNum);
+        ? `${RST}${bg(g.bgNum)}`
+        : plTransition(groups[i - 1].bgNum, g.bgNum);
     line += g.parts.join(joinSep(style.bg, style.sep));
   }
   line += `${RST}${plEnd(groups.at(-1)!.bgNum)}`;
@@ -215,6 +216,7 @@ function renderPowerline(segs: PowerlineSeg[]): string {
 function fitSegments(segs: PowerlineSeg[], maxWidth: number): PowerlineSeg[] {
   const active = [...segs];
   while (active.length > 0 && stripAnsi(renderPowerline(active)).length >= maxWidth) {
+    // Find and remove the segment with the highest drop value
     let maxDrop = -1, maxIdx = -1;
     for (let i = 0; i < active.length; i++) {
       if (active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }

@@ -24,6 +24,19 @@ The statusline is already active. It's configured in `~/.claude/settings.json`:
 
 Claude Code pipes session JSON to the script via stdin on each render cycle. No manual invocation needed.
 
+## Configuration
+
+### Disabling Account Usage (Line 2)
+
+Set `CLAUDE_STATUSLINE_USAGE=0` to disable the account usage quota line. When disabled, no OAuth token retrieval or API calls are made — only Line 1 (session + environment) is rendered.
+
+```bash
+# In your shell profile (~/.bashrc, ~/.zshrc, config.fish, etc.)
+export CLAUDE_STATUSLINE_USAGE=0
+```
+
+Enabled by default (`1`).
+
 ## Requirements
 
 - **macOS** (uses `security` CLI for Keychain access and `stat -f %m` for file timestamps)
