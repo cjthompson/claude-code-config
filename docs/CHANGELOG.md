@@ -2,6 +2,9 @@
 
 ## 2026-03-10
 
+### Fixes
+- unlink existing symlink before re-creating in reinstall
+
 ### Tasks
 - update CLAUDE.md with skill editing verification workflow
 - add `check task #NNN` command to verify work is in codebase
