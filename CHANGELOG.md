@@ -6,6 +6,9 @@
 - Add custom skills: agent-team-development, orchestration-strategy, project-tasks, rust-coding
 - Add skill install script
 
+### Docs
+- Add skills section to README
+
 ## 2026-02-28
 
 ### Tasks
