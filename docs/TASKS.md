@@ -30,7 +30,7 @@
 
 ## task: skill should not commit changes until Accept is selected
 **ID:** #007 | **Date:** 2026-03-10 00:10 | **Priority:** medium | **Tags:** —
-**Status:** in_progress (dispatched 2026-03-10 00:11)
+**Status:** completed (2026-03-10 14:40)
 
 ### Requirements
 - In `packages/skills/project-tasks/SKILL.md`, remove the `git commit` step from the task runner subagent prompt (Phase 2: Execute)
