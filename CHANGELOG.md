@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.9 - 2026-03-10
+
+### Features
+- Add `install-package` non-interactive CLI (`npm run install-package <name> [<name>...]`) to install specific packages or skills by name without launching the TUI. Names are matched case-insensitively against package IDs, labels, and individual item names. Exits non-zero if any name is not found or any install fails.
+
 ## v0.0.8 - 2026-03-10
 
 ### Features
