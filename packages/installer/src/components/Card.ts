@@ -6,14 +6,15 @@ interface CardProps {
     label: string;
     description: string;
     enabled: boolean;
-    items: Array<{ name: string; enabled: boolean; alreadyInstalled: boolean }>;
+    items: Array<{ name: string; enabled: boolean; alreadyInstalled: boolean; markedForRemoval?: boolean }>;
     focused: boolean;
     focusedItem: number;
 }
 
 export function Card({ label, description, enabled, items, focused, focusedItem }: CardProps) {
-    const status = enabled ? "ON" : "OFF";
-    const statusColor = enabled ? "green" : "gray";
+    const hasRemovals = items.some((i) => i.markedForRemoval);
+    const status = hasRemovals ? "REMOVE" : enabled ? "ON" : "OFF";
+    const statusColor = hasRemovals ? "red" : enabled ? "green" : "gray";
     const borderColor = focused ? "cyan" : "gray";
 
     return h(Box, {
@@ -35,6 +36,7 @@ export function Card({ label, description, enabled, items, focused, focusedItem 
                 enabled: item.enabled,
                 focused: focused && focusedItem === i,
                 alreadyInstalled: item.alreadyInstalled,
+                markedForRemoval: item.markedForRemoval,
             }),
         ),
     );

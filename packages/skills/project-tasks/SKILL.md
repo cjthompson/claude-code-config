@@ -1,6 +1,8 @@
 ---
 name: project-tasks
 description: Use when the user says "task:", "fix:", "todo:", or asks to log, run, list, or manage project tasks. Also use when asked to generate or update a changelog from completed tasks.
+TRIGGER when: user message starts with "task:", "fix:", or "todo:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task", "run all tasks", "update changelog", or "generate changelog".
+DO NOT TRIGGER when: user is asking a general question about tasks/todos unrelated to project management.
 ---
 
 # Project Tasks

@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { installPackage } from "../lib/install.ts";
+import { installPackage, removePackage } from "../lib/install.ts";
 import type { PackageDescriptor, InstallResult } from "../lib/types.ts";
 
 export type Phase = "selecting" | "installing" | "done";
@@ -14,10 +14,19 @@ export function useInstaller() {
             const allResults: InstallResult[] = [];
 
             for (const pkg of packages) {
-                if (!pkg.enabled) continue;
-                const pkgResults = await installPackage(pkg);
-                allResults.push(...pkgResults);
-                setResults([...allResults]);
+                const hasInstalls = pkg.items.some((i) => i.enabled);
+                const hasRemovals = pkg.items.some((i) => i.markedForRemoval);
+
+                if (hasRemovals) {
+                    const r = await removePackage(pkg);
+                    allResults.push(...r);
+                    setResults([...allResults]);
+                }
+                if (hasInstalls) {
+                    const r = await installPackage(pkg);
+                    allResults.push(...r);
+                    setResults([...allResults]);
+                }
             }
 
             setPhase("done");

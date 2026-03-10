@@ -6,17 +6,36 @@ interface ToggleItemProps {
     enabled: boolean;
     focused: boolean;
     alreadyInstalled: boolean;
+    markedForRemoval?: boolean;
 }
 
-export function ToggleItem({ name, enabled, focused, alreadyInstalled }: ToggleItemProps) {
-    const indicator = enabled ? "\u2713" : "\u00b7";
-    const indicatorColor = enabled ? "green" : "gray";
+export function ToggleItem({ name, enabled, focused, alreadyInstalled, markedForRemoval }: ToggleItemProps) {
     const cursor = focused ? "\u203a" : " ";
+
+    let indicator: string;
+    let indicatorColor: string;
+    let suffix: string | null = null;
+
+    if (markedForRemoval) {
+        indicator = "\u2717"; // ✗
+        indicatorColor = "red";
+        suffix = " (remove)";
+    } else if (alreadyInstalled) {
+        indicator = "\u2713"; // ✓
+        indicatorColor = "green";
+        suffix = " (installed)";
+    } else if (enabled) {
+        indicator = "\u2713"; // ✓
+        indicatorColor = "green";
+    } else {
+        indicator = "\u00b7"; // ·
+        indicatorColor = "gray";
+    }
 
     return h(Text, null,
         h(Text, { color: focused ? "cyan" : undefined }, cursor + " "),
         h(Text, { color: indicatorColor }, indicator),
         h(Text, null, " " + name),
-        alreadyInstalled ? h(Text, { color: "gray" }, " (installed)") : null,
+        suffix ? h(Text, { color: markedForRemoval ? "red" : "gray" }, suffix) : null,
     );
 }

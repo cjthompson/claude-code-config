@@ -8,6 +8,8 @@ export interface PackageItem {
     description?: string;
     /** Type label shown in info overlay header, e.g. "Skill" or "Package" */
     typeLabel?: string;
+    /** Whether this installed item is queued for removal */
+    markedForRemoval?: boolean;
 }
 
 /**
@@ -54,6 +56,6 @@ export interface PackageDescriptor {
 export interface InstallResult {
     packageId: string;
     itemName: string;
-    status: "created" | "already-exists" | "error";
+    status: "created" | "already-exists" | "removed" | "error";
     message: string;
 }

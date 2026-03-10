@@ -1,4 +1,4 @@
-import { mkdir, symlink, readlink, readFile, writeFile, copyFile } from "node:fs/promises";
+import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { InstallResult, PackageDescriptor, PackageItem } from "./types.ts";
 
@@ -12,6 +12,103 @@ export async function installPackage(
         return installSkills(pkg);
     }
     return installFiles(pkg);
+}
+
+export async function removePackage(
+    pkg: PackageDescriptor,
+): Promise<InstallResult[]> {
+    if (pkg.type === "skills") {
+        return removeSkills(pkg);
+    }
+    return removeFiles(pkg);
+}
+
+async function removeSkills(
+    pkg: PackageDescriptor,
+): Promise<InstallResult[]> {
+    const results: InstallResult[] = [];
+
+    for (const item of pkg.items) {
+        if (!item.markedForRemoval) continue;
+
+        const target = join(SKILLS_INSTALL_DIR, item.name);
+        try {
+            await unlink(target);
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: "removed",
+                message: `Removed: ${item.name}`,
+            });
+        } catch (err) {
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: "error",
+                message: `${item.name}: ${(err as Error).message}`,
+            });
+        }
+    }
+
+    return results;
+}
+
+async function removeFiles(
+    pkg: PackageDescriptor,
+): Promise<InstallResult[]> {
+    const results: InstallResult[] = [];
+    const manifest = pkg.manifest;
+    const files = manifest.files ?? [];
+
+    for (const item of pkg.items) {
+        if (!item.markedForRemoval) continue;
+
+        if (item.name === "settings.json config" && manifest.settings) {
+            const settingsPath = join(CLAUDE_DIR, "settings.json");
+            try {
+                const raw = await readFile(settingsPath, "utf-8");
+                const settings = JSON.parse(raw) as Record<string, unknown>;
+                for (const key of Object.keys(manifest.settings)) {
+                    delete settings[key];
+                }
+                await writeFile(settingsPath, JSON.stringify(settings, null, 4) + "\n");
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "removed",
+                    message: "Removed keys from settings.json",
+                });
+            } catch (err) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "error",
+                    message: `settings.json: ${(err as Error).message}`,
+                });
+            }
+        } else {
+            for (const file of files) {
+                try {
+                    await unlink(join(CLAUDE_DIR, file));
+                    results.push({
+                        packageId: pkg.id,
+                        itemName: file,
+                        status: "removed",
+                        message: `Removed: ${file}`,
+                    });
+                } catch (err) {
+                    results.push({
+                        packageId: pkg.id,
+                        itemName: file,
+                        status: "error",
+                        message: `${file}: ${(err as Error).message}`,
+                    });
+                }
+            }
+        }
+    }
+
+    return results;
 }
 
 async function installSkills(

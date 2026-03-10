@@ -20,7 +20,9 @@ export function App({ repoRoot }: AppProps) {
     const [cardItemIndex, setCardItemIndex] = useState<Record<number, number>>({});
     const [infoVisible, setInfoVisible] = useState(false);
 
-    const hasSelections = packages.some((p) => p.enabled);
+    const hasSelections = packages.some((p) =>
+        p.enabled || p.items.some((i) => i.markedForRemoval),
+    );
     const totalFocusable = packages.length + 1;
 
     const toggleItem = useCallback(
@@ -31,16 +33,24 @@ export function App({ repoRoot }: AppProps) {
                     const pkg = { ...p };
 
                     if (pkg.type === "files") {
-                        const newEnabled = !pkg.items[0]!.enabled;
-                        pkg.items = pkg.items.map((item) => ({
-                            ...item,
-                            enabled: newEnabled,
-                        }));
-                        pkg.enabled = newEnabled;
+                        // All items in a files package toggle together
+                        const item = pkg.items[0]!;
+                        if (item.alreadyInstalled) {
+                            const marking = !item.markedForRemoval;
+                            pkg.items = pkg.items.map((i) => ({ ...i, markedForRemoval: marking }));
+                        } else {
+                            const newEnabled = !item.enabled;
+                            pkg.items = pkg.items.map((i) => ({ ...i, enabled: newEnabled }));
+                            pkg.enabled = newEnabled;
+                        }
                     } else {
-                        pkg.items = pkg.items.map((item, ii) =>
-                            ii === itemIdx ? { ...item, enabled: !item.enabled } : item,
-                        );
+                        pkg.items = pkg.items.map((item, ii) => {
+                            if (ii !== itemIdx) return item;
+                            if (item.alreadyInstalled) {
+                                return { ...item, markedForRemoval: !item.markedForRemoval };
+                            }
+                            return { ...item, enabled: !item.enabled };
+                        });
                         pkg.enabled = pkg.items.some((i) => i.enabled);
                     }
 

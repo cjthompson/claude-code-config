@@ -3,6 +3,7 @@
 ## 2026-03-09
 
 ### Tasks
+- Add removal support to installer: space on installed items marks for removal
 - Add interactive TUI installer with card UI, package discovery, and info overlay
 - Add CLAUDE.md with post-commit changelog and version update instructions (#workflow)
 
