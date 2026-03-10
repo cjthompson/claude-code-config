@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-09
+
+### Features
+- Add custom skills: agent-team-development, orchestration-strategy, project-tasks, rust-coding
+- Add skill install script
+
 ## 2026-02-28
 
 ### Tasks
