@@ -17,8 +17,8 @@ Capture small tasks and fixes to `docs/TASKS.md` and execute them cheaply via mi
 ## When to Use
 
 - User says `task: <description>`, `fix: <description>`, or `todo: <description>`
-- User asks to "list tasks", "run task", "run all tasks"
-- User asks to "complete task", "mark completed", "cancel task", "set priority"
+- User asks to "list tasks", "run task #NNN", "run all tasks"
+- User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
 - User asks to "update changelog" or "generate changelog"
 
 ## Logging a Task
@@ -263,6 +263,8 @@ Use the stored `**ID:**` and `**Status:**` values from each task entry. Tasks ar
 
 ## Completing a Task Manually
 
+Use this when a task was completed outside the tool (done manually, in another session, or via another workflow) and just needs its status recorded. The code changes are assumed to already be committed.
+
 When user says "complete task #NNN" or "mark #NNN completed" (and variants like "mark completed"):
 
 1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`
@@ -272,7 +274,8 @@ When user says "complete task #NNN" or "mark #NNN completed" (and variants like 
    ```
    Use the actual current time.
 3. Auto-update `CHANGELOG.md` — see Changelog section below.
-4. Confirm to the user: `Task #NNN marked as completed.`
+4. Commit the bookkeeping changes: `git add docs/TASKS.md docs/CHANGELOG.md && git commit -m "complete: mark #NNN completed"`
+5. Confirm to the user: `Task #NNN marked as completed.`
 
 ## Cancelling a Task
 
@@ -294,6 +297,81 @@ When user says "set priority of #NNN to high/medium/low" (and natural variants l
 1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`
 2. Update the `**Priority:**` field in the metadata line to the new value.
 3. Confirm to the user: `Task #NNN priority set to {priority}.`
+
+## Checking a Task
+
+Use this to verify whether a task's requirements are already reflected in the codebase — without changing anything. Useful after a task was run in another session, to audit a completed task, or to check work before accepting.
+
+When user says "check task #NNN":
+
+1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`. Read its title and requirements.
+
+2. Dispatch a **read-only subagent** (no code changes) using the Agent tool with `subagent_type: "haiku"`. Pass this prompt:
+
+```
+You are a read-only task verifier. Do NOT modify any files.
+You are working on the project at {repo_root}.
+
+## Task to Verify
+{type}: {title}
+ID: #{NNN}
+
+### Requirements
+{Copy the requirements bullet list from TASKS.md for this specific task}
+
+## Verification Pipeline
+
+### Step 1: Search git log
+Run these two commands and note any matching commits:
+- `git log --oneline --grep="#{NNN}"`
+- `git log --oneline --grep="{title}"`
+
+### Step 2: Extract keywords
+From the requirements, identify specific searchable terms: filenames, function names,
+variable names, class names, UI element names, config keys, CLI flags, or other
+identifiers that would appear in code if the requirement were implemented. Ignore
+generic words like "update", "add", "fix", "the", "a".
+
+### Step 3: Search the codebase
+For each keyword extracted in Step 2, use Glob and Grep to search the codebase.
+Use Read to inspect relevant files when a match looks promising.
+
+### Step 4: Verdict per requirement
+For each requirement bullet, assign one verdict:
+- **Found** — clear evidence exists in code (file:line) or git (commit hash)
+- **Partial** — some evidence exists but the requirement appears only partly addressed
+- **Not Found** — searched thoroughly, no evidence found
+- **Cannot Verify** — requirement is too abstract to search for (e.g. "ensure performance is good")
+
+### Step 5: Return a structured report in this exact format
+
+## Verification Report: #{NNN} {title}
+
+### Commits referencing this task
+{list commits found, or "None found"}
+
+### Per-requirement verdicts
+- [ ] {requirement 1} — **{verdict}**
+  Evidence: {file:line, commit hash, or "none"}
+- [ ] {requirement 2} — **{verdict}**
+  Evidence: {file:line, commit hash, or "none"}
+
+### Keywords searched
+{comma-separated list of keywords used in Step 2}
+
+## Rules
+- Do NOT write, edit, or delete any files.
+- Do NOT run any commands other than git log, Glob, Grep, and Read.
+- If a requirement has no searchable keywords, mark it Cannot Verify.
+```
+
+3. When the subagent completes, present its report to the user and add an **overall confidence summary**:
+   - **High** — all requirements are Found or Cannot Verify, with at least one Found
+   - **Medium** — mix of Found and Partial, or all Partial
+   - **Low** — one or more Not Found, with some Found or Partial
+   - **Inconclusive** — all requirements are Cannot Verify or Not Found with no git evidence
+
+4. **Do NOT change the task's status in TASKS.md.** This is purely informational.
 
 ## Running All Tasks
 
@@ -368,4 +446,5 @@ When the user starts a new conversation in a project that has `docs/TASKS.md`, r
 | `complete task #NNN` | Manually mark a task completed + update changelog |
 | `cancel task #NNN` | Cancel a pending task |
 | `set priority of #NNN to high` | Change a task's priority (high / medium / low) |
+| `check task #NNN` | Verify task requirements are in codebase (read-only, no status change) |
 | `update changelog` | Regenerate changelog from completed tasks |

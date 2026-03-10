@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-10
+
+### Tasks
+- add `check task #NNN` command to verify work is in codebase
+
 ## v0.0.6 - 2026-03-09
 
 ### Tasks
