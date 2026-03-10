@@ -54,7 +54,10 @@ When the user provides a task/fix/todo prefix:
 - Requirements is a bullet list — each bullet is one concrete action item
 - A `---` separator appears before each task entry
 
-5. **Present the execution choice** using AskUserQuestion:
+5. **Determine execution behavior** based on the prefix:
+
+   - **`todo:` prefix** — skip the execution choice entirely. The task is saved as `pending` with no dispatch (always "Log Only"). Inform the user the todo was logged.
+   - **`task:` or `fix:` prefix** — present the execution choice using AskUserQuestion:
 
 ```
 a) Run Now — dispatch a subagent immediately
@@ -287,7 +290,7 @@ When the user starts a new conversation in a project that has `docs/TASKS.md`, r
 |---------|--------|
 | `task: description #tags` | Log new task |
 | `fix: description #tags` | Log new fix |
-| `todo: description #tags` | Log new todo |
+| `todo: description #tags` | Log new todo (always Log Only — never dispatched) |
 | `list tasks` | Show pending tasks table |
 | `run task #N` | Execute specific task via subagent |
 | `run all tasks` | Execute all pending tasks sequentially |
