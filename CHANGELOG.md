@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.5 - 2026-03-09
+
+### Tasks
+- Change `todo:` prefix to always Log Only — skip execution choice prompt and save as pending with no dispatch
+
 ## 2026-03-09
 
 ### Features
