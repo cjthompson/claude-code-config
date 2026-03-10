@@ -33,7 +33,12 @@ If missing, inform the user and stop.
 
 2. Initialize the database (idempotent):
 ```bash
-sqlite3 ~/.claude/tasks.db "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,project TEXT NOT NULL,seq INTEGER NOT NULL,type TEXT NOT NULL CHECK(type IN('fix','task','todo')),title TEXT NOT NULL,priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN('high','medium','low')),status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','in_progress','completed','cancelled')),tags TEXT DEFAULT '[]',reqs TEXT DEFAULT '[]',created TEXT NOT NULL,updated TEXT,in_changelog INTEGER NOT NULL DEFAULT 0,UNIQUE(project,seq));"
+sqlite3 ~/.claude/tasks.db "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,project TEXT NOT NULL,seq INTEGER NOT NULL,type TEXT NOT NULL CHECK(type IN('fix','task','todo')),title TEXT NOT NULL,priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN('high','medium','low')),status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','in_progress','completed','cancelled')),tags TEXT DEFAULT '[]',reqs TEXT DEFAULT '[]',depends_on TEXT DEFAULT '[]',created TEXT NOT NULL,updated TEXT,in_changelog INTEGER NOT NULL DEFAULT 0,UNIQUE(project,seq));"
+```
+
+Then add the `depends_on` column if it doesn't exist (for databases created before this feature):
+```bash
+sqlite3 ~/.claude/tasks.db "ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]';" 2>/dev/null
 ```
 
 3. Determine the project identifier:
@@ -46,7 +51,11 @@ Store this value as `$P` for all subsequent queries. **Escape single quotes** in
 
 When the user provides a task/fix/todo prefix:
 
-1. **Parse the message** — extract the title (everything after the prefix), tags (any `#word` in the message), and infer priority:
+1. **Parse the message** — extract the title (everything after the prefix), tags (any `#word` in the message), dependencies, and infer priority.
+
+   **Dependencies:** If the message contains `(depends on #NNN)` or `(depends on #NNN, #NNN)`, extract the seq numbers as a JSON array (e.g. `[3, 5]`) and remove the parenthetical from the title. If no dependencies, use `[]`.
+
+   **Priority:**
    - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:` prefix defaults to `high`.**
    - `medium` — features, UX improvements, enhancements. **`task:` and `todo:` default to `medium`.**
    - `low` — cosmetic changes, nice-to-have, cleanup, documentation
@@ -74,13 +83,19 @@ When the user provides a task/fix/todo prefix:
 
    Repeat until accepted.
 
-3. **Insert the task.** Escape single quotes in all user-provided values by doubling them (`'` → `''`). Build tags as a JSON array like `["#ui","#layout"]` (use `[]` if none). Build reqs as a JSON array like `["requirement 1","requirement 2"]`.
+3. **Insert the task.** Escape single quotes in all user-provided values by doubling them (`'` → `''`). Build tags as a JSON array like `["#ui","#layout"]` (use `[]` if none). Build reqs as a JSON array like `["requirement 1","requirement 2"]`. Build depends_on as a JSON array of seq numbers like `[3,5]` (use `[]` if none).
 
 ```bash
-sqlite3 ~/.claude/tasks.db "INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,created) VALUES('$P',(SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='$P'),'fix','Log lines shouldn''t exceed one line','high','[]','[\"Replace line breaks\",\"Trim whitespace\"]','2026-03-10 14:30'); SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();"
+sqlite3 ~/.claude/tasks.db "INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,depends_on,created) VALUES('$P',(SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='$P'),'fix','Log lines shouldn''t exceed one line','high','[]','[\"Replace line breaks\",\"Trim whitespace\"]','[]','2026-03-10 14:30'); SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();"
 ```
 
 The output is the assigned task ID (e.g. `#001`). Report it to the user.
+
+   If the task has dependencies, validate they exist:
+   ```bash
+   sqlite3 ~/.claude/tasks.db "SELECT j.value FROM json_each('$DEPS_JSON') j WHERE j.value NOT IN (SELECT seq FROM tasks WHERE project='$P');"
+   ```
+   If any rows are returned, warn the user that those task IDs don't exist in this project (e.g. `Warning: #999 does not exist`). The task is still logged but the user should fix the dependency.
 
 4. **Determine execution behavior** based on the prefix:
 
@@ -101,6 +116,18 @@ If the user previously chose "Auto-Run All" in this session, skip asking and dis
 
 When dispatching a task (via "Run Now", "run task #NNN", or "Auto-Run All"):
 
+### Step 0: Check Dependencies
+
+If the task has dependencies (`depends_on` is not `[]`), check whether all dependencies are completed:
+```bash
+sqlite3 ~/.claude/tasks.db "SELECT printf('#%03d',seq),title,status FROM tasks WHERE project='$P' AND seq IN (SELECT j.value FROM tasks t,json_each(t.depends_on) j WHERE t.project='$P' AND t.seq=$N) AND status!='completed';"
+```
+
+If any rows are returned, the task is **blocked**. Report the incomplete dependencies to the user and do NOT dispatch. Example:
+> Task #005 is blocked. These dependencies must be completed first:
+> - #003 (pending): Create settings modal skeleton
+> - #004 (in_progress): Add theme support
+
 ### Step 1: Recommend Isolation Strategy
 
 - **Dirty working tree** (unstaged/uncommitted changes) → recommend worktree
@@ -113,7 +140,7 @@ Present recommendation with brief reasoning. Let user override.
 
 First, read the task data:
 ```bash
-sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs FROM tasks WHERE project='$P' AND seq=$N;"
+sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs,depends_on FROM tasks WHERE project='$P' AND seq=$N;"
 ```
 
 Update status to in_progress:
@@ -211,7 +238,13 @@ c) Retry with Opus — revert and re-run with the most capable model (for harder
 sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='completed',updated='2026-03-10 15:00' WHERE project='$P' AND seq=$N;"
 ```
 
-2. Commit the changes: `git add -A && git commit -m "{type}: {task title}"`
+2. Check if any tasks were unblocked by this completion:
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),title FROM tasks WHERE project='$P' AND status='pending' AND depends_on!='[]' AND EXISTS (SELECT 1 FROM json_each(depends_on) j WHERE j.value=$N) AND NOT EXISTS (SELECT 1 FROM json_each(depends_on) j JOIN tasks d ON d.project='$P' AND d.seq=j.value WHERE d.status!='completed');"
+```
+If rows are returned, inform the user: `Unblocked: #003 "Create settings modal skeleton" is now ready to run.`
+
+3. Commit the changes: `git add -A && git commit -m "{type}: {task title}"`
 
 3. Auto-update `CHANGELOG.md` — see Changelog section below.
 
@@ -233,23 +266,32 @@ sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='completed',updated='2026-03
 When user says "list tasks", query the database:
 
 ```bash
-sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags FROM tasks WHERE project='$P' AND status!='cancelled' ORDER BY seq DESC;"
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags,depends_on FROM tasks WHERE project='$P' AND status!='cancelled' ORDER BY seq DESC;"
 ```
 
 For filtered listing (e.g. `list tasks pending`):
 ```bash
-sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq DESC;"
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags,depends_on FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq DESC;"
 ```
 
 Render the pipe-separated output as a markdown table:
 
 ```
-| ID   | Type | Title                                    | Priority | Status  | Tags         |
-|------|------|------------------------------------------|----------|---------|--------------|
-| #007 | task | Add keyboard shortcut to pause all panes | medium   | pending | #keybindings |
+| ID   | Type | Title                                    | Priority | Status  | Tags         | Deps         |
+|------|------|------------------------------------------|----------|---------|--------------|--------------|
+| #007 | task | Add keyboard shortcut to pause all panes | medium   | pending | #keybindings | #003, #004   |
+| #005 | fix  | Log lines should never exceed one line   | high     | blocked | #ui          | #003         |
 ```
 
 Parse the `tags` column (JSON array) for display: `["#ui","#layout"]` → `#ui, #layout`. Display `—` if the array is empty (`[]`).
+
+Parse the `depends_on` column (JSON array) for display: `[3,5]` → `#003, #005`. Display `—` if empty.
+
+For pending tasks with dependencies, check if any dependency is not completed. If so, display the status as **blocked** instead of `pending` in the table. To determine this:
+```bash
+sqlite3 ~/.claude/tasks.db "SELECT seq FROM tasks WHERE project='$P' AND status='pending' AND depends_on!='[]' AND EXISTS (SELECT 1 FROM json_each(depends_on) j JOIN tasks d ON d.project='$P' AND d.seq=j.value WHERE d.status!='completed');"
+```
+This returns the seq numbers of all blocked tasks.
 
 ## Completing a Task Manually
 
@@ -258,6 +300,12 @@ When user says "complete task #NNN" or "mark #NNN completed":
 ```bash
 sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='completed',updated='2026-03-10 15:00' WHERE project='$P' AND seq=$N;"
 ```
+
+Check if any tasks were unblocked by this completion:
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),title FROM tasks WHERE project='$P' AND status='pending' AND depends_on!='[]' AND EXISTS (SELECT 1 FROM json_each(depends_on) j WHERE j.value=$N) AND NOT EXISTS (SELECT 1 FROM json_each(depends_on) j JOIN tasks d ON d.project='$P' AND d.seq=j.value WHERE d.status!='completed');"
+```
+If rows are returned, inform the user (e.g. `Unblocked: #005 "Add theme row" is now ready to run.`).
 
 Then auto-update `CHANGELOG.md` (see below), commit the changelog change, and confirm to the user.
 
@@ -356,16 +404,18 @@ When user says "run all tasks":
 
 1. Query all pending tasks:
 ```bash
-sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq ASC;"
+sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs,depends_on FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq ASC;"
 ```
 
-2. Present them to the user. Recommend worktree isolation (multiple tasks = always recommend worktree).
+2. Present them to the user. Mark any tasks with incomplete dependencies as **blocked**. Recommend worktree isolation (multiple tasks = always recommend worktree).
 
-3. Dispatch based on isolation strategy:
-   - **Worktree:** Dispatch ALL tasks as separate subagents simultaneously (parallel).
-   - **No worktree (user override):** Dispatch the FIRST pending task only. After acceptance, dispatch the next.
+3. **Only dispatch unblocked tasks** (tasks with no dependencies, or whose dependencies are all completed). Skip blocked tasks and inform the user which ones were skipped and why.
 
-4. Return to accepting commands immediately after dispatching.
+4. Dispatch based on isolation strategy:
+   - **Worktree:** Dispatch all **unblocked** tasks as separate subagents simultaneously (parallel).
+   - **No worktree (user override):** Dispatch the first **unblocked** pending task only. After acceptance, re-check dependencies (a just-completed task may unblock others) and dispatch the next unblocked task.
+
+5. Return to accepting commands immediately after dispatching.
 
 ## Generating Changelog
 
@@ -432,6 +482,7 @@ This helps avoid re-implementing completed work and understand the project traje
 | Command | Action |
 |---------|--------|
 | `task: description #tags` | Log new task |
+| `task: description (depends on #NNN, #NNN)` | Log task with dependencies |
 | `fix: description #tags` | Log new fix |
 | `todo: description #tags` | Log new todo (always Log Only) |
 | `list tasks` | Show all tasks (except cancelled) |
