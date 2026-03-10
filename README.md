@@ -1,9 +1,23 @@
 # claude-code-config
-Custom configurations for claude code
+
+Custom configurations for Claude Code — skills, statusline, and an interactive installer.
+
+## Installer
+
+Run the interactive TUI installer to select and install packages:
+
+```bash
+npm install
+npm run install-packages
+```
+
+Uses a card-based interface. Navigate with `tab`/`↑↓`, toggle with `space`, view details with `i`, install with `enter`.
+
+Adding a new package is convention-based: drop a `manifest.json` in `packages/<name>/` and the installer picks it up automatically.
 
 ## Skills
 
-Custom skills for Claude Code, located in `packages/skills/`. Run `packages/skills/install.sh` to symlink them into `~/.claude/skills/`.
+Custom skills for Claude Code, located in `packages/skills/`. Each skill is auto-discovered by the installer (any subdirectory with a `SKILL.md`).
 
 ### project-tasks
 
@@ -22,3 +36,14 @@ End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agen
 ### rust-coding
 
 Guides Claude in writing idiomatic Rust code with proper data modeling, traits, `impl` organization, macros, and build-speed best practices. Automatically triggers when working on `.rs` files or projects with a `Cargo.toml`.
+
+## Statusline
+
+A two-line powerline-style statusline for Claude Code showing session metrics and API quota usage. Located in `packages/statusline/`.
+
+```
+ Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ │ ~1h1m left │ +100 -30 │ 10m ▶  ~/d/my-project ▶  improve-auth ▶
+ 5h 33% ████░░░░░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░░░░░ Fri 10:00AM │ (3m old) ▶
+```
+
+Both lines are width-aware — segments drop progressively as the terminal narrows.

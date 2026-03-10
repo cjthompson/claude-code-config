@@ -1,0 +1,15 @@
+{
+    "name": "@cjthompson/claude-code-config-installer",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "start": "node --experimental-strip-types src/index.ts"
+    },
+    "dependencies": {
+        "ink": "^5",
+        "react": "^18"
+    },
+    "devDependencies": {
+        "@types/react": "^18"
+    }
+}

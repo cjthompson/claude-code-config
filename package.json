@@ -1,6 +1,12 @@
 {
     "name": "@cjthompson/claude-code-config",
-    "version": "0.0.2",
+    "version": "0.0.3",
+    "workspaces": [
+        "packages/installer"
+    ],
+    "scripts": {
+        "install-packages": "npm -w @cjthompson/claude-code-config-installer start"
+    },
     "devDependencies": {
         "@types/node": "^22"
     }
