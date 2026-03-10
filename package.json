@@ -6,7 +6,8 @@
     ],
     "scripts": {
         "install-packages": "npm -w @cjthompson/claude-code-config-installer start",
-        "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall"
+        "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall",
+        "install-package": "npm -w @cjthompson/claude-code-config-installer run install-package --"
     },
     "devDependencies": {
         "@types/node": "^22"

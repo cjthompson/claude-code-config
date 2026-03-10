@@ -13,6 +13,14 @@ npm run install-packages
 
 Uses a card-based interface. Navigate with `tab`/`↑↓`, toggle with `space`, view details with `i`, install with `enter`.
 
+To install one or more packages by name without the TUI (fully non-interactive):
+
+```bash
+npm run install-package skills statusline
+```
+
+Names are matched case-insensitively against package IDs, package labels, and individual item names. Exits non-zero if any name is not found or if any install fails.
+
 Adding a new package is convention-based: drop a `manifest.json` in `packages/<name>/` and the installer picks it up automatically.
 
 ## Skills
