@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.15 - 2026-03-10
+
+### Tasks
+- Add `depends_on` support to project-tasks skill — tasks can declare dependencies on other tasks, blocked tasks shown in listings, dispatch prevented until deps complete
+
 ## v0.0.14 - 2026-03-10
 
 ### Tasks
