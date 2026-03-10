@@ -138,6 +138,7 @@ async function installSkills(
                 // Not a symlink or doesn't exist
             }
 
+            await unlink(target).catch(() => {});
             await symlink(item.sourcePath, target);
             results.push({
                 packageId: pkg.id,
