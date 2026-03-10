@@ -29,7 +29,7 @@ Custom skills for Claude Code, located in `packages/skills/`. Each skill is auto
 
 ### project-tasks
 
-Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Tasks are logged to `docs/TASKS.md` and dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `docs/CHANGELOG.md`.
+Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Tasks are stored in a global SQLite database (`~/.claude/tasks.db`) and dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
 
 **Commands:** `task: <desc>`, `fix: <desc>`, `todo: <desc>`, `list tasks`, `run task #N`, `run all tasks`, `update changelog`
 

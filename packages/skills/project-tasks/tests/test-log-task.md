@@ -1,4 +1,4 @@
-# Test: Task Logging to docs/TASKS.md
+# Test: Task Logging to SQLite
 
 ## Setup
 
@@ -22,7 +22,7 @@ A terminal multiplexer monitor built with Ink (React for CLI).
 Real-time terminal multiplexer monitor. Displays pane output, handles scrolling, and supports keyboard shortcuts.
 ```
 
-**docs/TASKS.md** does NOT exist yet (first task logged).
+The database `~/.claude/tasks.db` has no existing rows for this project.
 
 ## Scenario
 
@@ -32,86 +32,55 @@ The user says:
 
 ## Expected Behavior
 
-1. The skill creates `docs/TASKS.md` if it does not already exist.
+1. The skill runs the prerequisite steps: checks `sqlite3` availability, runs `CREATE TABLE IF NOT EXISTS`, and determines the project identifier.
 
-2. The file begins with a top-level heading:
-   ```
-   # Tasks
-   ```
+2. A new row is inserted into the `tasks` table with:
+   - `type` = `fix`
+   - `title` = `Log lines should never exceed one line`
+   - `priority` = `high` (fix prefix defaults to high)
+   - `status` = `pending`
+   - `tags` = `[]`
+   - `reqs` = a JSON array with at least one concrete requirement string
+   - `created` = current date/time in `YYYY-MM-DD HH:MM` format
+   - `seq` = `1` (first task in this project)
 
-3. A new task entry is appended with a horizontal rule separator before it:
-   ```
-   ---
-   ```
+3. The INSERT and SELECT are combined in a single `sqlite3` invocation to retrieve the assigned ID via `last_insert_rowid()`.
 
-4. The task entry heading uses the exact prefix from the user input (`fix:`) mapped to `## fix:` followed by the task title:
-   ```
-   ## fix: Log lines should never exceed one line
-   ```
+4. The skill reports the assigned ID (`#001`) to the user.
 
-5. The metadata line contains today's date and time in `YYYY-MM-DD HH:MM` format, a priority field, and a tags field. Since the user did not specify priority or tags, sensible defaults are used:
-   ```
-   **Date:** 2026-03-04 HH:MM | **Priority:** medium | **Tags:** —
-   ```
-   - The time (`HH:MM`) must reflect the actual current time (not a placeholder).
-   - Priority defaults to `medium` when unspecified.
-   - Tags defaults to `—` (em dash) when unspecified.
-
-6. The status line is set to pending:
-   ```
-   **Status:** pending
-   ```
-
-7. A `### Requirements` subsection is generated from the task title. The skill should infer at least one concrete requirement bullet. For this example, reasonable inferred requirements would be:
-   ```
-   ### Requirements
-   - Replace line breaks with ↵ symbol or similar single-line representation
-   - Trim leading/trailing whitespace from log lines
-   ```
-
-8. After writing the file, the skill presents a tri-modal choice to the user:
+5. The skill presents a tri-modal choice:
    ```
    a) Run Now
    b) Log Only
    c) Auto-Run All
    ```
 
-9. If the user selects **b) Log Only**, no subagent is dispatched. The task remains with `**Status:** pending`.
+6. If the user selects **b) Log Only**, no subagent is dispatched. The task remains `pending`.
 
 ## Failure Criteria
 
-- **FAIL** if `docs/TASKS.md` is not created or is empty after the interaction.
-- **FAIL** if the file does not start with `# Tasks`.
-- **FAIL** if the task entry is missing the `---` separator before it.
-- **FAIL** if the heading does not match the format `## fix: Log lines should never exceed one line`.
-- **FAIL** if the `**Date:**` value is missing or not in `YYYY-MM-DD HH:MM` format.
-- **FAIL** if the `**Priority:**` field is absent.
-- **FAIL** if the `**Status:**` field is absent or not set to `pending` after choosing "Log Only".
-- **FAIL** if the `### Requirements` section is missing or contains zero bullet items.
-- **FAIL** if the tri-modal choice (`a/b/c`) is not presented to the user after logging.
+- **FAIL** if `sqlite3` prerequisite check is skipped.
+- **FAIL** if `CREATE TABLE IF NOT EXISTS` is not run.
+- **FAIL** if the project identifier is not determined before the INSERT.
+- **FAIL** if single quotes in user input are not escaped (doubled) in the SQL.
+- **FAIL** if the INSERT and ID retrieval use separate `sqlite3` invocations (breaks `last_insert_rowid()`).
+- **FAIL** if `priority` is not `high` for a `fix:` prefix.
+- **FAIL** if `reqs` is empty or not a valid JSON array.
+- **FAIL** if `created` is missing or not in `YYYY-MM-DD HH:MM` format.
+- **FAIL** if the tri-modal choice (`a/b/c`) is not presented after logging.
 - **FAIL** if selecting "Log Only" triggers a subagent dispatch.
 
 ---
 
-## Variant: Appending to an Existing TASKS.md
+## Variant: Second Task in Same Project
 
 ### Setup (Variant)
 
-**docs/TASKS.md** already exists with one prior entry:
-```markdown
-# Tasks
+The database already has one row for this project:
 
----
-
-## task: Add keyboard shortcut to pause all panes
-**Date:** 2026-03-03 10:00 | **Priority:** low | **Tags:** #keybindings, #ux
-**Status:** completed (2026-03-03 11:30)
-
-### Requirements
-- Bind `p` key to toggle pause on all visible panes
-- Show "PAUSED" indicator in status bar
-
----
+```sql
+INSERT INTO tasks(project,seq,type,title,priority,status,tags,reqs,created)
+VALUES('claude-monitor',1,'task','Add keyboard shortcut to pause all panes','low','completed','["#keybindings","#ux"]','["Bind p key to toggle pause","Show PAUSED indicator"]','2026-03-03 10:00');
 ```
 
 ### Scenario (Variant)
@@ -122,14 +91,14 @@ The user says:
 
 ### Expected Behavior (Variant)
 
-1. The new entry is **prepended** (inserted after `# Tasks` but before existing entries) so newest tasks appear first.
-2. The existing entry remains unmodified.
-3. The new entry uses `## todo:` as the heading prefix.
-4. The file now contains exactly two task entries separated by `---` lines, with the new `todo:` entry appearing before the existing `task:` entry.
+1. The new task gets `seq` = `2` (auto-incremented from max existing seq).
+2. The `type` is `todo`.
+3. The existing row is not modified.
+4. Since the prefix is `todo:`, the execution choice is **not** presented — the skill simply confirms the todo was logged.
 
 ### Failure Criteria (Variant)
 
-- **FAIL** if the existing task entry is modified, removed, or reordered.
-- **FAIL** if the new entry appears after the existing one (it should be prepended, not appended).
-- **FAIL** if the heading prefix is not `## todo:` (must match the user's input prefix).
-- **FAIL** if there are fewer than two `---` separators in the final file (one before each entry).
+- **FAIL** if `seq` is not `2`.
+- **FAIL** if the existing task row is modified in any way.
+- **FAIL** if the heading prefix is not `todo`.
+- **FAIL** if an execution choice is presented for a `todo:` prefix.

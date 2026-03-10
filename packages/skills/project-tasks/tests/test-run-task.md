@@ -38,22 +38,11 @@ npm install && npm run build
 npx claude-monitor --config ./monitor.yml
 ```
 
-**docs/TASKS.md** already exists with the task to be run:
-```markdown
-# Tasks
+The database `~/.claude/tasks.db` contains this pending task:
 
----
-
-## fix: Log lines should never exceed one line
-**Date:** 2026-03-04 14:30 | **Priority:** high | **Tags:** #ui
-**Status:** pending
-
-### Requirements
-- Replace line breaks with ↵ symbol
-- Trim leading/trailing whitespace from each log line before display
-- Ensure truncation applies before the line is written to ScrollBuffer
-
----
+```sql
+INSERT INTO tasks(project,seq,type,title,priority,status,tags,reqs,created)
+VALUES('claude-monitor',1,'fix','Log lines should never exceed one line','high','pending','["#ui"]','["Replace line breaks with ↵ symbol","Trim leading/trailing whitespace from each log line before display","Ensure truncation applies before the line is written to ScrollBuffer"]','2026-03-04 14:30');
 ```
 
 **src/services/ScrollBuffer.ts** exists (the file the subagent would need to modify).
@@ -64,18 +53,26 @@ The user says:
 
 > fix: Log lines should never exceed one line
 
-The skill detects this matches the pending task in `docs/TASKS.md`. It presents the tri-modal choice. The user selects:
+The skill detects this matches the pending task. It presents the tri-modal choice. The user selects:
 
 > a) Run Now
 
 ## Expected Behavior
 
-1. The skill dispatches a subagent to execute the task.
+1. The skill queries the task from the database:
+   ```bash
+   sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs FROM tasks WHERE project='$P' AND seq=1;"
+   ```
 
-2. The subagent receives a **minimal context payload** containing ONLY:
+2. The skill updates status to `in_progress`:
+   ```bash
+   sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='in_progress',updated='...' WHERE project='$P' AND seq=1;"
+   ```
+
+3. The skill dispatches a subagent with a **minimal context payload** containing ONLY:
    - The contents of `CLAUDE.md`
    - The contents of `README.md`
-   - The task requirements extracted from `docs/TASKS.md`:
+   - The task requirements extracted from the `reqs` JSON array:
      ```
      fix: Log lines should never exceed one line
 
@@ -85,34 +82,30 @@ The skill detects this matches the pending task in `docs/TASKS.md`. It presents 
      - Ensure truncation applies before the line is written to ScrollBuffer
      ```
 
-3. The subagent does NOT receive:
-   - The full `docs/TASKS.md` file
+4. The subagent does NOT receive:
+   - The full tasks database or any SQL queries
    - Any other source files pre-loaded (it must discover and read them itself)
    - Chat history or conversation context from the parent session
 
-4. The subagent executes the task autonomously — it reads the necessary source files, makes edits, and (if applicable) runs verification commands like `npm run build` or `npm run test`.
+5. The subagent executes the task autonomously — it reads the necessary source files, makes edits, and runs verification commands.
 
-5. Upon subagent completion, the skill updates `docs/TASKS.md` to reflect completion:
-   ```
-   **Status:** completed (2026-03-04 HH:MM)
-   ```
-   - The completion timestamp must be the actual time the subagent finished.
-   - The `pending` status is replaced, not appended to.
+6. Upon subagent completion, the skill presents the Accept/Retry choice. If accepted:
+   - Status is updated to `completed` with the actual completion timestamp
+   - Changes are committed via `git add -A && git commit`
+   - Changelog is auto-updated
 
-6. The skill reports a summary of what the subagent did back to the user, including:
-   - Which files were modified
-   - A brief description of changes made
-   - Whether build/tests passed (if the subagent ran them)
+7. The skill reports a summary of what the subagent did back to the user.
 
 ## Failure Criteria
 
 - **FAIL** if a subagent is not dispatched when the user selects "Run Now".
-- **FAIL** if the subagent receives files beyond CLAUDE.md, README.md, and the task requirements in its initial context. The subagent must operate with minimal context and discover other files on its own.
-- **FAIL** if the subagent receives the parent session's chat history or prior conversation turns.
-- **FAIL** if `docs/TASKS.md` still shows `**Status:** pending` after the subagent completes successfully.
-- **FAIL** if the completion status does not follow the format `completed (YYYY-MM-DD HH:MM)`.
+- **FAIL** if the subagent receives files beyond CLAUDE.md, README.md, and the task requirements.
+- **FAIL** if the subagent receives the parent session's chat history.
+- **FAIL** if the task status is not updated to `in_progress` before dispatch.
+- **FAIL** if the task status is not updated to `completed` after acceptance.
+- **FAIL** if the completion timestamp is missing or not in `YYYY-MM-DD HH:MM` format.
 - **FAIL** if no summary of subagent actions is reported back to the user.
-- **FAIL** if the subagent is given the full TASKS.md file (it should only get the specific task's requirements).
+- **FAIL** if the subagent is given raw database content (it should only get the extracted requirements).
 
 ---
 
@@ -120,34 +113,12 @@ The skill detects this matches the pending task in `docs/TASKS.md`. It presents 
 
 ### Setup (Variant)
 
-Same as above, but `docs/TASKS.md` contains two pending tasks:
+Same as above, but the database contains two pending tasks:
 
-```markdown
-# Tasks
-
----
-
-## fix: Log lines should never exceed one line
-**Date:** 2026-03-04 14:30 | **Priority:** high | **Tags:** #ui
-**Status:** pending
-
-### Requirements
-- Replace line breaks with ↵ symbol
-- Trim leading/trailing whitespace from each log line before display
-- Ensure truncation applies before the line is written to ScrollBuffer
-
----
-
-## task: Add keyboard shortcut to pause all panes
-**Date:** 2026-03-04 14:35 | **Priority:** medium | **Tags:** #keybindings, #ux
-**Status:** pending
-
-### Requirements
-- Bind `p` key to toggle pause on all visible panes
-- Show "PAUSED" indicator in the status bar when paused
-- Resume output streaming on second press of `p`
-
----
+```sql
+INSERT INTO tasks(project,seq,type,title,priority,status,tags,reqs,created) VALUES
+('claude-monitor',1,'fix','Log lines should never exceed one line','high','pending','["#ui"]','["Replace line breaks with ↵ symbol","Trim whitespace"]','2026-03-04 14:30'),
+('claude-monitor',2,'task','Add keyboard shortcut to pause all panes','medium','pending','["#keybindings","#ux"]','["Bind p key to toggle pause","Show PAUSED indicator","Resume on second press"]','2026-03-04 14:35');
 ```
 
 ### Scenario (Variant)
@@ -162,15 +133,15 @@ The skill presents the tri-modal choice. The user selects:
 
 ### Expected Behavior (Variant)
 
-1. The first task ("Log lines should never exceed one line") is dispatched to a subagent immediately.
-2. After the first subagent completes, the second task ("Add keyboard shortcut to pause all panes") is dispatched to a new subagent automatically, without prompting the user.
-3. Each subagent receives only CLAUDE.md + README.md + its own task requirements (not the other task's requirements).
-4. Both tasks are updated to `completed` status in `docs/TASKS.md` after their respective subagents finish.
+1. The first task is dispatched to a subagent immediately.
+2. After the first subagent completes, the second task is dispatched automatically without prompting.
+3. Each subagent receives only CLAUDE.md + README.md + its own task requirements.
+4. Both tasks are updated to `completed` after their respective subagents finish and are accepted.
 5. The user receives a summary for each completed task.
 
 ### Failure Criteria (Variant)
 
 - **FAIL** if the user is prompted again between task executions after selecting "Auto-Run All".
-- **FAIL** if both tasks are sent to the same subagent (each task must get its own subagent with isolated minimal context).
-- **FAIL** if either task remains `pending` after both subagents complete.
+- **FAIL** if both tasks are sent to the same subagent.
+- **FAIL** if either task remains `pending` after both subagents complete and are accepted.
 - **FAIL** if a subagent for one task receives the requirements of the other task.

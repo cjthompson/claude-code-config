@@ -10,9 +10,9 @@ model: haiku
 
 ## Overview
 
-Capture small tasks and fixes to `docs/TASKS.md` and execute them cheaply via minimal-context subagents. Auto-generate `docs/CHANGELOG.md` from completed work.
+Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and execute them cheaply via minimal-context subagents. Auto-generate `CHANGELOG.md` from completed work.
 
-**Core principle:** The lead agent is always available. Every task — even a single one — is dispatched to a subagent so the user can keep issuing commands. Each task runner subagent scouts the codebase, implements changes, and reports back.
+**Core principle:** The lead agent is always available. Every task — even a single one — is dispatched to a subagent so the user can keep issuing commands.
 
 ## When to Use
 
@@ -21,26 +21,47 @@ Capture small tasks and fixes to `docs/TASKS.md` and execute them cheaply via mi
 - User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
 - User asks to "update changelog" or "generate changelog"
 
+## Prerequisites
+
+Run these steps at the start of **every** skill invocation, before any other operation:
+
+1. Check sqlite3 is available:
+```bash
+command -v sqlite3 >/dev/null 2>&1 || echo "ERROR: sqlite3 is required but not installed"
+```
+If missing, inform the user and stop.
+
+2. Initialize the database (idempotent):
+```bash
+sqlite3 ~/.claude/tasks.db "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,project TEXT NOT NULL,seq INTEGER NOT NULL,type TEXT NOT NULL CHECK(type IN('fix','task','todo')),title TEXT NOT NULL,priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN('high','medium','low')),status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','in_progress','completed','cancelled')),tags TEXT DEFAULT '[]',reqs TEXT DEFAULT '[]',created TEXT NOT NULL,updated TEXT,in_changelog INTEGER NOT NULL DEFAULT 0,UNIQUE(project,seq));"
+```
+
+3. Determine the project identifier:
+```bash
+git remote get-url origin 2>/dev/null | sed 's/\.git$//' || basename "$(git rev-parse --show-toplevel)"
+```
+Store this value as `$P` for all subsequent queries. **Escape single quotes** in `$P` by doubling them (`'` → `''`).
+
 ## Logging a Task
 
 When the user provides a task/fix/todo prefix:
 
 1. **Parse the message** — extract the title (everything after the prefix), tags (any `#word` in the message), and infer priority:
-   - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:` prefix defaults to `high`** since fixes imply something is broken.
+   - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:` prefix defaults to `high`.**
    - `medium` — features, UX improvements, enhancements. **`task:` and `todo:` default to `medium`.**
    - `low` — cosmetic changes, nice-to-have, cleanup, documentation
 
-2. **Interpret requirements** — infer concrete action items from the description. Apply these rules to decide whether to proceed or propose:
+2. **Interpret requirements** — infer concrete action items from the description.
 
    **Proceed directly if the description includes ANY of:**
    - A specific file, function, variable, component, or UI element name
-   - A concrete action with a clear target (e.g. "rename X to Y", "remove the X button", "add X to Y")
+   - A concrete action with a clear target (e.g. "rename X to Y", "remove the X button")
    - Explicit step-by-step instructions from the user
 
    **Propose an interpretation if the description:**
    - Contains no specific code, file, or component reference
    - Is 5 words or fewer after the prefix
-   - Uses a vague action word with no clear target — such as "fix", "improve", "update", "clean up", "handle", or "deal with" — without specifying *what*
+   - Uses a vague action word with no clear target
 
    If proposing, use AskUserQuestion before logging:
 
@@ -51,38 +72,19 @@ When the user provides a task/fix/todo prefix:
    > a) Accept — log with these requirements
    > b) Change — describe what's different
 
-   If the user selects "Change", incorporate their correction and re-present the proposed requirements before logging. Repeat until accepted.
+   Repeat until accepted.
 
-3. **Create `docs/TASKS.md`** if it doesn't exist, starting with `# Tasks` header.
+3. **Insert the task.** Escape single quotes in all user-provided values by doubling them (`'` → `''`). Build tags as a JSON array like `["#ui","#layout"]` (use `[]` if none). Build reqs as a JSON array like `["requirement 1","requirement 2"]`.
 
-4. **Assign a task ID** — scan `docs/TASKS.md` for the highest existing `**ID:** #NNN` value and increment by 1. If no tasks exist yet or no tasks have an ID field, start at `#001`. Tasks without an ID field are legacy entries — do not retroactively assign IDs to them, and do not count them when determining the next ID. IDs are zero-padded to 3 digits and never reused.
-
-5. **Prepend the task** (newest first — insert after `# Tasks` but before existing entries) using this **exact format**:
-
-```
----
-
-## {type}: {title}
-**ID:** #{NNN} | **Date:** {YYYY-MM-DD HH:MM} | **Priority:** {high|medium|low} | **Tags:** {#tag1 #tag2}
-**Status:** pending
-
-### Requirements
-- {requirement 1}
-- {requirement 2}
+```bash
+sqlite3 ~/.claude/tasks.db "INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,created) VALUES('$P',(SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='$P'),'fix','Log lines shouldn''t exceed one line','high','[]','[\"Replace line breaks\",\"Trim whitespace\"]','2026-03-10 14:30'); SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();"
 ```
 
-**Format rules:**
-- `{type}` is exactly `fix`, `task`, or `todo` (lowercase, matching user's prefix)
-- `**ID:** #{NNN}` is the assigned task ID, zero-padded to 3 digits (e.g. `#001`, `#012`, `#100`)
-- `{YYYY-MM-DD HH:MM}` is the current date and time
-- Tags use `#` prefix. If no tags provided, use `—` as the value (e.g. `**Tags:** —`). Do NOT omit the Tags field — always include it for consistent formatting.
-- Status is always `pending` for new tasks
-- Requirements is a bullet list — each bullet is one concrete action item
-- A `---` separator appears before each task entry
+The output is the assigned task ID (e.g. `#001`). Report it to the user.
 
-6. **Determine execution behavior** based on the prefix:
+4. **Determine execution behavior** based on the prefix:
 
-   - **`todo:` prefix** — skip the execution choice entirely. The task is saved as `pending` with no dispatch (always "Log Only"). Inform the user the todo was logged.
+   - **`todo:` prefix** — skip the execution choice entirely. Inform the user the todo was logged.
    - **`task:` or `fix:` prefix** — present the execution choice using AskUserQuestion:
 
 ```
@@ -93,17 +95,14 @@ c) Auto-Run All — run this and all future tasks without asking
 
 If the user previously chose "Auto-Run All" in this session, skip asking and dispatch immediately.
 
-If the user selects "Log Only", do nothing further. The task stays as `pending`.
-
 ## Running a Task
 
-**Core principle: The lead agent NEVER blocks on task execution.** Every task — even a single one — is dispatched to a subagent so the lead agent stays available to accept new `task:`, `fix:`, or `todo:` commands at all times.
+**Core principle: The lead agent NEVER blocks on task execution.** Every task is dispatched to a subagent so the lead agent stays available.
 
 When dispatching a task (via "Run Now", "run task #NNN", or "Auto-Run All"):
 
 ### Step 1: Recommend Isolation Strategy
 
-Check these conditions and recommend accordingly:
 - **Dirty working tree** (unstaged/uncommitted changes) → recommend worktree
 - **Multiple pending tasks** being run together → recommend worktree
 - **Clean tree + single task** → recommend direct (current directory)
@@ -112,14 +111,19 @@ Present recommendation with brief reasoning. Let user override.
 
 ### Step 2: Dispatch Task Runner Subagent
 
-Dispatch a **single subagent** that owns the entire pipeline: scout → execute → report. Use the Agent tool with `subagent_type: "general-purpose"`. If worktree was chosen, add `isolation: "worktree"`.
-
-**Update TASKS.md status** to `in_progress` before dispatching:
-```
-**Status:** in_progress (dispatched YYYY-MM-DD HH:MM)
+First, read the task data:
+```bash
+sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs FROM tasks WHERE project='$P' AND seq=$N;"
 ```
 
-Task Runner prompt:
+Update status to in_progress:
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='in_progress',updated='2026-03-10 14:35' WHERE project='$P' AND seq=$N;"
+```
+
+Dispatch a **single subagent** using the Agent tool with `subagent_type: "general-purpose"`. If worktree was chosen, add `isolation: "worktree"`.
+
+Task Runner prompt — extract `type`, `title`, and each element of the `reqs` JSON array to build this:
 
 ```
 You are a task runner. You will scout the codebase, implement changes, and report results.
@@ -135,7 +139,8 @@ You are working on the project at {repo_root}.
 {type}: {title}
 
 ### Requirements
-{Copy the requirements bullet list from TASKS.md for this specific task}
+- {reqs[0]}
+- {reqs[1]}
 
 {If this is a retry, include:}
 ## Retry Notes
@@ -145,14 +150,13 @@ A previous attempt was rejected. User feedback: {feedback}
 Do NOT write any code yet. First, map the codebase:
 1. Use Glob to find all files relevant to this task.
 2. Use Read to read every relevant file — including ones not explicitly mentioned
-   in Requirements but logically impacted (e.g. if a type is added, find every
-   place that type is initialized or reset).
+   in Requirements but logically impacted.
 3. Produce an Implementation Map with this exact format:
 
 ### Files to Modify
 - **{relative/path/file.ts}** — {one-line summary of change}
   - Location: `{function name}` (line ~{N})
-  - Change: {precise description — what to add, where exactly, what it should look like}
+  - Change: {precise description}
 
 ### Files to Create
 - **{relative/path/file.md}** — {one-line summary}
@@ -164,8 +168,8 @@ Do NOT write any code yet. First, map the codebase:
 ## Phase 2: Execute
 Now implement using your Implementation Map:
 1. Use Read to read each file listed under "Files to Modify".
-2. Make exactly the changes described for each file. Follow the map precisely.
-3. Create any files listed under "Files to Create" with the described content.
+2. Make exactly the changes described for each file.
+3. Create any files listed under "Files to Create".
 4. Use Bash to run existing tests. Check README for the test command if unsure.
 
 ## Phase 3: Report
@@ -181,132 +185,112 @@ Output a structured summary:
 - Make the smallest change that satisfies Requirements.
 ```
 
-**After dispatching, immediately inform the user** the task is running and that they can continue issuing commands:
+**After dispatching, immediately inform the user** the task is running and that they can continue issuing commands.
 
-```
-Task "{title}" dispatched to subagent. You can continue working — type more
-task:/fix:/todo: commands or anything else. I'll report results when it completes.
-```
-
-**Model selection for the task runner:**
-- Default: `model: "sonnet"` (handles both scout and execute phases)
-- Retry (same model): `model: "sonnet"` — the value here is corrective feedback from the user, not a model change
-- Retry with Opus: `model: "opus"` — escalate to a more capable model for harder tasks
+**Model selection:**
+- Default: `model: "sonnet"`
+- Retry (same model): `model: "sonnet"`
+- Retry with Opus: `model: "opus"`
 
 ### Step 3: Handle Completion
 
-When a task runner subagent completes, **interrupt-style report** to the user:
+When a task runner subagent completes, report results and present review choice using AskUserQuestion:
 
-1. **Report results** — briefly summarize what the subagent did (files changed, tests passed/failed).
-
-2. **Present review choice** using AskUserQuestion:
-
-   ```
-   a) Accept — mark complete and update changelog
-   b) Retry — revert and re-run with Sonnet (provide feedback to guide the retry)
-   c) Retry with Opus — revert and re-run with the most capable model (for harder tasks)
-   ```
+```
+a) Accept — mark complete and update changelog
+b) Retry — revert and re-run with Sonnet (provide feedback to guide the retry)
+c) Retry with Opus — revert and re-run with the most capable model (for harder tasks)
+```
 
 ### Step 4: Accept or Retry
 
 **If accepted:**
 
-1. **Update TASKS.md** — change the task's status line from:
-   ```
-   **Status:** in_progress (dispatched YYYY-MM-DD HH:MM)
-   ```
-   to:
-   ```
-   **Status:** completed (YYYY-MM-DD HH:MM)
-   ```
-   Use the **actual current time** (NOT the task's creation date). Do NOT add extra sections.
+1. Update task status:
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='completed',updated='2026-03-10 15:00' WHERE project='$P' AND seq=$N;"
+```
 
-2. **Commit the changes** — run `git add -A` and `git commit -m "{type}: {task title}"`.
+2. Commit the changes: `git add -A && git commit -m "{type}: {task title}"`
 
-3. **Auto-update CHANGELOG.md** — see Changelog section below.
+3. Auto-update `CHANGELOG.md` — see Changelog section below.
 
 **If retry:**
 
-1. **Revert the changes:**
-   - Worktree isolation: discard the worktree (changes are abandoned automatically)
-   - Direct (no worktree): run `git checkout .` to restore modified files
+1. Revert changes:
+   - Worktree isolation: discard the worktree
+   - Direct: run `git checkout .` to restore modified files
 
-2. **Ask for optional feedback** using AskUserQuestion: "What was wrong with the result? (optional — press Enter to skip)"
+2. Ask for optional feedback using AskUserQuestion: "What was wrong with the result? (optional — press Enter to skip)"
 
-3. **Re-dispatch** a new task runner subagent with:
-   - Set `model` to `"sonnet"` or `"opus"` based on user's choice
-   - Include the `## Retry Notes` section in the prompt with user feedback
-   - Update TASKS.md status back to `in_progress`
+3. Re-dispatch a new subagent with the appropriate model and include `## Retry Notes` with user feedback.
+   Update status back to `in_progress`.
 
-4. **Return to accepting commands** — don't block waiting for the retry.
+4. Return to accepting commands — don't block waiting for the retry.
 
 ## Listing Tasks
 
-When user says "list tasks", read `docs/TASKS.md` and show all tasks **except cancelled** by default:
+When user says "list tasks", query the database:
 
-```
-# Tasks
-
-| ID   | Type | Title                                    | Priority | Status      | Tags          |
-|------|------|------------------------------------------|----------|-------------|---------------|
-| #007 | task | Add keyboard shortcut to pause all panes | medium   | pending     | #keybindings  |
-| #005 | fix  | Log lines should never exceed one line   | high     | in_progress | #ui           |
-| #003 | task | Update onboarding flow copy              | low      | completed   |               |
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags FROM tasks WHERE project='$P' AND status!='cancelled' ORDER BY seq DESC;"
 ```
 
-**Filtering** — if the user qualifies the command, filter accordingly:
-- `list tasks pending` — only `pending` tasks
-- `list tasks in_progress` — only `in_progress` tasks
-- `list tasks completed` — only `completed` tasks
+For filtered listing (e.g. `list tasks pending`):
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,priority,status,tags FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq DESC;"
+```
 
-Use the stored `**ID:**` and `**Status:**` values from each task entry. Tasks are listed newest-first (as they appear in the file).
+Render the pipe-separated output as a markdown table:
+
+```
+| ID   | Type | Title                                    | Priority | Status  | Tags         |
+|------|------|------------------------------------------|----------|---------|--------------|
+| #007 | task | Add keyboard shortcut to pause all panes | medium   | pending | #keybindings |
+```
+
+Parse the `tags` column (JSON array) for display: `["#ui","#layout"]` → `#ui, #layout`. Display `—` if the array is empty (`[]`).
 
 ## Completing a Task Manually
 
-Use this when a task was completed outside the tool (done manually, in another session, or via another workflow) and just needs its status recorded. The code changes are assumed to already be committed.
+When user says "complete task #NNN" or "mark #NNN completed":
 
-When user says "complete task #NNN" or "mark #NNN completed" (and variants like "mark completed"):
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='completed',updated='2026-03-10 15:00' WHERE project='$P' AND seq=$N;"
+```
 
-1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`
-2. Update the status line to:
-   ```
-   **Status:** completed (YYYY-MM-DD HH:MM)
-   ```
-   Use the actual current time.
-3. Auto-update `CHANGELOG.md` — see Changelog section below.
-4. Commit the bookkeeping changes: `git add docs/TASKS.md docs/CHANGELOG.md && git commit -m "complete: mark #NNN completed"`
-5. Confirm to the user: `Task #NNN marked as completed.`
+Then auto-update `CHANGELOG.md` (see below), commit the changelog change, and confirm to the user.
 
 ## Cancelling a Task
 
 When user says "cancel task #NNN":
 
-1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`
-2. Update the status line to:
-   ```
-   **Status:** cancelled
-   ```
-3. Confirm to the user: `Task #NNN cancelled.`
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET status='cancelled' WHERE project='$P' AND seq=$N;"
+```
 
-Cancelled tasks are excluded from `list tasks` by default. Include them only if the user explicitly says `list tasks cancelled`.
+Confirm to the user: `Task #NNN cancelled.`
 
 ## Setting Task Priority
 
-When user says "set priority of #NNN to high/medium/low" (and natural variants like "make #NNN high priority"):
+When user says "set priority of #NNN to high/medium/low":
 
-1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`
-2. Update the `**Priority:**` field in the metadata line to the new value.
-3. Confirm to the user: `Task #NNN priority set to {priority}.`
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET priority='high' WHERE project='$P' AND seq=$N;"
+```
+
+Confirm to the user: `Task #NNN priority set to {priority}.`
 
 ## Checking a Task
 
-Use this to verify whether a task's requirements are already reflected in the codebase — without changing anything. Useful after a task was run in another session, to audit a completed task, or to check work before accepting.
-
 When user says "check task #NNN":
 
-1. Find the task entry in `docs/TASKS.md` by its `**ID:** #NNN`. Read its title and requirements.
+1. Read the task:
+```bash
+sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,reqs FROM tasks WHERE project='$P' AND seq=$N;"
+```
 
-2. Dispatch a **read-only subagent** (no code changes) using the Agent tool with `subagent_type: "haiku"`. Pass this prompt:
+2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
@@ -317,33 +301,29 @@ You are working on the project at {repo_root}.
 ID: #{NNN}
 
 ### Requirements
-{Copy the requirements bullet list from TASKS.md for this specific task}
+- {reqs[0]}
+- {reqs[1]}
 
 ## Verification Pipeline
 
 ### Step 1: Search git log
-Run these two commands and note any matching commits:
 - `git log --oneline --grep="#{NNN}"`
 - `git log --oneline --grep="{title}"`
 
 ### Step 2: Extract keywords
 From the requirements, identify specific searchable terms: filenames, function names,
-variable names, class names, UI element names, config keys, CLI flags, or other
-identifiers that would appear in code if the requirement were implemented. Ignore
-generic words like "update", "add", "fix", "the", "a".
+variable names, class names, config keys, CLI flags. Ignore generic words.
 
 ### Step 3: Search the codebase
-For each keyword extracted in Step 2, use Glob and Grep to search the codebase.
-Use Read to inspect relevant files when a match looks promising.
+For each keyword, use Glob and Grep to search. Use Read to inspect promising matches.
 
 ### Step 4: Verdict per requirement
-For each requirement bullet, assign one verdict:
-- **Found** — clear evidence exists in code (file:line) or git (commit hash)
-- **Partial** — some evidence exists but the requirement appears only partly addressed
-- **Not Found** — searched thoroughly, no evidence found
-- **Cannot Verify** — requirement is too abstract to search for (e.g. "ensure performance is good")
+- **Found** — clear evidence in code (file:line) or git (commit hash)
+- **Partial** — some evidence but only partly addressed
+- **Not Found** — searched thoroughly, no evidence
+- **Cannot Verify** — too abstract to search for
 
-### Step 5: Return a structured report in this exact format
+### Step 5: Return structured report
 
 ## Verification Report: #{NNN} {title}
 
@@ -353,44 +333,65 @@ For each requirement bullet, assign one verdict:
 ### Per-requirement verdicts
 - [ ] {requirement 1} — **{verdict}**
   Evidence: {file:line, commit hash, or "none"}
-- [ ] {requirement 2} — **{verdict}**
-  Evidence: {file:line, commit hash, or "none"}
 
 ### Keywords searched
-{comma-separated list of keywords used in Step 2}
+{comma-separated list}
 
 ## Rules
 - Do NOT write, edit, or delete any files.
 - Do NOT run any commands other than git log, Glob, Grep, and Read.
-- If a requirement has no searchable keywords, mark it Cannot Verify.
 ```
 
-3. When the subagent completes, present its report to the user and add an **overall confidence summary**:
-   - **High** — all requirements are Found or Cannot Verify, with at least one Found
-   - **Medium** — mix of Found and Partial, or all Partial
-   - **Low** — one or more Not Found, with some Found or Partial
-   - **Inconclusive** — all requirements are Cannot Verify or Not Found with no git evidence
+3. Present the report with an overall confidence summary:
+   - **High** — all requirements Found or Cannot Verify, with at least one Found
+   - **Medium** — mix of Found and Partial
+   - **Low** — one or more Not Found
+   - **Inconclusive** — all Cannot Verify or Not Found with no git evidence
 
-4. **Do NOT change the task's status in TASKS.md.** This is purely informational.
+4. Do NOT change the task's status. This is purely informational.
 
 ## Running All Tasks
 
 When user says "run all tasks":
 
-1. List all pending tasks and present them to the user
-2. Recommend worktree isolation (multiple tasks = always recommend worktree)
-3. Dispatch tasks based on isolation strategy:
-   - **Worktree:** Dispatch ALL tasks as separate subagents simultaneously (parallel). Each gets its own isolated worktree.
-   - **No worktree (user override):** Dispatch the FIRST pending task only. After it completes and the user accepts/retries, dispatch the next pending task. This avoids conflicts from concurrent edits to the same working tree.
-4. Return to accepting commands immediately after dispatching
-5. Handle each completion as it arrives (Step 3 above), updating TASKS.md and CHANGELOG.md after each
+1. Query all pending tasks:
+```bash
+sqlite3 ~/.claude/tasks.db -json "SELECT seq,type,title,priority,tags,reqs FROM tasks WHERE project='$P' AND status='pending' ORDER BY seq ASC;"
+```
+
+2. Present them to the user. Recommend worktree isolation (multiple tasks = always recommend worktree).
+
+3. Dispatch based on isolation strategy:
+   - **Worktree:** Dispatch ALL tasks as separate subagents simultaneously (parallel).
+   - **No worktree (user override):** Dispatch the FIRST pending task only. After acceptance, dispatch the next.
+
+4. Return to accepting commands immediately after dispatching.
 
 ## Generating Changelog
 
 When user says "update changelog" or "generate changelog", OR automatically after any task completion:
 
-1. Read all **completed** tasks from `docs/TASKS.md`
-2. Write `docs/CHANGELOG.md` in this **exact format**:
+**Auto-update** (after each task completion) — query only tasks not yet in the changelog:
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT seq,substr(updated,1,10),type,title,tags FROM tasks WHERE project='$P' AND status='completed' AND in_changelog=0 ORDER BY updated DESC;"
+```
+
+After writing entries to `CHANGELOG.md`, mark them:
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET in_changelog=1 WHERE project='$P' AND seq IN ($WRITTEN_SEQS);"
+```
+
+**Regenerate** (on explicit "generate changelog") — query all completed tasks:
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT seq,substr(updated,1,10),type,title,tags FROM tasks WHERE project='$P' AND status='completed' ORDER BY updated DESC;"
+```
+
+After regenerating, mark all:
+```bash
+sqlite3 ~/.claude/tasks.db "UPDATE tasks SET in_changelog=1 WHERE project='$P' AND status='completed';"
+```
+
+Write `CHANGELOG.md` in **this exact format**:
 
 ```markdown
 # Changelog
@@ -407,30 +408,24 @@ When user says "update changelog" or "generate changelog", OR automatically afte
 - {title} ({#tag1, #tag2})
 ```
 
-**Changelog format rules:**
-- Group by **completion date** (from `completed (YYYY-MM-DD ...)` timestamp), newest first
-- Within each date section, list items newest first by completion time (HH:MM from the completion timestamp)
-- Within each date, group by type in this order: **Fixes**, then **Tasks**, then **Todos**
-- Omit empty type sections (if no fixes on a date, skip `### Fixes`)
-- Each bullet: title (without type prefix) followed by tags in parentheses
-- Tags are comma-separated with `#` preserved: `(#ui, #layout)`
-- If a task has no tags, no parenthetical
-- **Only completed tasks** — pending, in_progress, and cancelled tasks are all excluded from the changelog
-- Do NOT add boilerplate like "All notable changes..." or `[Unreleased]` sections
-- Do NOT add `---` separators between date sections
-- Do NOT include requirement details in bullets — just the title and tags
-
-### Auto-Update vs Regenerate
-
-- **Auto-update** (after each task completion): find the date section matching the task's completion date. If the section exists, insert the new entry into the correct type group (Fixes/Tasks/Todos), maintaining newest-first order by completion time. If the type group doesn't exist yet, add it in the standard order (Fixes → Tasks → Todos). If no section exists for that date, create a new date section in the correct chronological position.
-- **Regenerate** (on explicit "generate changelog"): rebuild the entire file from scratch using all completed tasks in TASKS.md.
+**Format rules:**
+- Group by **completion date** (from `updated` column), newest date first
+- Within each date, group by type: **Fixes**, then **Tasks**, then **Todos**
+- Within each type group, newest first by completion time
+- Omit empty type sections
+- Each bullet: title followed by tags in parentheses. Parse tags JSON: `["#ui","#layout"]` → `(#ui, #layout)`
+- If a task has no tags (empty array), no parenthetical
+- **Only completed tasks** — pending, in_progress, and cancelled are excluded
+- No boilerplate, no `[Unreleased]`, no `---` separators
 
 ## Task History as Context
 
-When the user starts a new conversation in a project that has `docs/TASKS.md`, review the completed tasks to understand what has already been changed. This helps you:
-- Avoid re-implementing things already done
-- Understand the trajectory of the project
-- Make better recommendations for new tasks
+When the user starts a new conversation in a project, query recent tasks for context:
+```bash
+sqlite3 ~/.claude/tasks.db -separator '|' "SELECT printf('#%03d',seq),type,title,status FROM tasks WHERE project='$P' ORDER BY seq DESC LIMIT 20;"
+```
+
+This helps avoid re-implementing completed work and understand the project trajectory.
 
 ## Quick Reference
 
@@ -438,13 +433,13 @@ When the user starts a new conversation in a project that has `docs/TASKS.md`, r
 |---------|--------|
 | `task: description #tags` | Log new task |
 | `fix: description #tags` | Log new fix |
-| `todo: description #tags` | Log new todo (always Log Only — never dispatched) |
-| `list tasks` | Show all tasks |
-| `list tasks pending` | Filter by status (pending / in_progress / completed / cancelled) |
-| `run task #NNN` | Execute specific task by ID via subagent |
-| `run all tasks` | Execute all pending tasks (parallel with worktrees, sequential without) |
-| `complete task #NNN` | Manually mark a task completed + update changelog |
+| `todo: description #tags` | Log new todo (always Log Only) |
+| `list tasks` | Show all tasks (except cancelled) |
+| `list tasks pending` | Filter by status |
+| `run task #NNN` | Execute specific task by ID |
+| `run all tasks` | Execute all pending tasks |
+| `complete task #NNN` | Manually mark completed + update changelog |
 | `cancel task #NNN` | Cancel a pending task |
-| `set priority of #NNN to high` | Change a task's priority (high / medium / low) |
-| `check task #NNN` | Verify task requirements are in codebase (read-only, no status change) |
+| `set priority of #NNN to high` | Change priority |
+| `check task #NNN` | Verify task in codebase (read-only) |
 | `update changelog` | Regenerate changelog from completed tasks |
