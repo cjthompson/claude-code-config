@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.12 - 2026-03-10
+
+### Tasks
+- Skill defers git commit until user selects Accept
+
 ## v0.0.10 - 2026-03-10
 
 ### Tasks
