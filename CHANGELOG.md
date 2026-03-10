@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.7 - 2026-03-09
+
+### Docs
+- Add "Repository-Based Changes" section to CLAUDE.md clarifying how to make changes to repo-contained items (skills, configs) and how to apply them using `npm run install-packages`
+
 ## v0.0.5 - 2026-03-09
 
 ### Tasks
