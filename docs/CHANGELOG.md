@@ -3,6 +3,7 @@
 ## 2026-03-10
 
 ### Tasks
+- update CLAUDE.md with skill editing verification workflow
 - add `check task #NNN` command to verify work is in codebase
 
 ## v0.0.6 - 2026-03-09
