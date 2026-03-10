@@ -5,7 +5,8 @@
     "scripts": {
         "start": "node --experimental-strip-types src/index.ts",
         "reinstall": "node --experimental-strip-types src/reinstall.ts",
-        "install-package": "node --experimental-strip-types src/install-package.ts"
+        "install-package": "node --experimental-strip-types src/install-package.ts",
+        "migrate-tasks": "node --experimental-strip-types src/migrate-tasks.ts"
     },
     "dependencies": {
         "ink": "^5",
