@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.8 - 2026-03-10
+
+### Features
+- Add `reinstall` npm script (`npm run reinstall`) that non-interactively detects already-installed packages and reinstalls them, using the same discovery and install logic as the main installer
+
 ## v0.0.7 - 2026-03-09
 
 ### Docs
