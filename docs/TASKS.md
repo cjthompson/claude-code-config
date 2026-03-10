@@ -2,6 +2,19 @@
 
 ---
 
+## task: update the CLAUDE.md so that when editing a skill that defines a model (`model: haiku`) that a subagent is used with that model to process it and report back to a new opus subagent to verify. this will loop until the opus agent is satisfied or the use cancels.
+**ID:** #009 | **Date:** 2026-03-10 14:30 | **Priority:** medium | **Tags:** —
+**Status:** completed (2026-03-10 14:35)
+
+### Requirements
+- Add a section to `CLAUDE.md` describing a skill-editing verification workflow
+- When editing a skill file that has a `model:` frontmatter field, after making changes, dispatch a subagent using that model to process/exercise the edited skill
+- That subagent reports its results to a new Opus subagent acting as verifier
+- The Opus verifier either approves or sends feedback for another iteration
+- Loop continues until Opus approves or the user cancels
+
+---
+
 ## task: add `check task #NNN` command to verify work is in codebase
 **ID:** #008 | **Date:** 2026-03-10 11:45 | **Priority:** medium | **Tags:** —
 **Status:** completed (2026-03-10 11:52)
