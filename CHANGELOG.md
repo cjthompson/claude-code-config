@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.19 - 2026-03-13
+
+### Features
+- Add Claude Code plugin marketplace — skills are now installable via `/plugin marketplace add cjthompson/claude-code-config`
+- Restructure skills from `packages/skills/` to `plugins/<name>/` following the Claude Code plugin format
+- Each skill is a standalone plugin with `.claude-plugin/plugin.json` and marketplace index at `.claude-plugin/marketplace.json`
+- Update TUI installer to discover skills from `plugins/` directory
+
 ## v0.0.18 - 2026-03-13
 
 ### Tasks
