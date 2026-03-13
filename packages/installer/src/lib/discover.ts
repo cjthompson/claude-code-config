@@ -8,9 +8,11 @@ const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
 export async function discoverPackages(
     repoRoot: string,
 ): Promise<PackageDescriptor[]> {
+    const packages: PackageDescriptor[] = [];
+
+    // Discover traditional packages from packages/
     const packagesDir = join(repoRoot, "packages");
     const entries = await readdir(packagesDir, { withFileTypes: true });
-    const packages: PackageDescriptor[] = [];
 
     for (const entry of entries) {
         if (!entry.isDirectory() || entry.name === "installer") continue;
@@ -30,6 +32,10 @@ export async function discoverPackages(
 
         if (pkg) packages.push(pkg);
     }
+
+    // Discover skills from plugins/ (Claude Code plugin format)
+    const pluginsPkg = await discoverPluginSkills(repoRoot);
+    if (pluginsPkg) packages.push(pluginsPkg);
 
     packages.sort((a, b) => a.label.localeCompare(b.label));
     return packages;
@@ -131,6 +137,61 @@ async function discoverFilesPackage(
         items,
         packageDir: pkgDir,
         manifest,
+    };
+}
+
+/**
+ * Discover skills from plugins/ directory (Claude Code plugin format).
+ * Each plugin at plugins/<name>/ may contain skills/<skillName>/SKILL.md.
+ */
+async function discoverPluginSkills(
+    repoRoot: string,
+): Promise<PackageDescriptor | null> {
+    const pluginsDir = join(repoRoot, "plugins");
+    if (!(await exists(pluginsDir))) return null;
+
+    const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
+    const items: PackageItem[] = [];
+
+    for (const pluginEntry of pluginEntries) {
+        if (!pluginEntry.isDirectory()) continue;
+
+        const skillsDir = join(pluginsDir, pluginEntry.name, "skills");
+        if (!(await exists(skillsDir))) continue;
+
+        const skillEntries = await readdir(skillsDir, { withFileTypes: true });
+        for (const skillEntry of skillEntries) {
+            if (!skillEntry.isDirectory()) continue;
+            const skillPath = join(skillsDir, skillEntry.name);
+            const skillMd = join(skillPath, "SKILL.md");
+
+            if (!(await exists(skillMd))) continue;
+
+            const installed = await isSkillInstalled(skillEntry.name);
+            const description = await extractSkillDescription(skillMd);
+            items.push({
+                name: skillEntry.name,
+                sourcePath: skillPath,
+                enabled: !installed,
+                alreadyInstalled: installed,
+                description,
+                typeLabel: "Skill",
+            });
+        }
+    }
+
+    if (items.length === 0) return null;
+    items.sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+        id: "plugins",
+        label: "Skills",
+        description: "Skills from Claude Code plugins",
+        type: "skills",
+        enabled: items.some((i) => i.enabled),
+        items,
+        packageDir: pluginsDir,
+        manifest: { label: "Skills", description: "Skills from Claude Code plugins", type: "skills" },
     };
 }
 

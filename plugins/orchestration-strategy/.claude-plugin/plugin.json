@@ -1,0 +1,10 @@
+{
+    "name": "orchestration-strategy",
+    "version": "1.0.0",
+    "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["orchestration", "parallel", "agents", "worktree"],
+    "license": "MIT"
+}

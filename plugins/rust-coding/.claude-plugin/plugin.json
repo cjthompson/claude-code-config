@@ -1,0 +1,10 @@
+{
+    "name": "rust-coding",
+    "version": "1.0.0",
+    "description": "Guide Claude in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["rust", "coding", "idioms", "traits"],
+    "license": "MIT"
+}

@@ -1,0 +1,10 @@
+{
+    "name": "agent-team-development",
+    "version": "1.0.0",
+    "description": "End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agent communication and worktree isolation.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
+    "license": "MIT"
+}

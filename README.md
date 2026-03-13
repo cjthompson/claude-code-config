@@ -1,10 +1,29 @@
 # claude-code-config
 
-Custom configurations for Claude Code — skills, statusline, and an interactive installer.
+Custom configurations for Claude Code — skills, statusline, and an interactive installer. Also a plugin marketplace for easy one-command skill installation.
+
+## Plugin Marketplace
+
+Install skills directly using Claude Code's built-in plugin system:
+
+```
+/plugin marketplace add cjthompson/claude-code-config
+```
+
+Then browse and install individual plugins from the `/plugin` UI.
+
+### Available plugins
+
+| Plugin | Description |
+|--------|-------------|
+| **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, dispatch to subagents, auto-generate changelogs |
+| **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
+| **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
+| **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
 
 ## Installer
 
-Run the interactive TUI installer to select and install packages:
+For packages that aren't available as plugins (statusline, task-db helper), use the interactive TUI installer:
 
 ```bash
 npm install
@@ -16,16 +35,16 @@ Uses a card-based interface. Navigate with `tab`/`↑↓`, toggle with `space`, 
 To install one or more packages by name without the TUI (fully non-interactive):
 
 ```bash
-npm run install-package skills statusline
+npm run install-package statusline
 ```
 
 Names are matched case-insensitively against package IDs, package labels, and individual item names. Exits non-zero if any name is not found or if any install fails.
 
-Adding a new package is convention-based: drop a `manifest.json` in `packages/<name>/` and the installer picks it up automatically.
+The installer also discovers skills from `plugins/`, so you can use it to symlink-install plugin skills locally if you prefer that workflow over the plugin system.
 
 ## Skills
 
-Custom skills for Claude Code, located in `packages/skills/`. Each skill is auto-discovered by the installer (any subdirectory with a `SKILL.md`).
+Custom skills for Claude Code, located in `plugins/<name>/skills/`. Each skill is a standalone Claude Code plugin with its own `.claude-plugin/plugin.json`.
 
 ### project-tasks
 
@@ -47,7 +66,7 @@ Guides Claude in writing idiomatic Rust code with proper data modeling, traits, 
 
 ## Statusline
 
-A two-line powerline-style statusline for Claude Code showing session metrics and API quota usage. Located in `packages/statusline/`.
+A two-line powerline-style statusline for Claude Code showing session metrics and API quota usage. Located in `packages/statusline/`. Install via the TUI installer.
 
 ```
  Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ │ ~1h1m left │ +100 -30 │ 10m ▶  ~/d/my-project ▶  improve-auth ▶

@@ -1,0 +1,44 @@
+{
+    "name": "cjthompson-claude-code-config",
+    "owner": {
+        "name": "cjthompson"
+    },
+    "metadata": {
+        "description": "Skills for task management, multi-agent orchestration, and language-specific coding guidance.",
+        "version": "1.0.0"
+    },
+    "plugins": [
+        {
+            "name": "project-tasks",
+            "source": "./plugins/project-tasks",
+            "description": "Capture tasks inline with task:/fix:/todo: prefixes, store in SQLite, dispatch to subagents, and auto-generate changelogs.",
+            "version": "1.0.0",
+            "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+            "category": "development"
+        },
+        {
+            "name": "orchestration-strategy",
+            "source": "./plugins/orchestration-strategy",
+            "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
+            "version": "1.0.0",
+            "keywords": ["orchestration", "parallel", "agents", "worktree"],
+            "category": "development"
+        },
+        {
+            "name": "agent-team-development",
+            "source": "./plugins/agent-team-development",
+            "description": "End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agent communication and worktree isolation.",
+            "version": "1.0.0",
+            "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
+            "category": "development"
+        },
+        {
+            "name": "rust-coding",
+            "source": "./plugins/rust-coding",
+            "description": "Guide Claude in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
+            "version": "1.0.0",
+            "keywords": ["rust", "coding", "idioms", "traits"],
+            "category": "development"
+        }
+    ]
+}
