@@ -52,7 +52,7 @@ sqlite3 ~/.claude/tasks.db "ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT
    > ```json
    > {
    >   "permissions": {
-   >     "allow": ["Bash(sqlite3 *)"]
+   >     "allow": ["Bash(sqlite3 *)", "Bash(P=*)"]
    >   }
    > }
    > ```
@@ -100,10 +100,32 @@ When the user provides a task/fix/todo prefix:
 
    Repeat until accepted.
 
-3. **Insert the task.** Escape single quotes in all user-provided values by doubling them (`'` → `''`). Build tags as a JSON array like `["#ui","#layout"]` (use `[]` if none). Build reqs as a JSON array like `["requirement 1","requirement 2"]`. Build depends_on as a JSON array of seq numbers like `[3,5]` (use `[]` if none).
+3. **Insert the task.** Use a **quoted heredoc** (`<< 'ENDSQL'`) for all INSERT statements. This eliminates all shell escaping — only SQL escaping applies.
+
+   **Escaping rules:**
+   - Single quotes in any value: double them (`'` → `''`) — this is the only escaping needed
+   - Double quotes in JSON values: write them literally — no backslash escaping
+   - Do **NOT** use shell escaping like `'\''` — it is invalid in this context
+   - The project identifier must be written as its **literal value** in the SQL (quoted heredocs do not expand `$P`)
+
+   Build tags as a JSON array like `["#ui","#layout"]` (use `[]` if none). Build reqs as a JSON array of strings. Build depends_on as a JSON array of seq numbers like `[3,5]` (use `[]` if none).
 
 ```bash
-sqlite3 ~/.claude/tasks.db "INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,depends_on,created) VALUES('$P',(SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='$P'),'fix','Log lines shouldn''t exceed one line','high','[]','[\"Replace line breaks\",\"Trim whitespace\"]','[]','2026-03-10 14:30'); SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();"
+sqlite3 ~/.claude/tasks.db << 'ENDSQL'
+INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,depends_on,created)
+VALUES(
+  'git@github.com:org/repo',
+  (SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='git@github.com:org/repo'),
+  'fix',
+  'Log lines shouldn''t exceed one line',
+  'high',
+  '[]',
+  '["Replace line breaks","Trim whitespace"]',
+  '[]',
+  '2026-03-10 14:30'
+);
+SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();
+ENDSQL
 ```
 
 The output is the assigned task ID (e.g. `#001`). Report it to the user.
