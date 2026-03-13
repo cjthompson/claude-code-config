@@ -31,6 +31,12 @@ command -v sqlite3 >/dev/null 2>&1 || echo "ERROR: sqlite3 is required but not i
 ```
 If missing, inform the user and stop.
 
+1b. Check whether this is a first-time setup:
+```bash
+sqlite3 ~/.claude/tasks.db "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks';" 2>/dev/null
+```
+If this returns no output, the tasks table does not exist yet. Set a flag `FIRST_TIME=true` for use after step 2.
+
 2. Initialize the database (idempotent):
 ```bash
 sqlite3 ~/.claude/tasks.db "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,project TEXT NOT NULL,seq INTEGER NOT NULL,type TEXT NOT NULL CHECK(type IN('fix','task','todo')),title TEXT NOT NULL,priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN('high','medium','low')),status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','in_progress','completed','cancelled')),tags TEXT DEFAULT '[]',reqs TEXT DEFAULT '[]',depends_on TEXT DEFAULT '[]',created TEXT NOT NULL,updated TEXT,in_changelog INTEGER NOT NULL DEFAULT 0,UNIQUE(project,seq));"
@@ -40,6 +46,17 @@ Then add the `depends_on` column if it doesn't exist (for databases created befo
 ```bash
 sqlite3 ~/.claude/tasks.db "ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]';" 2>/dev/null
 ```
+
+   If `FIRST_TIME=true`, show the user this one-time setup tip:
+   > **First-time setup tip:** To avoid approval prompts for every sqlite3 command, add this to `~/.claude/settings.json`:
+   > ```json
+   > {
+   >   "permissions": {
+   >     "allow": ["Bash(sqlite3 *)"]
+   >   }
+   > }
+   > ```
+   > This is optional — without it, you will be prompted to approve each sqlite3 command individually.
 
 3. Determine the project identifier:
 ```bash
