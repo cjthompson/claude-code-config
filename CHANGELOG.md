@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.17 - 2026-03-13
+
+### Fixes
+- Switch project-tasks INSERT statements to quoted heredoc to fix sqlite3 escaping errors when values contain single quotes; update permission tip to include `Bash(P=*)`
+
 ## v0.0.16 - 2026-03-13
 
 ### Tasks
