@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.18 - 2026-03-13
+
+### Tasks
+- Add `task-db.mjs` helper script package — wraps all SQLite operations in a simple CLI, replacing raw sqlite3 calls in the project-tasks skill and reducing bash permissions to a single `Bash(node ~/.claude/task-db.mjs *)` entry
+
 ## v0.0.17 - 2026-03-13
 
 ### Fixes
