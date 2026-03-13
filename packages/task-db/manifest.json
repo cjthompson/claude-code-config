@@ -1,0 +1,11 @@
+{
+    "label": "Task DB Helper",
+    "description": "SQLite helper script for the project-tasks skill. Handles all database operations with a simple CLI interface, eliminating sqlite3 permission prompts.",
+    "type": "files",
+    "files": ["task-db.mjs"],
+    "detect": {
+        "task-db.mjs": {
+            "files": ["~/.claude/task-db.mjs"]
+        }
+    }
+}
