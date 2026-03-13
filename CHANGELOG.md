@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.16 - 2026-03-13
+
+### Tasks
+- Add first-time setup tip to project-tasks skill suggesting `Bash(sqlite3 *)` permission in `~/.claude/settings.json` to avoid sqlite3 approval prompts
+
 ## v0.0.15 - 2026-03-10
 
 ### Tasks
