@@ -159,7 +159,7 @@ If any output is printed, the task is **blocked**. Each line is `#NNN|title|stat
 
 Present recommendation with brief reasoning. Let user override.
 
-### Step 2: Dispatch Task Runner Subagent
+### Step 2: Dispatch Scout + Executor (2-stage pipeline)
 
 Read the task data:
 ```bash
@@ -171,12 +171,25 @@ Update status to in_progress:
 node ~/.claude/task-db.mjs update --project "..." --seq N --status in_progress
 ```
 
-Dispatch a **single subagent** using the Agent tool with `subagent_type: "general-purpose"`. If worktree was chosen, add `isolation: "worktree"`.
+The task runs as a **2-stage pipeline**: a Sonnet scout (read-only) produces an Implementation Map, then a Haiku executor follows it mechanically. Both run as background subagents so the user stays unblocked.
 
-Task Runner prompt — extract `type`, `title`, and each element of the `reqs` JSON array:
+#### Stage 1: Sonnet Scout (read-only)
+
+Dispatch a **background** subagent. Extract `type`, `title`, and each element of the `reqs` JSON array:
 
 ```
-You are a task runner. You will scout the codebase, implement changes, and report results.
+Agent tool parameters:
+  subagent_type: "general-purpose"
+  model: "sonnet"
+  run_in_background: true
+  description: "Scout: #{SEQ} {short_title}"
+```
+
+Scout prompt:
+
+```
+You are a codebase scout. Analyze the codebase and produce a detailed Implementation Map.
+Do NOT write, edit, or create any files. Read-only.
 You are working on the project at {repo_root}.
 
 ## Project Context
@@ -196,51 +209,115 @@ You are working on the project at {repo_root}.
 ## Retry Notes
 A previous attempt was rejected. User feedback: {feedback}
 
-## Phase 1: Scout (read-only)
-Do NOT write any code yet. First, map the codebase:
-1. Use Glob to find all files relevant to this task.
-2. Use Read to read every relevant file — including ones not explicitly mentioned
-   in Requirements but logically impacted.
-3. Produce an Implementation Map with this exact format:
+## Your Job
+
+### Step 1: Find relevant files
+Use Glob to find all files that could be relevant to this task.
+
+### Step 2: Read and understand architecture
+Use Read to read every relevant file — including ones not explicitly mentioned
+in Requirements but logically impacted.
+
+### Step 3: Ownership analysis (CRITICAL)
+Before deciding WHERE to make changes, answer these questions:
+- **Data ownership:** If this task adds or tracks new state, which existing class/struct
+  already owns related data? Add new fields there, not as globals on the app/main class.
+- **Logic ownership:** If this task adds rendering, formatting, or business logic, does a
+  base class or shared module already have a similar method? Extend it there rather than
+  duplicating in a leaf file.
+- **Cross-file impact:** Would changes in a shared module (base class, common utilities,
+  types file) be cleaner than changes in the specific file mentioned by the task? If a
+  base class method already handles similar work, modify it instead of adding new code
+  in the subclass.
+
+Common mistake to avoid: putting new state or logic on the outermost/leaf class when it
+belongs on an inner/base class that other code also uses.
+
+### Step 4: Produce Implementation Map
+The executor will follow this map LITERALLY. Be precise — include exact line numbers,
+function names, and code snippets for every change.
+
+### Ownership Decision
+- **New state belongs on:** {class/module name} — because {reason}
+- **New logic belongs in:** {class/module name} — because {reason}
 
 ### Files to Modify
-- **{relative/path/file.ts}** — {one-line summary of change}
-  - Location: `{function name}` (line ~{N})
-  - Change: {precise description}
+- **{relative/path/file.ext}** — {one-line summary of change}
+  - Location: `{function/class.method name}` (line ~{N})
+  - Change: {precise description with exact code snippets where possible}
 
 ### Files to Create
-- **{relative/path/file.md}** — {one-line summary}
+- **{relative/path/file.ext}** — {one-line summary}
   - Content: {description of what the file must contain}
 
 ### No Changes Needed
 - {file you read but determined needs no modification}
 
-## Phase 2: Execute
-Now implement using your Implementation Map:
-1. Use Read to read each file listed under "Files to Modify".
-2. Make exactly the changes described for each file.
-3. Create any files listed under "Files to Create".
-4. Use Bash to run existing tests. Check README for the test command if unsure.
-
-## Phase 3: Report
-Output a structured summary:
-- **Files changed:** list each file and what was done
-- **Tests:** passed / failed / none found
-- **Commit:** none yet (pending Accept)
-- **Issues:** any problems encountered
+### Test Command
+- {the command to run tests, from README or CLAUDE.md — or "no tests found"}
 
 ## Rules
-- Do not ask questions. Follow the Implementation Map exactly as written.
-- Do not add features, refactor unrelated code, or make changes not listed in the Implementation Map.
-- Make the smallest change that satisfies Requirements.
+- Do NOT write, edit, or create any files. Read-only.
+- Be extremely precise. Include exact line numbers, function names, and code snippets.
+- The executor will follow your map literally — ambiguity causes errors.
+- Include every file that needs changing, even if the requirement doesn't mention it explicitly.
+- Place new state on the class that owns related data, not as globals on the app class.
+- Place new logic in the module that owns similar logic, even if the task description only names a different file.
 ```
 
-**After dispatching, immediately inform the user** the task is running and that they can continue issuing commands.
+#### Stage 2: Haiku Executor
+
+When the scout completes, dispatch the executor as another **background** subagent. Pass the scout's **full Implementation Map** verbatim.
+
+```
+Agent tool parameters:
+  subagent_type: "general-purpose"
+  model: "haiku"
+  run_in_background: true
+  description: "Execute: #{SEQ} {short_title}"
+  (add isolation: "worktree" if worktree was chosen in Step 1)
+```
+
+Executor prompt:
+
+```
+You are a task executor. Follow the Implementation Map below exactly. Do not deviate.
+You are working on the project at {repo_root}.
+
+## Task
+{type}: {title}
+
+## Implementation Map
+{Paste the FULL Implementation Map returned by the scout — including Ownership Decision,
+Files to Modify, Files to Create, and Test Command sections}
+
+## Instructions
+1. For each file under "Files to Modify":
+   a. Use Read to read the file.
+   b. Use Edit to make exactly the change described. Match the Location and Change precisely.
+2. For each file under "Files to Create":
+   a. Use Write to create the file with the described content.
+3. Run the Test Command from the Implementation Map (if any).
+4. Output a structured report:
+   - **Files changed:** list each file and what was done
+   - **Tests:** passed / failed / none found
+   - **Commit:** none yet (pending Accept)
+   - **Issues:** any problems encountered
+
+## Rules
+- Follow the Implementation Map literally. Do not interpret, improve, or add to it.
+- Do not ask questions.
+- Do not add features, refactor unrelated code, or make changes not in the map.
+- If a described location doesn't match (wrong line number, missing function), report it
+  as an Issue and make your best effort to apply the intended change nearby.
+```
+
+**After dispatching the scout, immediately inform the user** the task is running and that they can continue issuing commands. When the scout completes, chain the executor automatically — do not ask the user between stages.
 
 **Model selection:**
-- Default: `model: "sonnet"`
-- Retry (same model): `model: "sonnet"`
-- Retry with Opus: `model: "opus"`
+- Default: Sonnet scout → Haiku executor (2-stage)
+- Retry (same approach): Sonnet scout → Haiku executor (2-stage)
+- Retry with Opus: Single Opus agent (combined scout+execute, no 2-stage)
 
 ### Step 3: Handle Completion
 
@@ -280,7 +357,7 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 
 2. Ask for optional feedback using AskUserQuestion: "What was wrong with the result? (optional — press Enter to skip)"
 
-3. Re-dispatch a new subagent with the appropriate model and include `## Retry Notes` with user feedback. Update status back to `in_progress`.
+3. Re-dispatch using the 2-stage pipeline (Sonnet scout → Haiku executor) with `## Retry Notes` included in the scout prompt. If user chose "Retry with Opus", dispatch a single Opus agent (combined scout+execute) instead. Update status back to `in_progress`.
 
 4. Return to accepting commands — don't block waiting for the retry.
 
@@ -348,7 +425,7 @@ When user says "check task #NNN":
 node ~/.claude/task-db.mjs get --project "..." --seq N
 ```
 
-2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
+2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "general-purpose"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.

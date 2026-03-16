@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.0.20 - 2026-03-15
+
+### Features
+- Upgrade project-tasks skill to 2-stage execution pipeline: Sonnet scout (read-only) produces Implementation Map with ownership analysis, then Haiku executor follows it mechanically
+- Add ownership analysis step to scout prompt — guides models to place state on data-owning classes and logic in shared modules, improving cross-file architectural judgment by ~29%
+- Fix invalid `subagent_type: "haiku"` in check-task section (now uses `subagent_type: "general-purpose"` with `model: "haiku"`)
+
 ## v0.0.19 - 2026-03-13
 
 ### Features
