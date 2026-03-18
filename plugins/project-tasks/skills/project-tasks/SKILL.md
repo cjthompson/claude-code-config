@@ -1,7 +1,7 @@
 ---
 name: project-tasks
-description: Use when the user says "task:", "fix:", "todo:", or asks to log, run, list, or manage project tasks. Also use when asked to generate or update a changelog from completed tasks.
-TRIGGER when: user message starts with "task:", "fix:", or "todo:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task", "run all tasks", "update changelog", or "generate changelog".
+description: Use when the user says "task:", "fix:", "todo:", "log task:", "log fix:", "run task:", "run fix:", or asks to log, run, list, or manage project tasks. Also use when asked to generate or update a changelog from completed tasks.
+TRIGGER when: user message starts with "task:", "fix:", "todo:", "log task:", "log fix:", "run task:", or "run fix:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task #NNN", "run all tasks", "update changelog", or "generate changelog".
 DO NOT TRIGGER when: user is asking a general question about tasks/todos unrelated to project management.
 model: haiku
 ---
@@ -25,6 +25,8 @@ Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and ex
 ## When to Use
 
 - User says `task: <description>`, `fix: <description>`, or `todo: <description>`
+- User says `log task: <description>` or `log fix: <description>` (log only, no execution prompt)
+- User says `run task: <description>` or `run fix: <description>` (log and run immediately)
 - User asks to "list tasks", "run task #NNN", "run all tasks"
 - User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
 - User asks to "update changelog" or "generate changelog"
@@ -66,15 +68,15 @@ Store this value as `$PROJECT` for use in all subsequent commands.
 
 ## Logging a Task
 
-When the user provides a task/fix/todo prefix:
+When the user provides a task/fix/todo prefix (including `log task:`, `log fix:`, `run task:`, `run fix:`):
 
 1. **Parse the message** — extract the title (everything after the prefix), tags (any `#word` in the message), dependencies, and infer priority.
 
    **Dependencies:** If the message contains `(depends on #NNN)` or `(depends on #NNN, #NNN)`, extract the seq numbers and remove the parenthetical from the title. If no dependencies, omit `--dep` flags.
 
    **Priority:**
-   - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:` prefix defaults to `high`.**
-   - `medium` — features, UX improvements, enhancements. **`task:` and `todo:` default to `medium`.**
+   - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:`, `log fix:`, and `run fix:` prefixes default to `high`.**
+   - `medium` — features, UX improvements, enhancements. **`task:`, `todo:`, `log task:`, and `run task:` default to `medium`.**
    - `low` — cosmetic changes, nice-to-have, cleanup, documentation
 
 2. **Interpret requirements** — infer concrete action items from the description.
@@ -124,6 +126,8 @@ The output is the assigned task ID (e.g. `#001`). Report it to the user.
 4. **Determine execution behavior** based on the prefix:
 
    - **`todo:` prefix** — skip the execution choice entirely. Inform the user the todo was logged.
+   - **`log task:` or `log fix:` prefix** — skip the execution choice entirely (Log Only). Inform the user the task was logged.
+   - **`run task:` or `run fix:` prefix** — skip the execution choice prompt (the answer is "Run Now"). Proceed directly to the **Running a Task** pipeline starting at Step 0 (Check Dependencies). Do not ask the user whether to run.
    - **`task:` or `fix:` prefix** — present the execution choice using AskUserQuestion:
 
 ```
@@ -565,10 +569,14 @@ This helps avoid re-implementing completed work and understand the project traje
 
 | Command | Action |
 |---------|--------|
-| `task: description #tags` | Log new task |
+| `task: description #tags` | Log new task (asks Run Now / Log Only) |
 | `task: description (depends on #NNN, #NNN)` | Log task with dependencies |
-| `fix: description #tags` | Log new fix |
-| `todo: description #tags` | Log new todo (always Log Only) |
+| `fix: description #tags` | Log new fix (asks Run Now / Log Only) |
+| `todo: description #tags` | Log new todo (always Log Only, never runs) |
+| `log task: description #tags` | Log new task, Log Only — no execution prompt |
+| `log fix: description #tags` | Log new fix, Log Only — no execution prompt |
+| `run task: description #tags` | Log new task and run immediately |
+| `run fix: description #tags` | Log new fix and run immediately |
 | `list tasks` | Show all tasks (except cancelled) |
 | `list tasks pending` | Filter by status |
 | `run task #NNN` | Execute specific task by ID |
