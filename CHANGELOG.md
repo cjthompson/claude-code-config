@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.21 - 2026-03-18
+
+### Features
+- Add `log task:` and `log fix:` prefix shortcuts to project-tasks skill — always saves as Log Only without presenting the execution prompt
+- Add `run task:` and `run fix:` prefix shortcuts — logs the task and immediately runs it through the full execution pipeline (Check Dependencies → Isolation → Scout + Executor)
+
 ## v0.0.20 - 2026-03-15
 
 ### Features
