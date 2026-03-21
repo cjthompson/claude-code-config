@@ -6,6 +6,18 @@
 - Remove dead `depends_on` column migration from task-db init that caused "duplicate column name" error on existing databases
 - Remove one-off `migrate-tasks.ts` script and associated npm scripts — markdown-to-SQLite migration is complete
 
+## v0.0.21.1 - 2026-03-21
+
+### Features
+- Installer now compares SHA-256 hashes of source vs installed files to detect outdated packages
+- Files packages show `(current)` when hashes match, `(upgrade)` when outdated, `(installed)` for symlinked items
+- Cards show yellow "UPGRADE" badge when updates are available
+- Results view distinguishes "Updated" from "Copied" for reinstalled files
+
+### Fixes
+- Fix task-db.mjs "duplicate column name: depends_on" error by removing unnecessary ALTER TABLE migration
+- Add "never delete tasks.db" rule to project-tasks skill to prevent data loss
+
 ## v0.0.21 - 2026-03-18
 
 ### Features
