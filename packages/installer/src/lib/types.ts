@@ -2,6 +2,10 @@ export interface PackageItem {
     name: string;
     enabled: boolean;
     alreadyInstalled: boolean;
+    /** Installed file exists but content differs from source — upgrade available */
+    needsUpgrade?: boolean;
+    /** Installed file exists and hash matches source — content is up-to-date */
+    isCurrent?: boolean;
     /** Absolute path to source (for skills: the skill dir, for files: the source file) */
     sourcePath?: string;
     /** Description shown in the info overlay (from SKILL.md or manifest) */
@@ -56,6 +60,6 @@ export interface PackageDescriptor {
 export interface InstallResult {
     packageId: string;
     itemName: string;
-    status: "created" | "already-exists" | "removed" | "error";
+    status: "created" | "updated" | "already-exists" | "removed" | "error";
     message: string;
 }

@@ -6,10 +6,12 @@ interface ToggleItemProps {
     enabled: boolean;
     focused: boolean;
     alreadyInstalled: boolean;
+    needsUpgrade?: boolean;
+    isCurrent?: boolean;
     markedForRemoval?: boolean;
 }
 
-export function ToggleItem({ name, enabled, focused, alreadyInstalled, markedForRemoval }: ToggleItemProps) {
+export function ToggleItem({ name, enabled, focused, alreadyInstalled, needsUpgrade, isCurrent, markedForRemoval }: ToggleItemProps) {
     const cursor = focused ? "\u203a" : " ";
 
     let indicator: string;
@@ -20,6 +22,18 @@ export function ToggleItem({ name, enabled, focused, alreadyInstalled, markedFor
         indicator = "\u2717"; // ✗
         indicatorColor = "red";
         suffix = " (remove)";
+    } else if (needsUpgrade && enabled) {
+        indicator = "\u2191"; // ↑
+        indicatorColor = "yellow";
+        suffix = " (upgrade)";
+    } else if (needsUpgrade && !enabled) {
+        indicator = "\u00b7"; // ·
+        indicatorColor = "yellow";
+        suffix = " (outdated)";
+    } else if (alreadyInstalled && isCurrent) {
+        indicator = "\u2713"; // ✓
+        indicatorColor = "green";
+        suffix = " (current)";
     } else if (alreadyInstalled) {
         indicator = "\u2713"; // ✓
         indicatorColor = "green";

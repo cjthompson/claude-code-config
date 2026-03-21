@@ -13,10 +13,12 @@ export function ResultsView({ results }: ResultsViewProps) {
         ...results.map((r, i) => {
             const icon =
                 r.status === "created" ? "\u2713" :
+                r.status === "updated" ? "\u2191" :
                 r.status === "removed" ? "\u2717" :
                 r.status === "already-exists" ? "\u2013" : "\u2717";
             const color =
                 r.status === "created" ? "green" :
+                r.status === "updated" ? "green" :
                 r.status === "removed" ? "red" :
                 r.status === "already-exists" ? "yellow" : "red";
 

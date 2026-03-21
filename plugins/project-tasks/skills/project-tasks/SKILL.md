@@ -21,6 +21,7 @@ Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and ex
 - **ALWAYS** use `node ~/.claude/task-db.mjs <command>` for every database operation.
 - **NEVER** call sqlite3 directly, construct SQL strings, or use heredocs with SQL.
 - **NEVER** reference `~/.claude/tasks.db` directly — let `task-db.mjs` manage the path.
+- **NEVER** delete, remove, or recreate `tasks.db`. The database is persistent and contains the user's task history. If the database appears corrupted or you encounter errors, report the problem to the user — do not attempt to fix it by deleting the file.
 
 ## When to Use
 

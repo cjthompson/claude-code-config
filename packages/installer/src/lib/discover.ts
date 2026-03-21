@@ -1,5 +1,6 @@
-import { readdir, stat, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readdir, stat, readFile, readlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { DetectSpec, PackageDescriptor, PackageItem, PackageManifest } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
@@ -28,7 +29,7 @@ export async function discoverPackages(
 
         const pkg = manifest.type === "skills"
             ? await discoverSkillsPackage(entry.name, pkgPath, manifest)
-            : await discoverFilesPackage(entry.name, pkgPath, manifest);
+            : await discoverFilesPackage(entry.name, pkgPath, manifest, repoRoot);
 
         if (pkg) packages.push(pkg);
     }
@@ -90,6 +91,7 @@ async function discoverFilesPackage(
     id: string,
     pkgDir: string,
     manifest: PackageManifest,
+    repoRoot: string,
 ): Promise<PackageDescriptor | null> {
     const files = manifest.files ?? [];
     if (files.length === 0) return null;
@@ -97,9 +99,27 @@ async function discoverFilesPackage(
     // Check if all files are already installed (or use detect override for the files item)
     const filesItemName = files.join(", ");
     const filesDetect = manifest.detect?.[filesItemName];
-    const allInstalled = filesDetect
+    const allExist = filesDetect
         ? await checkDetect(filesDetect)
         : (await Promise.all(files.map((f) => exists(join(CLAUDE_DIR, f))))).every(Boolean);
+
+    // If files exist, check if any are outdated (hash mismatch).
+    // Symlinks pointing into the repo are excluded — they auto-update.
+    let needsUpgrade = false;
+    if (allExist) {
+        for (const file of files) {
+            const dest = join(CLAUDE_DIR, file);
+            if (await isSymlinkIntoRepo(dest, repoRoot)) continue;
+            const src = join(pkgDir, file);
+            if (await fileHash(src) !== await fileHash(dest)) {
+                needsUpgrade = true;
+                break;
+            }
+        }
+    }
+
+    const allInstalled = allExist && !needsUpgrade;
+    const isCurrent = allExist && !needsUpgrade;
 
     const filesDesc = `Files: ${files.join(", ")}\nInstall destination: ~/.claude/`;
     const exampleDesc = manifest.example ? `\nExample:\n  ${manifest.example}` : "";
@@ -108,6 +128,8 @@ async function discoverFilesPackage(
             name: files.join(", "),
             enabled: !allInstalled,
             alreadyInstalled: allInstalled,
+            needsUpgrade,
+            isCurrent,
             sourcePath: pkgDir,
             description: manifest.description + "\n\n" + filesDesc + exampleDesc,
             typeLabel: "Package",
@@ -258,6 +280,23 @@ async function extractSkillDescription(skillMdPath: string): Promise<string> {
         return body.length > 500 ? body.slice(0, 497) + "..." : body;
     } catch {
         return "";
+    }
+}
+
+/** SHA-256 hash of a file's contents. */
+async function fileHash(filePath: string): Promise<string> {
+    const data = await readFile(filePath);
+    return createHash("sha256").update(data).digest("hex");
+}
+
+/** Check if `destPath` is a symlink whose target lives inside `repoRoot`. */
+async function isSymlinkIntoRepo(destPath: string, repoRoot: string): Promise<boolean> {
+    try {
+        const target = await readlink(destPath);
+        const resolved = resolve(destPath, "..", target);
+        return resolved.startsWith(repoRoot + "/");
+    } catch {
+        return false;
     }
 }
 

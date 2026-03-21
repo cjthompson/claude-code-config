@@ -17,12 +17,12 @@ async function main() {
         process.exit(1);
     }
 
-    // Find packages that have at least one already-installed item
+    // Find packages that have at least one already-installed or needs-upgrade item
     const toReinstall = packages
         .map((pkg) => ({
             ...pkg,
             items: pkg.items
-                .filter((item) => item.alreadyInstalled)
+                .filter((item) => item.alreadyInstalled || item.needsUpgrade)
                 .map((item) => ({ ...item, enabled: true })),
         }))
         .filter((pkg) => pkg.items.length > 0);

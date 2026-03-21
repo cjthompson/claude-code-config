@@ -1,4 +1,4 @@
-import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink } from "node:fs/promises";
+import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { InstallResult, PackageDescriptor, PackageItem } from "./types.ts";
 
@@ -173,12 +173,13 @@ async function installFiles(
         const src = join(pkg.packageDir, file);
         const dest = join(CLAUDE_DIR, file);
         try {
+            const existed = await stat(dest).then(() => true, () => false);
             await copyFile(src, dest);
             results.push({
                 packageId: pkg.id,
                 itemName: file,
-                status: "created",
-                message: `Copied: ${file}`,
+                status: existed ? "updated" : "created",
+                message: existed ? `Updated: ${file}` : `Copied: ${file}`,
             });
         } catch (err) {
             results.push({
