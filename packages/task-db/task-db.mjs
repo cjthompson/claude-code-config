@@ -70,9 +70,6 @@ switch (cmd) {
             UNIQUE(project,seq)
         );`);
 
-        // Migration: add depends_on column for databases created before it existed
-        try { sql("ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT '[]';"); } catch {}
-
         process.exit(firstTime ? 2 : 0);
         break;
     }
