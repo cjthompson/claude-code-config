@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.22 - 2026-03-30
+
+### Fixes
+- Remove dead `depends_on` column migration from task-db init that caused "duplicate column name" error on existing databases
+- Remove one-off `migrate-tasks.ts` script and associated npm scripts — markdown-to-SQLite migration is complete
+
 ## v0.0.21 - 2026-03-18
 
 ### Features
