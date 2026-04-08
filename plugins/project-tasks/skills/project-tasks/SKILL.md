@@ -164,6 +164,10 @@ If any output is printed, the task is **blocked**. Each line is `#NNN|title|stat
 
 Present recommendation with brief reasoning. Let user override.
 
+**Define the project path variable:**
+- If worktree: `{worktree_path}` — the newly created worktree directory
+- Otherwise: `{repo_root}` — the current working directory
+
 ### Step 2: Dispatch Scout + Executor (2-stage pipeline)
 
 Read the task data:
@@ -188,6 +192,7 @@ Agent tool parameters:
   model: "sonnet"
   run_in_background: true
   description: "Scout: #{SEQ} {short_title}"
+  (add isolation: "worktree" if worktree was chosen in Step 1)
 ```
 
 Scout prompt:
@@ -195,7 +200,7 @@ Scout prompt:
 ```
 You are a codebase scout. Analyze the codebase and produce a detailed Implementation Map.
 Do NOT write, edit, or create any files. Read-only.
-You are working on the project at {repo_root}.
+You are working on the project at {worktree_path_or_repo_root}.
 
 ## Project Context
 {Read and paste the full contents of CLAUDE.md here, if it exists}
@@ -287,7 +292,7 @@ Executor prompt:
 
 ```
 You are a task executor. Follow the Implementation Map below exactly. Do not deviate.
-You are working on the project at {repo_root}.
+You are working on the project at {worktree_path_or_repo_root}.
 
 ## Task
 {type}: {title}
@@ -434,7 +439,7 @@ node ~/.claude/task-db.mjs get --project "..." --seq N
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
-You are working on the project at {repo_root}.
+You are working on the project at {worktree_path_or_repo_root}.
 
 ## Task to Verify
 {type}: {title}
