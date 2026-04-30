@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.23 - 2026-04-30
+
+### Tasks
+- Add two-entry TaskList approach: Scout and Execute as separate TaskList entries
+- Add 2-stage pipeline test document with full state transition coverage (pending → scouting → executing → completed)
+- Add comment to test-run-task.md noting it covers pre-2-stage single-agent dispatch
+- Add test task demonstrating 2-stage pipeline execution with persistent task list
+
 ## v0.0.22 - 2026-03-30
 
 ### Fixes
