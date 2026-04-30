@@ -88,31 +88,36 @@ Store this value as `$PROJECT` for use in all subsequent commands.
 
 **`syncTaskToList(seq, status)`** — Creates, updates, or deletes a TaskList entry and updates `runningTasks`.
 
-```bash
-# Determine current running tasks count
-echo "Current running tasks: ${#runningTasks[@]}"
+**CRITICAL: This helper manages ONE entry per task seq.** The first call creates the entry; subsequent calls update it. Never create multiple entries for the same seq.
+
+**Implementation:**
+
+```javascript
+// Pseudocode for syncTaskToList(seq, status):
+// 1. Check if runningTasks has an entry for this seq
+// 2. If YES and status is "completed" or "failed":
+//    - TaskUpdate the existing entry to status (completed/failed)
+//    - Delete the TaskList entry (remove from runningTasks)
+//    - Do NOT create a new entry
+// 3. If YES and status is not terminal:
+//    - TaskUpdate the existing entry (change status)
+//    - Update runningTasks map
+// 4. If NO and status is not terminal:
+//    - TaskCreate a new entry for this seq
+//    - Add to runningTasks map
+// 5. If NO and status is terminal (completed/failed):
+//    - No entry exists to delete; do nothing (no-op)
 ```
 
-**When `hideListRequested` is `true`:**
-- Do NOT create new TaskList entries
-- Still update/delete existing entries when status changes (e.g., completed task being removed)
-- When called with `completed`, remove the TaskList entry immediately (no delay)
+**Status icons and colors:**
 
-**Status transitions:**
-
-| From | To | Action |
-|------|----|--------|
-| (new) | pending | `TaskCreate` with subject `"#NNN: title"`, status `"pending"` |
-| pending | scouting | `TaskUpdate` — set status `"in_progress"` |
-| pending | completed | `TaskUpdate` — set status `"completed"` then delete entry |
-| pending | failed | `TaskUpdate` — set status `"failed"` then delete entry |
-| scouting | executing | `TaskUpdate` — set status `"in_progress"` |
-| scouting | completed | `TaskUpdate` — set status `"completed"` then delete entry |
-| scouting | failed | `TaskUpdate` — set status `"failed"` then delete entry |
-| executing | completed | `TaskUpdate` — set status `"completed"` then delete entry |
-| executing | failed | `TaskUpdate` — set status `"failed"` then delete entry |
-| completed | (any) | Entry already deleted — no-op |
-| failed | (any) | Entry already deleted — no-op |
+| Status | Icon | Color |
+|--------|------|-------|
+| pending | `○` | default |
+| scouting | `◎` | yellow |
+| executing | `◉` | orange |
+| completed | `✓` | green |
+| failed | `✗` | red |
 
 **Display table** — Build from `runningTasks` map:
 
@@ -126,17 +131,12 @@ echo "Current running tasks: ${#runningTasks[@]}"
 ╚═══════════╩══════╩═══════════════════════════╩══════════════╝
 ```
 
-**Status icons and colors:**
-
-| Status | Icon | Color |
-|--------|------|-------|
-| pending | `○` | default |
-| scouting | `◎` | yellow |
-| executing | `◉` | orange |
-| completed | `✓` | green |
-| failed | `✗` | red |
-
 **Row rendering:** For each entry in `runningTasks`, fetch task data via `task-db.mjs get` and render one row. If `runningTasks` is empty, output nothing.
+
+**When `hideListRequested` is `true`:**
+- Do NOT create new TaskList entries
+- Still update/delete existing entries when status changes
+- When called with `completed`, remove the TaskList entry immediately (no delay)
 
 ## Logging a Task
 
