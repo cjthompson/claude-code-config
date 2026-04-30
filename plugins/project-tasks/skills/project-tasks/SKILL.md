@@ -86,57 +86,41 @@ Store this value as `$PROJECT` for use in all subsequent commands.
 
 ## Persistent Task List Helper
 
-**`syncTaskToList(seq, status)`** — Creates, updates, or deletes a TaskList entry and updates `runningTasks`.
+**`syncTaskToList(seq, phase, type, title)`** — Creates or updates TaskList entries for a task's 2-stage pipeline.
 
-**CRITICAL: This helper manages ONE entry per task seq.** The first call creates the entry; subsequent calls update it. Never create multiple entries for the same seq.
+**Pipeline structure:** Each task gets TWO TaskList entries:
+- **Scout entry:** Subject `"Scout: #{seq} {title}"`, status tracks scout phase
+- **Execute entry:** Subject `"Execute: #{seq} {title}"`, status tracks executor phase
+
+**Entry lifecycle:**
+| Phase | Scout Entry | Execute Entry |
+|-------|-------------|---------------|
+| pending | `○ pending` | — (not created yet) |
+| scouting | `◼ in_progress` (scouting...) | — |
+| executing | `✓ completed` | `○ pending` |
+| executing | `✓ completed` | `◼ in_progress` (executing...) |
+| completed | `✓ completed` | `✓ completed` |
 
 **Implementation:**
 
 ```javascript
-// Pseudocode for syncTaskToList(seq, status):
-// 1. Check if runningTasks has an entry for this seq
-// 2. If YES and status is "completed" or "failed":
-//    - TaskUpdate the existing entry to status (completed/failed)
-//    - Delete the TaskList entry (remove from runningTasks)
-//    - Do NOT create a new entry
-// 3. If YES and status is not terminal:
-//    - TaskUpdate the existing entry (change status)
-//    - Update runningTasks map
-// 4. If NO and status is not terminal:
-//    - TaskCreate a new entry for this seq
-//    - Add to runningTasks map
-// 5. If NO and status is terminal (completed/failed):
-//    - No entry exists to delete; do nothing (no-op)
+// syncTaskToList(seq, phase, type, title)
+// phase: "pending" | "scouting" | "executing" | "completed" | "failed"
+
+// Scout entry key: "scout-{seq}"
+// Execute entry key: "execute-{seq}"
+
+// On "pending": Create scout entry with subject "Scout: #{seq} {title}", status "pending"
+// On "scouting": Update scout entry to "in_progress" with activeForm "scouting..."
+// On "executing": 
+//   1. Update scout entry to "completed"
+//   2. Create execute entry with subject "Execute: #{seq} {title}", status "pending"
+//   3. Update execute entry to "in_progress" with activeForm "executing..."
+// On "completed": Update execute entry to "completed"
+// On "failed": Update current entry to "failed"
 ```
 
-**Status icons and colors:**
-
-| Status | Icon | Color |
-|--------|------|-------|
-| pending | `○` | default |
-| scouting | `◎` | yellow |
-| executing | `◉` | orange |
-| completed | `✓` | green |
-| failed | `✗` | red |
-
-**Display table** — Build from `runningTasks` map:
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║  Running Tasks                                               ║
-╠═══════════╦══════╦═══════════════════════════╦══════════════╣
-║ ID        ║ Type ║ Title                    ║ Status       ║
-╠═══════════╬══════╬═══════════════════════════╬══════════════╣
-{rendered rows}
-╚═══════════╩══════╩═══════════════════════════╩══════════════╝
-```
-
-**Row rendering:** For each entry in `runningTasks`, fetch task data via `task-db.mjs get` and render one row. If `runningTasks` is empty, output nothing.
-
-**When `hideListRequested` is `true`:**
-- Do NOT create new TaskList entries
-- Still update/delete existing entries when status changes
-- When called with `completed`, remove the TaskList entry immediately (no delay)
+**Never create more than one scout or one execute entry per task seq.**
 
 ## Logging a Task
 
@@ -235,7 +219,7 @@ Before proceeding to isolation strategy, create the TaskList entry so the task i
 node ~/.claude/task-db.mjs get --project "$PROJECT" --seq N
 ```
 
-Use the returned `title` and `type` to call `syncTaskToList(N, "pending")`.
+Use the returned `title` and `type` to call `syncTaskToList(N, "pending", type, title)`.
 
 If `hideListRequested` is true, skip TaskList creation but show the table if `runningTasks` has entries.
 
@@ -280,7 +264,7 @@ Agent tool parameters:
   (add isolation: "worktree" if worktree was chosen in Step 1)
 ```
 
-**After scouting:** Call `syncTaskToList(seq, "scouting")` to update the TaskList display.
+**After scouting:** Call `syncTaskToList({SEQ}, "scouting", {type}, {title})` to update the TaskList display.
 
 Scout prompt:
 
@@ -362,7 +346,7 @@ function names, and code snippets for every change.
 - Place new logic in the module that owns similar logic, even if the task description only names a different file.
 ```
 
-**Before dispatching executor:** Call `syncTaskToList(seq, "executing")` to update the TaskList display.
+**Before dispatching executor:** Call `syncTaskToList({SEQ}, "executing", {type}, {title})` to update the TaskList display.
 
 #### Stage 2: Haiku Executor
 
@@ -450,7 +434,7 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 
 4. Auto-update `CHANGELOG.md` — see Changelog section below.
 
-5. Update TaskList entry to completed, then remove it: `syncTaskToList(seq, "completed")`
+5. Update both TaskList entries to completed: `syncTaskToList({SEQ}, "completed", {type}, {title})`
 6. Re-render the table to show completed status before removal.
 
 **If retry:**
@@ -464,8 +448,8 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 3. Re-dispatch using the 2-stage pipeline (Sonnet scout → Haiku executor) with `## Retry Notes` included in the scout prompt. If user chose "Retry with Opus", dispatch a single Opus agent (combined scout+execute) instead. Update status back to `in_progress`.
 
 4. Determine retry status:
-   - If user chose "Retry with Opus": call `syncTaskToList(seq, "executing")` (Opus is a combined scout+execute, goes straight to executing)
-   - If user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList(seq, retryStatus)` to update the TaskList entry.
+   - If user chose "Retry with Opus": call `syncTaskToList({SEQ}, "executing", {type}, {title})` (Opus is a combined scout+execute, goes straight to executing)
+   - If user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList({SEQ}, retryStatus, {type}, {title})` to update the TaskList entry.
 
 5. Return to accepting commands — don't block waiting for the retry.
 
@@ -474,10 +458,8 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 When user says "hide list":
 
 1. Set `hideListRequested = true`
-2. For each entry in `runningTasks` with status `pending`: call `syncTaskToList(seq, "completed")` to trigger immediate removal. For entries with status `completed`: already removed from TaskList, just clear from `runningTasks` map.
-3. Leave `scouting` and `executing` entries untouched — active subagents continue running
-4. When a `scouting` or `executing` entry naturally completes (accept, retry, or fail), call `syncTaskToList(seq, status)` — if status is completed or failed, the entry will be deleted
-5. Confirm to user: `Task list hidden. Running tasks will complete silently.`
+2. Mark all pending TaskList entries as completed (both scout and execute entries): `syncTaskToList({SEQ}, "completed", {type}, {title})`
+3. Confirm to user: `Task list hidden. Running tasks will complete silently.`
 
 If no tasks are currently running, confirm: `No running tasks to hide.`
 
@@ -619,7 +601,7 @@ node ~/.claude/task-db.mjs blocked --project "..."
 
 3. **Only dispatch unblocked tasks.** Skip blocked tasks and inform the user which were skipped and why.
 
-4. For each unblocked task, call `syncTaskToList(seq, "pending")` to create TaskList entries, then show the running tasks table.
+4. For each unblocked task, call `syncTaskToList({SEQ}, "pending", {type}, {title})` to create scout TaskList entries, then show the running tasks table.
 
 5. Dispatch based on isolation strategy:
    - **Worktree:** Dispatch all unblocked tasks as separate subagents simultaneously (parallel).
