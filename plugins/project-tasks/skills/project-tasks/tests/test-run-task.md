@@ -1,3 +1,4 @@
+<!-- This test covers single-agent (non-2-stage) task dispatch. The 2-stage pipeline (Sonnet scout + Haiku executor) is tested in test-2stage-pipeline.md. -->
 # Test: Subagent Dispatch for Task Execution
 
 ## Setup
