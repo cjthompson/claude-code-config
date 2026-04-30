@@ -16,6 +16,22 @@ Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and ex
 
 > **IMPORTANT:** All database operations MUST use `node ~/.claude/task-db.mjs <command>`. Do NOT call sqlite3 directly — ever. The helper script handles all SQL internally.
 
+## Session State
+
+The following variables are maintained for the persistent task list feature. They reset when this skill session ends (not persisted across sessions).
+
+**`runningTasks`** — Map of SQLite task seq numbers to TaskList metadata:
+```
+runningTasks = Map<seq: number, { taskId: string, status: TaskStatus }>
+```
+
+**`hideListRequested`** — Boolean flag; when true, stop creating new TaskList entries:
+```
+hideListRequested = false
+```
+
+**TaskStatus** — one of: `pending | scouting | executing | completed | failed`
+
 ## Rules
 
 - **ALWAYS** use `node ~/.claude/task-db.mjs <command>` for every database operation.
@@ -31,6 +47,7 @@ Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and ex
 - User asks to "list tasks", "run task #NNN", "run all tasks"
 - User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
 - User asks to "update changelog" or "generate changelog"
+- User says "hide list" — hide the persistent task list without cancelling tasks
 
 ## Prerequisites
 
@@ -66,6 +83,60 @@ node ~/.claude/task-db.mjs init
 git remote get-url origin 2>/dev/null | sed 's/\.git$//' || basename "$(git rev-parse --show-toplevel)"
 ```
 Store this value as `$PROJECT` for use in all subsequent commands.
+
+## Persistent Task List Helper
+
+**`syncTaskToList(seq, status)`** — Creates, updates, or deletes a TaskList entry and updates `runningTasks`.
+
+```bash
+# Determine current running tasks count
+echo "Current running tasks: ${#runningTasks[@]}"
+```
+
+**When `hideListRequested` is `true`:**
+- Do NOT create new TaskList entries
+- Still update/delete existing entries when status changes (e.g., completed task being removed)
+- When called with `completed`, remove the TaskList entry immediately (no delay)
+
+**Status transitions:**
+
+| From | To | Action |
+|------|----|--------|
+| (new) | pending | `TaskCreate` with subject `"#NNN: title"`, status `"pending"` |
+| pending | scouting | `TaskUpdate` — set status `"in_progress"` |
+| pending | completed | `TaskUpdate` — set status `"completed"` then delete entry |
+| pending | failed | `TaskUpdate` — set status `"failed"` then delete entry |
+| scouting | executing | `TaskUpdate` — set status `"in_progress"` |
+| scouting | completed | `TaskUpdate` — set status `"completed"` then delete entry |
+| scouting | failed | `TaskUpdate` — set status `"failed"` then delete entry |
+| executing | completed | `TaskUpdate` — set status `"completed"` then delete entry |
+| executing | failed | `TaskUpdate` — set status `"failed"` then delete entry |
+| completed | (any) | Entry already deleted — no-op |
+| failed | (any) | Entry already deleted — no-op |
+
+**Display table** — Build from `runningTasks` map:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  Running Tasks                                               ║
+╠═══════════╦══════╦═══════════════════════════╦══════════════╣
+║ ID        ║ Type ║ Title                    ║ Status       ║
+╠═══════════╬══════╬═══════════════════════════╬══════════════╣
+{rendered rows}
+╚═══════════╩══════╩═══════════════════════════╩══════════════╝
+```
+
+**Status icons and colors:**
+
+| Status | Icon | Color |
+|--------|------|-------|
+| pending | `○` | default |
+| scouting | `◎` | yellow |
+| executing | `◉` | orange |
+| completed | `✓` | green |
+| failed | `✗` | red |
+
+**Row rendering:** For each entry in `runningTasks`, fetch task data via `task-db.mjs get` and render one row. If `runningTasks` is empty, output nothing.
 
 ## Logging a Task
 
@@ -156,6 +227,20 @@ If any output is printed, the task is **blocked**. Each line is `#NNN|title|stat
 > - #003 (pending): Create settings modal skeleton
 > - #004 (in_progress): Add theme support
 
+### Step 0b: Create TaskList Entry
+
+Before proceeding to isolation strategy, create the TaskList entry so the task is visible in the running tasks table:
+
+```bash
+node ~/.claude/task-db.mjs get --project "$PROJECT" --seq N
+```
+
+Use the returned `title` and `type` to call `syncTaskToList(N, "pending")`.
+
+If `hideListRequested` is true, skip TaskList creation but show the table if `runningTasks` has entries.
+
+Once the entry is created, proceed to the isolation strategy recommendation.
+
 ### Step 1: Recommend Isolation Strategy
 
 - **Dirty working tree** (unstaged/uncommitted changes) → recommend worktree
@@ -194,6 +279,8 @@ Agent tool parameters:
   description: "Scout: #{SEQ} {short_title}"
   (add isolation: "worktree" if worktree was chosen in Step 1)
 ```
+
+**After scouting:** Call `syncTaskToList(seq, "scouting")` to update the TaskList display.
 
 Scout prompt:
 
@@ -275,6 +362,8 @@ function names, and code snippets for every change.
 - Place new logic in the module that owns similar logic, even if the task description only names a different file.
 ```
 
+**Before dispatching executor:** Call `syncTaskToList(seq, "executing")` to update the TaskList display.
+
 #### Stage 2: Haiku Executor
 
 When the scout completes, dispatch the executor as another **background** subagent. Pass the scout's **full Implementation Map** verbatim.
@@ -339,6 +428,8 @@ b) Retry — revert and re-run with Sonnet (provide feedback to guide the retry)
 c) Retry with Opus — revert and re-run with the most capable model (for harder tasks)
 ```
 
+After presenting the choice (a) Accept / b) Retry / c) Retry with Opus, do not re-render the table — Step 4's sync calls handle updates.
+
 ### Step 4: Accept or Retry
 
 **If accepted:**
@@ -359,6 +450,9 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 
 4. Auto-update `CHANGELOG.md` — see Changelog section below.
 
+5. Update TaskList entry to completed, then remove it: `syncTaskToList(seq, "completed")`
+6. Re-render the table to show completed status before removal.
+
 **If retry:**
 
 1. Revert changes:
@@ -369,7 +463,23 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 
 3. Re-dispatch using the 2-stage pipeline (Sonnet scout → Haiku executor) with `## Retry Notes` included in the scout prompt. If user chose "Retry with Opus", dispatch a single Opus agent (combined scout+execute) instead. Update status back to `in_progress`.
 
-4. Return to accepting commands — don't block waiting for the retry.
+4. Determine retry status:
+   - If user chose "Retry with Opus": call `syncTaskToList(seq, "executing")` (Opus is a combined scout+execute, goes straight to executing)
+   - If user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList(seq, retryStatus)` to update the TaskList entry.
+
+5. Return to accepting commands — don't block waiting for the retry.
+
+## Hiding the Task List
+
+When user says "hide list":
+
+1. Set `hideListRequested = true`
+2. For each entry in `runningTasks` with status `pending`: call `syncTaskToList(seq, "completed")` to trigger immediate removal. For entries with status `completed`: already removed from TaskList, just clear from `runningTasks` map.
+3. Leave `scouting` and `executing` entries untouched — active subagents continue running
+4. When a `scouting` or `executing` entry naturally completes (accept, retry, or fail), call `syncTaskToList(seq, status)` — if status is completed or failed, the entry will be deleted
+5. Confirm to user: `Task list hidden. Running tasks will complete silently.`
+
+If no tasks are currently running, confirm: `No running tasks to hide.`
 
 ## Listing Tasks
 
@@ -509,11 +619,13 @@ node ~/.claude/task-db.mjs blocked --project "..."
 
 3. **Only dispatch unblocked tasks.** Skip blocked tasks and inform the user which were skipped and why.
 
-4. Dispatch based on isolation strategy:
+4. For each unblocked task, call `syncTaskToList(seq, "pending")` to create TaskList entries, then show the running tasks table.
+
+5. Dispatch based on isolation strategy:
    - **Worktree:** Dispatch all unblocked tasks as separate subagents simultaneously (parallel).
    - **No worktree (user override):** Dispatch the first unblocked task only. After acceptance, re-check and dispatch the next unblocked task.
 
-5. Return to accepting commands immediately after dispatching.
+6. Return to accepting commands immediately after dispatching.
 
 ## Generating Changelog
 
@@ -591,4 +703,5 @@ This helps avoid re-implementing completed work and understand the project traje
 | `cancel task #NNN` | Cancel a pending task |
 | `set priority of #NNN to high` | Change priority |
 | `check task #NNN` | Verify task in codebase (read-only) |
+| `hide list` | Hide persistent task list (running tasks continue) |
 | `update changelog` | Regenerate changelog from completed tasks |
