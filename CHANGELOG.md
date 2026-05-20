@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.24 - 2026-05-20
+
+### Features
+- Add `output-styles` package shipping a new `Concise` style — terse one-or-two-sentence answers and action lists routed into TaskCreate calls. Install with `npm run install-package output-styles` and select via Claude Code's `/output-style` picker.
+
+### Fixes
+- Installer (`installFiles`) now creates parent directories before copying, enabling `files`-type packages to ship files into nested paths like `output-styles/<name>.md`.
+
 ## v0.0.23 - 2026-04-30
 
 ### Tasks
