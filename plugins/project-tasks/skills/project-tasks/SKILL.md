@@ -261,7 +261,7 @@ Agent tool parameters:
   model: "sonnet"
   run_in_background: true
   description: "Scout: #{SEQ} {short_title}"
-  (add isolation: "worktree" if worktree was chosen in Step 1)
+  isolation: "worktree"
 ```
 
 **After scouting:** Call `syncTaskToList({SEQ}, "scouting", {type}, {title})` to update the TaskList display.
@@ -271,7 +271,7 @@ Scout prompt:
 ```
 You are a codebase scout. Analyze the codebase and produce a detailed Implementation Map.
 Do NOT write, edit, or create any files. Read-only.
-You are working on the project at {worktree_path_or_repo_root}.
+You are working on the project at {worktree_path}.
 
 ## Project Context
 {Read and paste the full contents of CLAUDE.md here, if it exists}
@@ -358,14 +358,14 @@ Agent tool parameters:
   model: "haiku"
   run_in_background: true
   description: "Execute: #{SEQ} {short_title}"
-  (add isolation: "worktree" if worktree was chosen in Step 1)
+  isolation: "worktree"
 ```
 
 Executor prompt:
 
 ```
 You are a task executor. Follow the Implementation Map below exactly. Do not deviate.
-You are working on the project at {worktree_path_or_repo_root}.
+You are working on the project at {worktree_path}.
 
 ## Task
 {type}: {title}
@@ -531,7 +531,7 @@ node ~/.claude/task-db.mjs get --project "..." --seq N
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
-You are working on the project at {worktree_path_or_repo_root}.
+You are working on the project at {worktree_path}.
 
 ## Task to Verify
 {type}: {title}

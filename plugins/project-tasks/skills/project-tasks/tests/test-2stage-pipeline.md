@@ -56,6 +56,7 @@ The skill presents the isolation recommendation. The user accepts (or the tree i
    - `model: "sonnet"`
    - `run_in_background: true`
    - `description: "Scout: #1 Log lines..."`
+   - `isolation: "worktree"`
 
 6. The skill immediately calls `syncTaskToList(seq, "scouting")` — the TaskList entry updates to `◎ scouting`.
 
@@ -88,6 +89,7 @@ The skill presents the isolation recommendation. The user accepts (or the tree i
     - `model: "haiku"`
     - `run_in_background: true`
     - `description: "Execute: #1 Log lines..."`
+    - `isolation: "worktree"`
 
 11. The executor subagent is given the **full Implementation Map verbatim** from the scout, plus:
     - The task line
@@ -169,6 +171,7 @@ Same as initial setup. The executor completed and the user selected **c) Retry w
    - `model: "opus"`
    - `run_in_background: true`
    - `description: "Execute: #1 Log lines..."`
+   - `isolation: "worktree"`
 
 3. The combined prompt merges the scout and executor instructions: the full Implementation Map instructions from the scout AND the executor instructions from Step 2.
 
