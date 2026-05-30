@@ -64,6 +64,14 @@ End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agen
 
 Guides Claude in writing idiomatic Rust code with proper data modeling, traits, `impl` organization, macros, and build-speed best practices. Automatically triggers when working on `.rs` files or projects with a `Cargo.toml`.
 
+## Output Styles
+
+Custom Claude Code output styles, installed into `~/.claude/output-styles/` and selectable via `/output-style`. Located in `packages/output-styles/`. Install via the TUI installer or `npm run install-package output-styles`.
+
+| Style | Description |
+|-------|-------------|
+| **Concise** | Terse one-or-two-sentence answers; action lists are captured as tasks rather than buried in prose |
+
 ## Statusline
 
 A two-line powerline-style statusline for Claude Code showing session metrics and API quota usage. Located in `packages/statusline/`. Install via the TUI installer.

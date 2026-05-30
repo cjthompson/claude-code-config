@@ -1,5 +1,5 @@
 import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { InstallResult, PackageDescriptor, PackageItem } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
@@ -174,6 +174,7 @@ async function installFiles(
         const dest = join(CLAUDE_DIR, file);
         try {
             const existed = await stat(dest).then(() => true, () => false);
+            await mkdir(dirname(dest), { recursive: true });
             await copyFile(src, dest);
             results.push({
                 packageId: pkg.id,

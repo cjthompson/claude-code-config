@@ -1,0 +1,6 @@
+{
+    "label": "Output Styles",
+    "description": "Custom output styles for Claude Code — selectable via /output-style.",
+    "type": "files",
+    "files": ["output-styles/concise.md"]
+}
