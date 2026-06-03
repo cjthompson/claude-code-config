@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.25 - 2026-06-03
+
+### Fixes
+- Extend `task-db` `update` command to support all task fields: `--type`, `--title`, `--created`, `--completed-at`, `--feedback`, and repeatable `--tag`, `--req`, `--dep` flags. Adds `feedback` and `completed_at` columns via migration in the `init` command.
+
 ## v0.0.24 - 2026-05-20
 
 ### Features

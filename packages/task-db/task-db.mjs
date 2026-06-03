@@ -70,6 +70,15 @@ switch (cmd) {
             UNIQUE(project,seq)
         );`);
 
+        // Migrate: add columns introduced after initial schema
+        const cols = sql("PRAGMA table_info(tasks);");
+        if (!cols.includes('feedback')) {
+            sql("ALTER TABLE tasks ADD COLUMN feedback TEXT;");
+        }
+        if (!cols.includes('completed_at')) {
+            sql("ALTER TABLE tasks ADD COLUMN completed_at TEXT;");
+        }
+
         process.exit(firstTime ? 2 : 0);
         break;
     }
@@ -97,10 +106,32 @@ switch (cmd) {
         const p    = esc(get('--project'));
         const seq  = get('--seq');
         const sets = [];
-        const status   = get('--status');
-        const priority = get('--priority');
-        if (status)   sets.push(`status='${status}'`);
-        if (priority) sets.push(`priority='${priority}'`);
+
+        // Simple scalar fields
+        const status      = get('--status');
+        const priority    = get('--priority');
+        const type        = get('--type');
+        const title       = get('--title');
+        const createdAt   = get('--created');
+        const completedAt = get('--completed-at');
+        const feedback    = get('--feedback');
+
+        // JSON array fields (repeatable flags)
+        const tagVals = all('--tag');
+        const reqVals = all('--req');
+        const depVals = all('--dep');
+
+        if (status)      sets.push(`status='${esc(status)}'`);
+        if (priority)    sets.push(`priority='${esc(priority)}'`);
+        if (type)        sets.push(`type='${esc(type)}'`);
+        if (title)       sets.push(`title='${esc(title)}'`);
+        if (createdAt)   sets.push(`created='${esc(createdAt)}'`);
+        if (completedAt) sets.push(`completed_at='${esc(completedAt)}'`);
+        if (feedback)    sets.push(`feedback='${esc(feedback)}'`);
+        if (tagVals.length > 0) sets.push(`tags='${esc(JSON.stringify(tagVals))}'`);
+        if (reqVals.length > 0) sets.push(`reqs='${esc(JSON.stringify(reqVals))}'`);
+        if (depVals.length > 0) sets.push(`depends_on='${esc(JSON.stringify(depVals.map(Number)))}'`);
+
         sets.push(`updated='${esc(get('--updated') ?? now())}'`);
         sql(`UPDATE tasks SET ${sets.join(',')} WHERE project='${p}' AND seq=${seq};`);
         break;
