@@ -2,7 +2,7 @@
 // Claude Code statusline renderer — two-line powerline with session, environment, and quota info
 // Called by statusline.sh with args: <usage-cache-path> <cache-mtime> <term-width> <session-json> <git-branch>
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -519,6 +519,6 @@ function main(): void {
 }
 
 // Run only when executed directly (not when imported by tests)
-if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+if (realpathSync(resolve(process.argv[1] ?? '')) === fileURLToPath(import.meta.url)) {
   main();
 }
