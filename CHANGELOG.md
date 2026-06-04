@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.0.28 - 2026-06-04
+
+### Fixes
+- **Statusline**: clamp displayed percentage to 100 when tokens exceed the effective window size (an over-100% value was printed as raw text alongside a maxed bar)
+- **Statusline**: unify bar and ETA numerators via `totalContextTokens()` — both now use `input_tokens + cache_creation + cache_read` so they agree on "used"
+- **Statusline**: normalize model display names for override lookup by stripping `"Claude "` prefix and `"(NM context)"` suffixes, preventing silent override loss on Anthropic version renames
+- **Statusline**: add `existsSync` short-circuit to config loader (avoids wasted syscall + exception per render when config is absent); distinguish parse errors from missing-file and warn on malformed JSON
+- **Statusline**: harden all e2e config-writing tests with `try/finally` cleanup so a failed assertion never leaves a stale `statusline-config.json` in the source tree
+- **Statusline**: ship `statusline-config.json` example config; installer seeds it to `~/.claude/`; update README for `sections` whitelist (replaces the old `disabledSections` blacklist)
+- **Statusline**: add regression tests for clamping, ETA/bar consistency, and normalized model name matching; fix pre-existing test bugs (progressBar space char, shortenPath single-segment preservation, branch prefix stripping, PCT glyph vs ASCII %, used/max format)
+
 ## v0.0.27 - 2026-06-03
 
 ### Features
