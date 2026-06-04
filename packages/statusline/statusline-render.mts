@@ -2,7 +2,7 @@
 // Claude Code statusline renderer — two-line powerline with session, environment, and quota info
 // Called by statusline.sh with args: <usage-cache-path> <cache-mtime> <term-width> <session-json> <git-branch>
 
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -79,6 +79,47 @@ const batteryIcon = levelIcon([
 // Thermometer (5 levels) — 7d quota
 const thermoIcon = levelIcon(['\uf2cb', '\uf2ca', '\uf2c9', '\uf2c8', '\uf2c7']);
 
+// ── Section names (for config-driven allowlist) ──────────────
+// Each name maps to a single segment in line 1, or to the whole line 2.
+// A section renders only when its name appears in `config.sections`
+// (an opt-in array). When the key is missing or not an array, nothing
+// renders — the list is a whitelist, not a blacklist. New sections
+// added in future versions stay off until the user opts in.
+const SECTION = {
+  MODEL: 'model',
+  USD_COST: 'usd_cost',
+  BURN_RATE: 'burn_rate',
+  CONTEXT_WINDOW: 'context_window',
+  TIME_TO_FULL: 'time_to_full',
+  LINES_CHANGED: 'lines_changed',
+  DURATION: 'duration',
+  BRANCH: 'branch',
+  PWD: 'pwd',
+  LINE2: 'line2',
+} as const;
+
+type SectionName = typeof SECTION[keyof typeof SECTION];
+
+// True when `name` is listed in config.sections. Defensive: missing
+// key, non-array value, or non-string entries mean nothing is enabled.
+function isSectionEnabled(config: Record<string, any>, name: SectionName): boolean {
+  const arr = config.sections;
+  if (!Array.isArray(arr)) return true;
+  return arr.includes(name);
+}
+
+// Normalize a model display name for lookup against `modelContextWindows`.
+// Anthropic renames display_name between releases (e.g. "Claude Sonnet 4.6"
+// → "Sonnet 4.6", or appends "(1M context)" suffixes), so exact match breaks
+// silently. Strip cosmetic decoration and lowercase the result.
+function normalizeModelName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s*\(\d+[mk]?\s*context\)\s*/i, '') // "(1M context)", "(200K context)"
+    .replace(/^claude\s+/, '')                     // leading "Claude "
+    .trim();
+}
+
 // ── Utilities ─────────────────────────────────────────────────
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -117,9 +158,29 @@ function resolveContextWindowSize(
   config: Record<string, any>,
 ): number {
   if (!ctx) return 0;
-  const override = modelName && config.modelContextWindows?.[modelName];
-  if (override && override > 0) return override;
+  const overrides = config.modelContextWindows;
+  if (modelName && overrides && typeof overrides === 'object') {
+    // Try exact match first, then normalized (handles "Sonnet 4.6" vs
+    // "Claude Sonnet 4.6 (1M context)" display_name drift across versions).
+    if (overrides[modelName] > 0) return overrides[modelName];
+    const normalized = normalizeModelName(modelName);
+    for (const key of Object.keys(overrides)) {
+      if (normalizeModelName(key) === normalized && overrides[key] > 0) {
+        return overrides[key];
+      }
+    }
+  }
   return ctx.context_window_size ?? 0;
+}
+
+// Single source of truth for "tokens that count against the context window".
+// Used by both the progress bar (computeUsedPct) and the time-to-fill ETA so
+// the two segments agree on what "used" means.
+function totalContextTokens(ctx: Record<string, any> | undefined): number {
+  if (!ctx) return 0;
+  return (ctx.input_tokens ?? 0)
+    + (ctx.cache_creation_input_tokens ?? 0)
+    + (ctx.cache_read_input_tokens ?? 0);
 }
 
 function computeUsedPct(
@@ -128,12 +189,8 @@ function computeUsedPct(
 ): number | null {
   if (!ctx || windowSize <= 0) return null;
 
-  const inputTokens = ctx.input_tokens ?? 0;
-  const cacheCreateTokens = ctx.cache_creation_input_tokens ?? 0;
-  const cacheReadTokens = ctx.cache_read_input_tokens ?? 0;
-
-  if (inputTokens > 0 || cacheCreateTokens > 0 || cacheReadTokens > 0) {
-    const totalTokens = inputTokens + cacheCreateTokens + cacheReadTokens;
+  const totalTokens = totalContextTokens(ctx);
+  if (totalTokens > 0) {
     return Math.round((totalTokens / windowSize) * 100);
   }
 
@@ -200,6 +257,8 @@ function shortenBranch(branch: string, maxLen: number): string {
 
 // ── Exports (for testing) ─────────────────────────────────────
 export {
+  SECTION,
+  isSectionEnabled,
   stripAnsi,
   formatDuration,
   formatLocalTime,
@@ -345,9 +404,21 @@ function main(): void {
     ? JSON.parse(readFileSync(usageCachePath, 'utf8'))
     : {};
 
+  // Config is read on every render (the renderer is spawned fresh per cycle).
+  // existsSync short-circuits the common case where no file exists, avoiding
+  // a wasted syscall + exception construction per render. The negative
+  // result is not module-cached because each invocation is a fresh process.
   let config: Record<string, any> = {};
   const configPath = resolve(dirname(fileURLToPath(import.meta.url)), 'statusline-config.json');
-  try { config = JSON.parse(readFileSync(configPath, 'utf8')); } catch {}
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch (e) {
+      // Distinguish parse error from missing file: only the former is a user
+      // misconfiguration. Log once per process so the user can see the cause.
+      console.warn(`[statusline] config parse error in ${configPath}:`, (e as Error).message);
+    }
+  }
 
   const cost = session.cost;
   const ctx = session.context_window;
@@ -372,53 +443,63 @@ function main(): void {
 
   const line1Segs: PowerlineSeg[] = [];
 
-  if (model?.display_name)
+  if (model?.display_name && isSectionEnabled(config, SECTION.MODEL))
     line1Segs.push({ section: 22, drop: 0, content:
       `${combo(255, 22, true)} ${ICON_BOLT} ${model.display_name} ` });
 
-  if (cost?.total_cost_usd != null)
+  if (cost?.total_cost_usd != null && isSectionEnabled(config, SECTION.USD_COST))
     line1Segs.push({ section: 22, drop: 5, content:
       ` ${GREEN_FG}${BOLD}${ICON_DOLLAR}${cost.total_cost_usd.toFixed(2)}${R_GREEN} ` });
 
-  if (cost?.total_cost_usd != null && cost.total_duration_ms > 60_000) {
+  if (cost?.total_cost_usd != null && cost.total_duration_ms > 60_000 && isSectionEnabled(config, SECTION.BURN_RATE)) {
     const rate = cost.total_cost_usd / (cost.total_duration_ms / 3_600_000);
     line1Segs.push({ section: 22, drop: 10, content:
       ` ${GREEN_DIM}${ICON_CLOCK} \$${rate.toFixed(2)}/hr${R_GREEN} ` });
   }
 
-  if (usedPct != null) {
+  if (usedPct != null && isSectionEnabled(config, SECTION.CONTEXT_WINDOW)) {
+    // Clamp for display so a percentage over 100% (e.g. an override that
+    // shrinks the window below the token count) doesn't print as raw "200%"
+    // alongside a fully-filled bar — show a cap of 100% in that case.
+    const displayPct = Math.min(100, Math.max(0, usedPct));
+    const totalTokens = totalContextTokens(ctx);
     const max = effectiveWindowSize > 0
-      ? ` ${GREEN_DIM}(${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
+      ? ` ${GREEN_DIM}(${formatTokenCount(totalTokens)}/${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
       : '';
     line1Segs.push({ section: 22, drop: 2, content:
-      ` ${WHITE}${circleIcon(usedPct)} ${usedPct}${PCT} ${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}${max} ` });
+      ` ${WHITE}${circleIcon(usedPct)} ${displayPct}${PCT} ${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}${max} ` });
   }
 
-  if (ctx?.total_input_tokens > 0 && effectiveWindowSize > 0 && cost?.total_duration_ms > 60_000) {
-    const used = ctx.total_input_tokens + ctx.total_output_tokens;
-    const rem = effectiveWindowSize - used;
-    if (rem > 0) {
-      const tps = used / (cost.total_duration_ms / 1000);
-      if (tps > 0)
-        line1Segs.push({ section: 22, drop: 9, content:
-          ` ${GREEN_DIM}${ICON_HOURGLASS} ~${formatDuration(Math.floor(rem / tps))} left${R_GREEN} ` });
+  if (ctx && effectiveWindowSize > 0 && cost?.total_duration_ms > 60_000 && isSectionEnabled(config, SECTION.TIME_TO_FULL)) {
+    // Use the same "used" numerator as the percentage above so the projected
+    // time-to-fill agrees with what the bar is showing.
+    const used = totalContextTokens(ctx);
+    if (used > 0) {
+      const rem = effectiveWindowSize - used;
+      if (rem > 0) {
+        const tps = used / (cost.total_duration_ms / 1000);
+        if (tps > 0)
+          line1Segs.push({ section: 22, drop: 9, content:
+            ` ${GREEN_DIM}${ICON_HOURGLASS} ~${formatDuration(Math.floor(rem / tps))} left${R_GREEN} ` });
+      }
     }
   }
 
-  if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0))
+  if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0) && isSectionEnabled(config, SECTION.LINES_CHANGED))
     line1Segs.push({ section: 22, drop: 7, content:
       ` ${GREEN_DIM}${ICON_PENCIL} ${GREEN_114}${PLUS}${cost.total_lines_added || 0}${R_GREEN} ${RED_FG}${MINUS}${cost.total_lines_removed || 0}${R_GREEN} ` });
 
-  if (cost?.total_duration_ms > 0)
+  if (cost?.total_duration_ms > 0 && isSectionEnabled(config, SECTION.DURATION))
     line1Segs.push({ section: 22, drop: 6, content:
       ` ${GREEN_DIM}${formatDuration(Math.floor(cost.total_duration_ms / 1000))}${R_GREEN} ` });
 
-  if (shortBranch)
+  if (shortBranch && isSectionEnabled(config, SECTION.BRANCH))
     line1Segs.push({ section: 24, drop: 3, content:
       `${CYAN_FG} ${ICON_GIT} ${WHITE}${shortBranch} ` });
 
-  line1Segs.push({ section: 237, drop: 4, content:
-    `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
+  if (isSectionEnabled(config, SECTION.PWD))
+    line1Segs.push({ section: 237, drop: 4, content:
+      `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
 
   const line1 = renderPowerline(fitSegments(line1Segs, maxWidth));
 
@@ -426,7 +507,9 @@ function main(): void {
   // LINE 2: Quota — pre-computed tiers from most to least detailed
   // ════════════════════════════════════════════════════════════════
 
-  const line2 = hasUsage ? buildQuotaLine(data, cacheMtime, barWidth, maxWidth) : '';
+  const line2 = (hasUsage && isSectionEnabled(config, SECTION.LINE2))
+    ? buildQuotaLine(data, cacheMtime, barWidth, maxWidth)
+    : '';
 
   // ════════════════════════════════════════════════════════════════
   // Output

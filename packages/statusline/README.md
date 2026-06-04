@@ -5,7 +5,7 @@ A two-line powerline-style statusline for Claude Code that displays session metr
 Both lines are **width-aware** — segments are progressively dropped as the terminal narrows so lines never wrap.
 
 ```
- Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ (200K) │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
+ Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ (90K/200K) │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
  5h 33% ████░░░░░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░░░░░ Fri 10:00AM │ (3m old) ▶
 ```
 
@@ -47,6 +47,42 @@ Create `~/.claude/statusline-config.json` to override the context window size fo
 
 If the config file is absent or unparseable, the renderer silently falls back to the default behavior.
 
+### Controlling Which Sections Appear
+
+Add a `sections` array to `~/.claude/statusline-config.json` to choose which segments render and in what order. Only names in the array are shown — names absent from the list are suppressed.
+
+When `sections` is absent from the config (or the file doesn't exist), all sections render in the default order.
+
+```json
+{
+  "sections": [
+    "model",
+    "context_window",
+    "usd_cost",
+    "branch",
+    "pwd",
+    "line2"
+  ]
+}
+```
+
+Available section names:
+
+| Name | Segment |
+|---|---|
+| `model` | Model name (e.g. `Opus 4.6`) |
+| `usd_cost` | Total session cost (e.g. `$2.10`) |
+| `burn_rate` | Cost per hour (e.g. `$12.60/hr`) |
+| `context_window` | Context window usage (e.g. `45% ████░░░░ (90K/200K)`) |
+| `time_to_full` | Estimated time until context window fills (e.g. `~1h1m left`) |
+| `lines_changed` | Lines added/removed (e.g. `+100 -30`) |
+| `duration` | Total session duration (e.g. `10m`) |
+| `branch` | Git branch |
+| `pwd` | Working directory |
+| `line2` | The entire quota line (5h / 7d utilization) |
+
+Unknown names are ignored, so adding future section names to the array won't break older versions.
+
 ### Disabling Account Usage (Line 2)
 
 Set `CLAUDE_STATUSLINE_USAGE=0` to disable the account usage quota line. When disabled, no OAuth token retrieval or API calls are made — only Line 1 (session + environment) is rendered.
@@ -71,8 +107,9 @@ Enabled by default (`1`).
 | File | Purpose |
 |---|---|
 | `statusline.sh` | Entry point — caching, token management, environment gathering |
-| `statusline-render.ts` | Rendering engine — ANSI/powerline output, all display logic |
-| `statusline-render.test.ts` | Test suite — 49 tests using Node's built-in `node:test` runner |
+| `statusline-render.mts` | Rendering engine — ANSI/powerline output, all display logic |
+| `statusline-config.json` | Sample config — copied to `~/.claude/statusline-config.json` on install; users edit it for context-window overrides and section toggles |
+| `statusline-render.test.mts` | Test suite — 49 tests using Node's built-in `node:test` runner |
 
 ## What It Shows
 
@@ -81,7 +118,7 @@ Enabled by default (`1`).
 | Segment | Source | Example | Drop priority |
 |---|---|---|---|
 | Model name | `session.model.display_name` | `Opus 4.6` | 0 (last to drop) |
-| Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (200K)` | 2 |
+| Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (90K/200K)` | 2 |
 | Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | 3 |
 | Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | 4 |
 | Session cost | `session.cost.total_cost_usd` | `$2.10` | 5 |
@@ -142,7 +179,7 @@ for _ in 1 2 3 4 5; do
 done
 ```
 
-A right-side reserve of 37 characters is subtracted when `termWidth >= 80` to account for Claude Code's right-aligned column (token count, version info). Below 80 columns, the right column wraps to its own line, so no reserve is needed.
+A right-side reserve of 2 characters is subtracted when `termWidth >= 80` to leave breathing room next to Claude Code's right-aligned column (token count, version info). Below 80 columns, the right column wraps to its own line, so no reserve is needed.
 
 ## Caching
 
@@ -188,7 +225,7 @@ statusline.sh
     ├── environment      → git branch, terminal width (via process tree TTY walk)
     │
     ▼ process.argv
-statusline-render.ts
+statusline-render.mts
     ├── renderPowerline()  → groups segments by section, builds powerline string
     ├── fitSegments()      → drops lowest-priority segments until line fits
     ├── Line 1: segments with drop priorities → fitSegments(segs, maxWidth)

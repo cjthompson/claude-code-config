@@ -121,6 +121,6 @@ TERM_WIDTH="${TERM_WIDTH:-80}"
 
 # Render statusline
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-node --experimental-strip-types "$SCRIPT_DIR/statusline-render.ts" \
+node --experimental-strip-types "$SCRIPT_DIR/statusline-render.mts" \
   "$USAGE_CACHE" "$CACHE_MTIME" "$TERM_WIDTH" "$input" "$GIT_BRANCH" "$HAS_USAGE" \
   2>/dev/null || echo "Usage: parse error"

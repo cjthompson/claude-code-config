@@ -1,0 +1,18 @@
+{
+  "sections": [
+    "model",
+    "context_window",
+    "usd_cost",
+    "burn_rate",
+    "time_to_full",
+    "lines_changed",
+    "duration",
+    "branch",
+    "pwd",
+    "line2"
+  ],
+  "modelContextWindows": {
+    "Claude Sonnet 4.6": 200000,
+    "Claude Opus 4.8": 200000
+  }
+}

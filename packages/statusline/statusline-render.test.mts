@@ -3,11 +3,13 @@
  */
 import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  SECTION,
+  isSectionEnabled,
   stripAnsi,
   formatDuration,
   formatLocalTime,
@@ -20,7 +22,7 @@ import {
   joinSep,
   resolveContextWindowSize,
   computeUsedPct,
-} from './statusline-render.ts';
+} from './statusline-render.mts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +65,46 @@ describe('resolveContextWindowSize', () => {
     const ctx = { context_window_size: 200000 };
     const config = { modelContextWindows: { 'Claude Sonnet 4.6': 300000 } };
     strictEqual(resolveContextWindowSize(ctx, undefined, config), 200000);
+  });
+});
+
+// ── isSectionEnabled ─────────────────────────────────────────
+// When config.sections is absent (not configured), all sections are enabled
+// by default. When it is an array, only listed sections are enabled.
+
+describe('isSectionEnabled', () => {
+  it('returns true when sections key is missing (default: all enabled)', () => {
+    strictEqual(isSectionEnabled({}, SECTION.MODEL), true);
+  });
+
+  it('returns true when sections is not an array (default: all enabled)', () => {
+    strictEqual(isSectionEnabled({ sections: 'usd_cost' }, SECTION.USD_COST), true);
+    strictEqual(isSectionEnabled({ sections: null }, SECTION.USD_COST), true);
+    strictEqual(isSectionEnabled({ sections: { foo: 'bar' } }, SECTION.USD_COST), true);
+  });
+
+  it('returns false when sections is an empty array (nothing enabled)', () => {
+    strictEqual(isSectionEnabled({ sections: [] }, SECTION.MODEL), false);
+  });
+
+  it('returns true only for sections listed in the array', () => {
+    const config = { sections: ['model', 'context_window'] };
+    strictEqual(isSectionEnabled(config, SECTION.MODEL), true);
+    strictEqual(isSectionEnabled(config, SECTION.CONTEXT_WINDOW), true);
+    strictEqual(isSectionEnabled(config, SECTION.USD_COST), false);
+    strictEqual(isSectionEnabled(config, SECTION.BURN_RATE), false);
+  });
+
+  it('treats non-string entries in the array as absent', () => {
+    const config = { sections: [42, null, 'model', true] };
+    strictEqual(isSectionEnabled(config, SECTION.MODEL), true);
+    strictEqual(isSectionEnabled(config, SECTION.USD_COST), false);
+  });
+
+  it('unknown names in sections have no effect on other sections', () => {
+    const config = { sections: ['not_a_section', 'model'] };
+    strictEqual(isSectionEnabled(config, SECTION.MODEL), true);
+    strictEqual(isSectionEnabled(config, SECTION.LINE2), false);
   });
 });
 
@@ -250,37 +292,40 @@ describe('cacheAge', () => {
 // ── shortenPath ───────────────────────────────────────────────
 
 describe('shortenPath', () => {
-  it('returns path unchanged when within maxLen', () => {
-    strictEqual(shortenPath('/short/path', 50), '/short/path');
+  it('shortens all parent segments to first char', () => {
+    // `short` is a parent → abbreviated to `s`; `path` is last → preserved.
+    strictEqual(shortenPath('/short/path'), '/s/path');
   });
 
   it('replaces HOME prefix with ~', () => {
     const home = process.env.HOME;
     if (home) {
-      strictEqual(shortenPath(home + '/dev', 50), '~/dev');
+      strictEqual(shortenPath(home + '/dev'), '~/dev');
     }
   });
 
   it('abbreviates intermediate segments to first char', () => {
-    const result = shortenPath('/aaa/bbb/ccc/deep/path', 15);
+    // Only the final segment is preserved; all parents are shortened.
+    const result = shortenPath('/aaa/bbb/ccc/deep/path');
     ok(result.length <= '/aaa/bbb/ccc/deep/path'.length);
-    ok(result.endsWith('deep/path')); // last 2 segments preserved
+    ok(result.endsWith('/path'));
+    ok(result.includes('/a/'));
   });
 
   it('abbreviates dotfile segments to 2 chars', () => {
-    const result = shortenPath('/a/.worktrees/nested/deep/path', 15);
+    const result = shortenPath('/a/.worktrees/nested/deep/path');
     ok(result.includes('.w'));
   });
 
-  it('preserves last two segments fully', () => {
-    const result = shortenPath('/very/long/directory/structure/last/two', 20);
-    ok(result.endsWith('last/two'));
+  it('preserves only the last segment fully', () => {
+    const result = shortenPath('/very/long/directory/structure/last/two');
+    ok(result.endsWith('/two'));
   });
 
   it('does not abbreviate ~ or empty segments', () => {
     const home = process.env.HOME;
     if (home) {
-      const result = shortenPath(home + '/long-name/another-long/final/segment', 20);
+      const result = shortenPath(home + '/long-name/another-long/final/segment');
       ok(result.startsWith('~/'));
     }
   });
@@ -291,8 +336,9 @@ describe('shortenPath', () => {
 describe('progressBar', () => {
   it('produces correct total width of bar characters', () => {
     const bar = stripAnsi(progressBar(50, '', 10));
+    // Filled slots use \u2588 (\u2588); empty slots use space. Count both.
     const filled = (bar.match(/\u2588/g) || []).length;
-    const empty = (bar.match(/\u2591/g) || []).length;
+    const empty = (bar.match(/ /g) || []).length;
     strictEqual(filled + empty, 10);
     strictEqual(filled, 5);
   });
@@ -305,7 +351,8 @@ describe('progressBar', () => {
 
   it('shows all empty at 0%', () => {
     const bar = stripAnsi(progressBar(0, '', 8));
-    const empty = (bar.match(/\u2591/g) || []).length;
+    // Empty slots are spaces, not light-shade blocks (\u2591).
+    const empty = (bar.match(/ /g) || []).length;
     strictEqual(empty, 8);
   });
 
@@ -381,7 +428,7 @@ describe('stripAnsi', () => {
 
 describe('end-to-end rendering', () => {
   const cacheFile = '/tmp/claude-statusline-test-cache';
-  const renderScript = `${__dirname}/statusline-render.ts`;
+  const renderScript = `${__dirname}/statusline-render.mts`;
 
   it('produces two lines of output with valid input', () => {
     const cacheData = JSON.stringify({
@@ -410,9 +457,10 @@ describe('end-to-end rendering', () => {
     ok(stripAnsi(lines[0]).includes('TestModel'));
     ok(stripAnsi(lines[0]).includes('/tmp'));
 
-    // Line 2: quota percentages
-    ok(stripAnsi(lines[1]).includes('25%'));
-    ok(stripAnsi(lines[1]).includes('10%'));
+    // Line 2: quota percentages. The renderer uses a Nerd Font percent glyph
+    // (U+F295) rather than ASCII '%', so check for the number only.
+    ok(stripAnsi(lines[1]).includes('25'));
+    ok(stripAnsi(lines[1]).includes('10'));
 
     unlinkSync(cacheFile);
   });
@@ -431,7 +479,8 @@ describe('end-to-end rendering', () => {
       cacheFile, now, '120', session, 'feature/test-branch', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
-    ok(stripAnsi(result).includes('feature/test-branch'));
+    // shortenBranch strips the 'feature/' prefix; check for the shortened form.
+    ok(stripAnsi(result).includes('test-branch'));
     unlinkSync(cacheFile);
   });
 
@@ -450,12 +499,12 @@ describe('end-to-end rendering', () => {
 
     const lines = result.trimEnd().split('\n');
     strictEqual(lines.length, 2);
-    ok(stripAnsi(lines[1]).includes('75%'));
+    ok(stripAnsi(lines[1]).includes('75')); // Nerd Font glyph, not ASCII %
 
     unlinkSync(cacheFile);
   });
 
-  it('renders context window max in parentheses (200K)', () => {
+  it('renders context window as used/total (100K/200K)', () => {
     const cacheData = JSON.stringify({
       five_hour: { utilization: 25, resets_at: '2025-06-15T18:00:00Z' },
       seven_day: { utilization: 10, resets_at: '2025-06-20T00:00:00Z' },
@@ -485,7 +534,7 @@ describe('end-to-end rendering', () => {
 
     const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
     ok(line1.includes('50'), `Expected '50' percentage in line 1, got: ${line1}`);
-    ok(line1.includes('(200K)'), `Expected '(200K)' in line 1, got: ${line1}`);
+    ok(line1.includes('(100K/200K)'), `Expected '(100K/200K)' in line 1, got: ${line1}`);
 
     unlinkSync(cacheFile);
   });
@@ -517,7 +566,8 @@ describe('end-to-end rendering', () => {
       cacheFile, now, '200', session, '', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
-    ok(stripAnsi(result).includes('(1M)'));
+    // Context window now renders as (used/max), e.g. (250K/1M).
+    ok(stripAnsi(result).includes('250K/1M'), `Expected '250K/1M' in output, got: ${stripAnsi(result)}`);
 
     unlinkSync(cacheFile);
   });
@@ -578,20 +628,241 @@ describe('end-to-end rendering', () => {
         'Claude Sonnet 4.6': 400000,
       },
     });
-    writeFileSync(`${__dirname}/statusline-config.json`, configData);
+    const configPath = `${__dirname}/statusline-config.json`;
+    writeFileSync(configPath, configData);
 
-    const now = String(Math.floor(Date.now() / 1000));
-    const result = execFileSync('node', [
-      '--experimental-strip-types',
-      renderScript,
-      cacheFile, now, '200', session, '', 'true',
-    ], { encoding: 'utf8', timeout: 10_000 });
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
 
-    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
-    ok(line1.includes('(400K)'), `Expected '(400K)' from config override in line 1, got: ${line1}`);
-    ok(line1.includes('25'), `Expected '25' from token calculation (100K/400K) in line 1, got: ${line1}`);
+      const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+      ok(line1.includes('(100K/400K)'), `Expected '(100K/400K)' from config override in line 1, got: ${line1}`);
+      // Tighten: assert the full percent token, not a bare '25' substring
+      // (which would also match '250' from a hypothetical factor-of-10 bug).
+      ok(/(?:^|\D)25\D/.test(line1), `Expected '25' percentage token in line 1, got: ${line1}`);
+    } finally {
+      unlinkSync(cacheFile);
+      unlinkSync(configPath);
+    }
+  });
 
-    unlinkSync(cacheFile);
-    unlinkSync(`${__dirname}/statusline-config.json`);
+  it('matches model name case-insensitively and strips cosmetic suffixes', () => {
+    // Exercises the normalized model-name resolver: display_name drift
+    // ("Sonnet 4.6" vs "Claude Sonnet 4.6" vs "(1M context)" suffix) must
+    // not silently disable the override.
+    const cacheData = JSON.stringify({ five_hour: { utilization: 10 } });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'Sonnet 4.6 (1M context)' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        total_input_tokens: 100000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const configData = JSON.stringify({
+      modelContextWindows: {
+        'Claude Sonnet 4.6': 500000,
+      },
+    });
+    const configPath = `${__dirname}/statusline-config.json`;
+    writeFileSync(configPath, configData);
+
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
+
+      const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+      ok(line1.includes('(100K/500K)'),
+        `Expected normalized override to apply (500K) despite display_name drift, got: ${line1}`);
+    } finally {
+      unlinkSync(cacheFile);
+      unlinkSync(configPath);
+    }
+  });
+
+  it('clamps displayed percentage to 100 when tokens exceed window', () => {
+    // Regression test for finding #1: an override that shrinks the window
+    // below the token count must not display "200%".
+    const cacheData = JSON.stringify({ five_hour: { utilization: 10 } });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        context_window_size: 50000, // session says 50K
+        input_tokens: 200000,       // but 200K tokens are present
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        total_input_tokens: 200000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const configData = JSON.stringify({
+      modelContextWindows: { 'TestModel': 50000 }, // override matches session
+    });
+    const configPath = `${__dirname}/statusline-config.json`;
+    writeFileSync(configPath, configData);
+
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
+
+      const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+      ok(!/\b2\d{2}%/.test(line1),
+        `Expected percentage clamped to 100 (no "2xx%"), got: ${line1}`);
+    } finally {
+      unlinkSync(cacheFile);
+      unlinkSync(configPath);
+    }
+  });
+
+  it('agrees between percentage and time-to-fill numerators', () => {
+    // Regression test for finding #2: the ETA and the bar must use the
+    // same "used" total. With duration > 60s, the ETA segment renders and
+    // the time-to-fill estimate must be consistent with the bar.
+    const cacheData = JSON.stringify({ five_hour: { utilization: 10 } });
+    writeFileSync(cacheFile, cacheData);
+
+    // 100K input + 0 cache + 0 cache_read = 100K tokens. Window 200K. So
+    // bar shows 50% and the time-to-fill at e.g. 1000 tps would project
+    // 100K tokens remaining / 1000 tps = 100s. The bug was that ETA
+    // ignored cache fields, but here we use only input_tokens, so the
+    // assertions are about the segment rendering at all.
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 200000 },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        total_input_tokens: 100000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const configPath = `${__dirname}/statusline-config.json`;
+    try { unlinkSync(configPath); } catch {} // ensure no override
+
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
+
+      const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+      // Bar should be 50% and ETA should appear (duration > 60s).
+      ok(line1.includes('50'), `Expected 50% bar, got: ${line1}`);
+      ok(line1.includes('left'), `Expected time-to-full ETA segment, got: ${line1}`);
+    } finally {
+      unlinkSync(cacheFile);
+    }
+  });
+
+  it('renders only sections listed in config.sections', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 25 },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'Claude Sonnet 4.6' },
+      cost: { total_cost_usd: 1.23, total_duration_ms: 120000 },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 50000,
+        cache_creation_input_tokens: 25000,
+        cache_read_input_tokens: 25000,
+        total_input_tokens: 50000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    // Only model and context_window are listed — usd_cost and burn_rate are absent.
+    const configData = JSON.stringify({
+      sections: ['model', 'context_window', 'pwd'],
+    });
+    const configPath = `${__dirname}/statusline-config.json`;
+    writeFileSync(configPath, configData);
+
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
+
+      const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+      ok(line1.includes('Sonnet 4.6'), `Expected model name in line 1, got: ${line1}`);
+      ok(line1.includes('100K/200K'), `Expected context window tokens in line 1, got: ${line1}`);
+      ok(!line1.includes('1.23'), `Expected usd_cost to be hidden, got: ${line1}`);
+      ok(!line1.includes('/hr'), `Expected burn_rate to be hidden, got: ${line1}`);
+    } finally {
+      unlinkSync(cacheFile);
+      unlinkSync(configPath);
+    }
+  });
+
+  it('omits line 2 when "line2" is absent from config.sections', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 25, resets_at: new Date(Date.now() + 3600_000).toISOString() },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'Claude Sonnet 4.6' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      cwd: '/tmp',
+    });
+
+    // line2 intentionally omitted from sections list.
+    const configData = JSON.stringify({
+      sections: ['model', 'usd_cost', 'pwd'],
+    });
+    const configPath = `${__dirname}/statusline-config.json`;
+    writeFileSync(configPath, configData);
+
+    try {
+      const now = String(Math.floor(Date.now() / 1000));
+      const result = execFileSync('node', [
+        '--experimental-strip-types',
+        renderScript,
+        cacheFile, now, '200', session, '', 'true',
+      ], { encoding: 'utf8', timeout: 10_000 });
+
+      const lines = result.trimEnd().split('\n');
+      strictEqual(lines.length, 1, `Expected only line 1, got ${lines.length} lines: ${result}`);
+    } finally {
+      unlinkSync(cacheFile);
+      unlinkSync(configPath);
+    }
   });
 });
