@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.29 - 2026-06-04
+
+### Fixes
+- **Statusline**: fix `(0/200K)` display when Claude Code sends only `used_percentage` (not `input_tokens`/`cache_*` fields) — now derives approximate token count as `round(pct * windowSize / 100)`; also restores time-to-fill ETA which was silently suppressed in the same scenario
+
 ## v0.0.28 - 2026-06-04
 
 ### Fixes

@@ -1,15 +1,15 @@
 {
-    "name": "@cjthompson/claude-code-config",
-    "version": "0.0.28",
-    "workspaces": [
-        "packages/installer"
-    ],
-    "scripts": {
-        "install-packages": "npm -w @cjthompson/claude-code-config-installer start",
-        "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall",
-        "install-package": "npm -w @cjthompson/claude-code-config-installer run install-package --"
-    },
-    "devDependencies": {
-        "@types/node": "^22"
-    }
+  "name": "@cjthompson/claude-code-config",
+  "version": "0.0.29",
+  "workspaces": [
+    "packages/installer"
+  ],
+  "scripts": {
+    "install-packages": "npm -w @cjthompson/claude-code-config-installer start",
+    "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall",
+    "install-package": "npm -w @cjthompson/claude-code-config-installer run install-package --"
+  },
+  "devDependencies": {
+    "@types/node": "^22"
+  }
 }
