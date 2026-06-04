@@ -26,6 +26,27 @@ Claude Code pipes session JSON to the script via stdin on each render cycle. No 
 
 ## Configuration
 
+### Custom Model Context Window Sizes
+
+Create `~/.claude/statusline-config.json` to override the context window size for specific models. This is useful when the context window size from Claude Code's session is inaccurate or you want to pin a different value.
+
+```json
+{
+  "modelContextWindows": {
+    "Claude Sonnet 4.6": 200000,
+    "Claude Opus 4.8": 200000
+  }
+}
+```
+
+**Behavior:**
+- Model names are matched **exactly** against `session.model.display_name` (the name shown in the statusline).
+- When a model name matches, its configured window size is used instead of `context_window_size` from the session.
+- When no config file exists or a model name doesn't match, the session value is used.
+- The percentage displayed in the context window segment is calculated from actual token counts: `round((input_tokens + cache_creation_input_tokens + cache_read_input_tokens) / context_window_size * 100)`.
+
+If the config file is absent or unparseable, the renderer silently falls back to the default behavior.
+
 ### Disabling Account Usage (Line 2)
 
 Set `CLAUDE_STATUSLINE_USAGE=0` to disable the account usage quota line. When disabled, no OAuth token retrieval or API calls are made — only Line 1 (session + environment) is rendered.
@@ -60,7 +81,7 @@ Enabled by default (`1`).
 | Segment | Source | Example | Drop priority |
 |---|---|---|---|
 | Model name | `session.model.display_name` | `Opus 4.6` | 0 (last to drop) |
-| Context window | `session.context_window.used_percentage` + `.context_window_size` | `45% ████░░░░ (200K)` | 2 |
+| Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (200K)` | 2 |
 | Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | 3 |
 | Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | 4 |
 | Session cost | `session.cost.total_cost_usd` | `$2.10` | 5 |

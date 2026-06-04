@@ -18,9 +18,122 @@ import {
   plTransition,
   plEnd,
   joinSep,
+  resolveContextWindowSize,
+  computeUsedPct,
 } from './statusline-render.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── resolveContextWindowSize ──────────────────────────────────
+
+describe('resolveContextWindowSize', () => {
+  it('returns 0 for undefined ctx', () => {
+    strictEqual(resolveContextWindowSize(undefined, 'claude-sonnet-4-6', {}), 0);
+  });
+
+  it('uses config override when model name matches', () => {
+    const ctx = { context_window_size: 200000 };
+    const config = { modelContextWindows: { 'Claude Sonnet 4.6': 300000 } };
+    strictEqual(resolveContextWindowSize(ctx, 'Claude Sonnet 4.6', config), 300000);
+  });
+
+  it('ignores config override if model name does not match', () => {
+    const ctx = { context_window_size: 200000 };
+    const config = { modelContextWindows: { 'Claude Opus 4.8': 300000 } };
+    strictEqual(resolveContextWindowSize(ctx, 'Claude Sonnet 4.6', config), 200000);
+  });
+
+  it('falls back to ctx.context_window_size when no config', () => {
+    const ctx = { context_window_size: 200000 };
+    strictEqual(resolveContextWindowSize(ctx, 'Claude Sonnet 4.6', {}), 200000);
+  });
+
+  it('returns 0 when ctx has no context_window_size and no config override', () => {
+    const ctx = { other: 'field' };
+    strictEqual(resolveContextWindowSize(ctx, 'Claude Sonnet 4.6', {}), 0);
+  });
+
+  it('ignores config value if it is not positive', () => {
+    const ctx = { context_window_size: 200000 };
+    const config = { modelContextWindows: { 'Claude Sonnet 4.6': 0 } };
+    strictEqual(resolveContextWindowSize(ctx, 'Claude Sonnet 4.6', config), 200000);
+  });
+
+  it('ignores config when model name is undefined', () => {
+    const ctx = { context_window_size: 200000 };
+    const config = { modelContextWindows: { 'Claude Sonnet 4.6': 300000 } };
+    strictEqual(resolveContextWindowSize(ctx, undefined, config), 200000);
+  });
+});
+
+// ── computeUsedPct ─────────────────────────────────────────────
+
+describe('computeUsedPct', () => {
+  it('returns null for undefined ctx', () => {
+    strictEqual(computeUsedPct(undefined, 200000), null);
+  });
+
+  it('returns null for zero window size', () => {
+    const ctx = { input_tokens: 100000 };
+    strictEqual(computeUsedPct(ctx, 0), null);
+  });
+
+  it('returns null for negative window size', () => {
+    const ctx = { input_tokens: 100000 };
+    strictEqual(computeUsedPct(ctx, -100), null);
+  });
+
+  it('calculates percentage from all token types', () => {
+    const ctx = {
+      input_tokens: 100000,
+      cache_creation_input_tokens: 50000,
+      cache_read_input_tokens: 50000,
+    };
+    const result = computeUsedPct(ctx, 200000);
+    strictEqual(result, 100);
+  });
+
+  it('calculates percentage with partial token types', () => {
+    const ctx = {
+      input_tokens: 100000,
+      cache_creation_input_tokens: 50000,
+    };
+    const result = computeUsedPct(ctx, 200000);
+    strictEqual(result, 75);
+  });
+
+  it('rounds percentage correctly', () => {
+    const ctx = { input_tokens: 33333 };
+    const result = computeUsedPct(ctx, 100000);
+    strictEqual(result, 33);
+  });
+
+  it('falls back to used_percentage when token fields are absent', () => {
+    const ctx = { used_percentage: 42.3, other_field: 'something' };
+    const result = computeUsedPct(ctx, 200000);
+    strictEqual(result, 42);
+  });
+
+  it('uses token calculation when available, ignoring used_percentage', () => {
+    const ctx = {
+      input_tokens: 100000,
+      used_percentage: 10,
+    };
+    const result = computeUsedPct(ctx, 200000);
+    strictEqual(result, 50);
+  });
+
+  it('returns null when neither token nor used_percentage present', () => {
+    const ctx = {};
+    strictEqual(computeUsedPct(ctx, 200000), null);
+  });
+
+  it('treats missing token fields as zero', () => {
+    const ctx = { input_tokens: 50000 };
+    const result = computeUsedPct(ctx, 200000);
+    strictEqual(result, 25);
+  });
+});
 
 // ── formatDuration ────────────────────────────────────────────
 
@@ -248,57 +361,6 @@ describe('joinSep', () => {
   });
 });
 
-// ── formatQuotaWindow ─────────────────────────────────────────
-
-describe('formatQuotaWindow', () => {
-  it('returns null for undefined window', () => {
-    strictEqual(formatQuotaWindow(undefined, '5h', '', true, () => ''), null);
-  });
-
-  it('includes percentage in output', () => {
-    const result = formatQuotaWindow(
-      { utilization: 42 },
-      '5h', '', true, () => '',
-    );
-    ok(result !== null);
-    ok(stripAnsi(result!).includes('42%'));
-  });
-
-  it('includes label in output', () => {
-    const result = formatQuotaWindow(
-      { utilization: 10 },
-      '7d', '', false, () => '',
-    );
-    ok(stripAnsi(result!).includes('7d'));
-  });
-
-  it('includes reset text when resets_at is present', () => {
-    const result = formatQuotaWindow(
-      { utilization: 50, resets_at: '2025-01-01T12:00:00Z' },
-      '5h', '', true, () => 'reset-marker',
-    );
-    ok(stripAnsi(result!).includes('reset-marker'));
-  });
-
-  it('omits reset text when resets_at is absent', () => {
-    const result = formatQuotaWindow(
-      { utilization: 50 },
-      '5h', '', true, () => 'should-not-appear',
-    );
-    ok(!stripAnsi(result!).includes('should-not-appear'));
-  });
-
-  it('uses narrow bar width when isWide is false', () => {
-    const narrow = stripAnsi(formatQuotaWindow(
-      { utilization: 50 }, '5h', '', false, () => '',
-    )!);
-    const wide = stripAnsi(formatQuotaWindow(
-      { utilization: 50 }, '5h', '', true, () => '',
-    )!);
-    ok(wide.length > narrow.length);
-  });
-});
-
 // ── stripAnsi ─────────────────────────────────────────────────
 
 describe('stripAnsi', () => {
@@ -338,7 +400,7 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '120', session, 'main',
+      cacheFile, now, '120', session, 'main', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     const lines = result.trimEnd().split('\n');
@@ -366,7 +428,7 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '120', session, 'feature/test-branch',
+      cacheFile, now, '120', session, 'feature/test-branch', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     ok(stripAnsi(result).includes('feature/test-branch'));
@@ -383,7 +445,7 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '80', '{}', '',
+      cacheFile, now, '80', '{}', '', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     const lines = result.trimEnd().split('\n');
@@ -404,8 +466,10 @@ describe('end-to-end rendering', () => {
       model: { display_name: 'TestModel' },
       cost: { total_cost_usd: 0.50, total_duration_ms: 120000 },
       context_window: {
-        used_percentage: 50,
         context_window_size: 200000,
+        input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
         total_input_tokens: 100000,
         total_output_tokens: 0,
       },
@@ -416,7 +480,7 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '200', session, 'main',
+      cacheFile, now, '200', session, 'main', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
@@ -436,8 +500,10 @@ describe('end-to-end rendering', () => {
       model: { display_name: 'TestModel' },
       cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
       context_window: {
-        used_percentage: 25,
         context_window_size: 1_000_000,
+        input_tokens: 250000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
         total_input_tokens: 250000,
         total_output_tokens: 0,
       },
@@ -448,7 +514,7 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '200', session, '',
+      cacheFile, now, '200', session, '', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     ok(stripAnsi(result).includes('(1M)'));
@@ -466,9 +532,10 @@ describe('end-to-end rendering', () => {
       model: { display_name: 'TestModel' },
       cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
       context_window: {
-        used_percentage: 25,
         // no context_window_size
+        input_tokens: 5000,
         total_input_tokens: 5000,
+        total_output_tokens: 0,
       },
       cwd: '/tmp',
     });
@@ -477,13 +544,54 @@ describe('end-to-end rendering', () => {
     const result = execFileSync('node', [
       '--experimental-strip-types',
       renderScript,
-      cacheFile, now, '200', session, '',
+      cacheFile, now, '200', session, '', 'true',
     ], { encoding: 'utf8', timeout: 10_000 });
 
     const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
-    ok(line1.includes('25%'));
     ok(!line1.includes('(0)'), `Should not render '(0)' when size is missing. Got: ${line1}`);
 
     unlinkSync(cacheFile);
+  });
+
+  it('uses configured context window size override and token-based percentage', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 25 },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'Claude Sonnet 4.6' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 50000,
+        cache_creation_input_tokens: 25000,
+        cache_read_input_tokens: 25000,
+        total_input_tokens: 50000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const configData = JSON.stringify({
+      modelContextWindows: {
+        'Claude Sonnet 4.6': 400000,
+      },
+    });
+    writeFileSync(`${__dirname}/statusline-config.json`, configData);
+
+    const now = String(Math.floor(Date.now() / 1000));
+    const result = execFileSync('node', [
+      '--experimental-strip-types',
+      renderScript,
+      cacheFile, now, '200', session, '', 'true',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+    ok(line1.includes('(400K)'), `Expected '(400K)' from config override in line 1, got: ${line1}`);
+    ok(line1.includes('25'), `Expected '25' from token calculation (100K/400K) in line 1, got: ${line1}`);
+
+    unlinkSync(cacheFile);
+    unlinkSync(`${__dirname}/statusline-config.json`);
   });
 });

@@ -3,7 +3,7 @@
 // Called by statusline.sh with args: <usage-cache-path> <cache-mtime> <term-width> <session-json> <git-branch>
 
 import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 // ── ANSI ──────────────────────────────────────────────────────
@@ -110,6 +110,40 @@ function progressBar(pct: number, sectionBg: string, width: number): string {
   return `${barColor}${BAR_BG}${'\u2588'.repeat(fullBlocks)}${frac > 0 ? FRAC_BLOCKS[frac] : ''}${' '.repeat(Math.max(0, empty))}${RST}${sectionBg}`;
 }
 
+// ── Context window helpers ─────────────────────────────────────
+function resolveContextWindowSize(
+  ctx: Record<string, any> | undefined,
+  modelName: string | undefined,
+  config: Record<string, any>,
+): number {
+  if (!ctx) return 0;
+  const override = modelName && config.modelContextWindows?.[modelName];
+  if (override && override > 0) return override;
+  return ctx.context_window_size ?? 0;
+}
+
+function computeUsedPct(
+  ctx: Record<string, any> | undefined,
+  windowSize: number,
+): number | null {
+  if (!ctx || windowSize <= 0) return null;
+
+  const inputTokens = ctx.input_tokens ?? 0;
+  const cacheCreateTokens = ctx.cache_creation_input_tokens ?? 0;
+  const cacheReadTokens = ctx.cache_read_input_tokens ?? 0;
+
+  if (inputTokens > 0 || cacheCreateTokens > 0 || cacheReadTokens > 0) {
+    const totalTokens = inputTokens + cacheCreateTokens + cacheReadTokens;
+    return Math.round((totalTokens / windowSize) * 100);
+  }
+
+  if (ctx.used_percentage != null) {
+    return Math.round(ctx.used_percentage);
+  }
+
+  return null;
+}
+
 // ── Formatters ────────────────────────────────────────────────
 function formatDuration(seconds: number): string {
   if (seconds <= 0) return 'now';
@@ -177,6 +211,8 @@ export {
   plTransition,
   plEnd,
   joinSep,
+  resolveContextWindowSize,
+  computeUsedPct,
 };
 
 // ── Powerline renderer ────────────────────────────────────────
@@ -309,10 +345,17 @@ function main(): void {
     ? JSON.parse(readFileSync(usageCachePath, 'utf8'))
     : {};
 
+  let config: Record<string, any> = {};
+  const configPath = resolve(dirname(fileURLToPath(import.meta.url)), 'statusline-config.json');
+  try { config = JSON.parse(readFileSync(configPath, 'utf8')); } catch {}
+
   const cost = session.cost;
   const ctx = session.context_window;
   const model = session.model;
   const cwd = session.cwd ?? process.cwd();
+
+  const effectiveWindowSize = ctx ? resolveContextWindowSize(ctx, model?.display_name, config) : 0;
+  const usedPct = ctx ? computeUsedPct(ctx, effectiveWindowSize) : null;
 
   // Claude Code's right column sits inline when wide enough, wraps below when narrow
   const RIGHT_RESERVE = termWidth >= 80 ? 20 : 0;
@@ -343,18 +386,17 @@ function main(): void {
       ` ${GREEN_DIM}${ICON_CLOCK} \$${rate.toFixed(2)}/hr${R_GREEN} ` });
   }
 
-  if (ctx?.used_percentage != null) {
-    const pct = Math.round(ctx.used_percentage);
-    const max = ctx.context_window_size > 0
-      ? ` ${GREEN_DIM}(${formatTokenCount(ctx.context_window_size)})${R_GREEN}`
+  if (usedPct != null) {
+    const max = effectiveWindowSize > 0
+      ? ` ${GREEN_DIM}(${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
       : '';
     line1Segs.push({ section: 22, drop: 2, content:
-      ` ${WHITE}${circleIcon(pct)} ${pct}${PCT} ${R_GREEN}${progressBar(pct, BG_GREEN, 8)}${max} ` });
+      ` ${WHITE}${circleIcon(usedPct)} ${usedPct}${PCT} ${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}${max} ` });
   }
 
-  if (ctx?.total_input_tokens > 0 && ctx?.context_window_size > 0 && cost?.total_duration_ms > 60_000) {
+  if (ctx?.total_input_tokens > 0 && effectiveWindowSize > 0 && cost?.total_duration_ms > 60_000) {
     const used = ctx.total_input_tokens + ctx.total_output_tokens;
-    const rem = ctx.context_window_size - used;
+    const rem = effectiveWindowSize - used;
     if (rem > 0) {
       const tps = used / (cost.total_duration_ms / 1000);
       if (tps > 0)
