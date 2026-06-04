@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.30 - 2026-06-04
+
+### Fixes
+- **Statusline**: fix root cause of `(0/200K)` display — Claude Code 2.x moved token counts into `context_window.current_usage` and added `total_input_tokens` as the authoritative sum; `totalContextTokens` now reads these correctly instead of looking for flat top-level fields that no longer exist
+
 ## v0.0.29 - 2026-06-04
 
 ### Fixes
