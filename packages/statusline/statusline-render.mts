@@ -462,7 +462,12 @@ function main(): void {
     // shrinks the window below the token count) doesn't print as raw "200%"
     // alongside a fully-filled bar — show a cap of 100% in that case.
     const displayPct = Math.min(100, Math.max(0, usedPct));
-    const totalTokens = totalContextTokens(ctx);
+    // When individual token fields are absent (Claude Code only sends
+    // used_percentage), derive an approximate count from the percentage.
+    const rawTokens = totalContextTokens(ctx);
+    const totalTokens = rawTokens > 0 ? rawTokens
+      : effectiveWindowSize > 0 ? Math.round(usedPct * effectiveWindowSize / 100)
+      : 0;
     const max = effectiveWindowSize > 0
       ? ` ${GREEN_DIM}(${formatTokenCount(totalTokens)}/${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
       : '';
@@ -473,7 +478,9 @@ function main(): void {
   if (ctx && effectiveWindowSize > 0 && cost?.total_duration_ms > 60_000 && isSectionEnabled(config, SECTION.TIME_TO_FULL)) {
     // Use the same "used" numerator as the percentage above so the projected
     // time-to-fill agrees with what the bar is showing.
-    const used = totalContextTokens(ctx);
+    const rawUsed = totalContextTokens(ctx);
+    const used = rawUsed > 0 ? rawUsed
+      : Math.round((usedPct ?? 0) * effectiveWindowSize / 100);
     if (used > 0) {
       const rem = effectiveWindowSize - used;
       if (rem > 0) {

@@ -865,4 +865,36 @@ describe('end-to-end rendering', () => {
       unlinkSync(configPath);
     }
   });
+
+  it('derives token count from used_percentage when individual token fields are absent', () => {
+    // Reproduces the "(0/200K)" bug: Claude Code may only send used_percentage,
+    // not input_tokens/cache_* fields. The display should still show a non-zero
+    // token count derived from pct * window_size / 100.
+    const cacheData = JSON.stringify({ five_hour: { utilization: 10 } });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        context_window_size: 200000,
+        used_percentage: 50,
+        // no input_tokens / cache_creation_input_tokens / cache_read_input_tokens
+      },
+      cwd: '/tmp',
+    });
+
+    const now = String(Math.floor(Date.now() / 1000));
+    const result = execFileSync('node', [
+      '--experimental-strip-types',
+      renderScript,
+      cacheFile, now, '200', session, '', 'true',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+    ok(line1.includes('100K/200K'), `Expected '100K/200K' derived from used_percentage, got: ${line1}`);
+    ok(!line1.includes('0/200K'), `Should not show '0/200K', got: ${line1}`);
+
+    unlinkSync(cacheFile);
+  });
 });
