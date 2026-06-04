@@ -47,6 +47,34 @@ const has = (flag) => argv.includes(flag);
 
 const now = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 
+/**
+ * Normalize a project identifier to a canonical form so that different agents
+ * (or different remote URL formats) all key into the same task list.
+ *
+ * Transformations:
+ *   - strip trailing `.git`
+ *   - convert SSH form (`git@host:owner/repo`) to HTTPS-style host path
+ *   - drop scheme from HTTPS URLs
+ *   - drop trailing slash
+ *
+ * Examples:
+ *   git@github.com:cjthompson/claude-mixed-models.git
+ *     -> github.com/cjthompson/claude-mixed-models
+ *   https://github.com/cjthompson/claude-mixed-models.git
+ *     -> github.com/cjthompson/claude-mixed-models
+ *   git@github.com:cjthompson/claude-mixed-models
+ *     -> github.com/cjthompson/claude-mixed-models
+ */
+function normalizeProject(raw) {
+    let p = String(raw ?? '').trim();
+    if (!p) return p;
+    p = p.replace(/\.git$/, '');
+    p = p.replace(/^git@([^:]+):/, '$1/');
+    p = p.replace(/^https?:\/\//, '');
+    p = p.replace(/\/$/, '');
+    return p;
+}
+
 switch (cmd) {
     case 'init': {
         // Check before creating — exit 2 if this is a first-time setup
@@ -84,7 +112,7 @@ switch (cmd) {
     }
 
     case 'insert': {
-        const p       = esc(get('--project'));
+        const p       = esc(normalizeProject(get('--project')));
         const type    = get('--type');
         const title   = esc(get('--title'));
         const priority = get('--priority') ?? 'medium';
@@ -103,7 +131,7 @@ switch (cmd) {
     }
 
     case 'update': {
-        const p    = esc(get('--project'));
+        const p    = esc(normalizeProject(get('--project')));
         const seq  = get('--seq');
         const sets = [];
 
@@ -138,7 +166,7 @@ switch (cmd) {
     }
 
     case 'get': {
-        const p   = esc(get('--project'));
+        const p   = esc(normalizeProject(get('--project')));
         const seq = get('--seq');
         const result = sql(
             `SELECT seq,type,title,priority,tags,reqs,depends_on,status FROM tasks WHERE project='${p}' AND seq=${seq};`,
@@ -149,7 +177,7 @@ switch (cmd) {
     }
 
     case 'list': {
-        const p      = esc(get('--project'));
+        const p      = esc(normalizeProject(get('--project')));
         const status = get('--status');
         const where  = status ? `AND status='${status}'` : `AND status!='cancelled'`;
         const result = sql(
@@ -162,7 +190,7 @@ switch (cmd) {
 
     case 'blocked': {
         // Returns seq numbers (newline-separated) of pending tasks with incomplete dependencies
-        const p = esc(get('--project'));
+        const p = esc(normalizeProject(get('--project')));
         const result = sql(`
             SELECT seq FROM tasks
             WHERE project='${p}' AND status='pending' AND depends_on!='[]'
@@ -178,7 +206,7 @@ switch (cmd) {
 
     case 'unblocked': {
         // Returns pipe-separated rows (#NNN|title) of tasks newly unblocked by completing seq N
-        const p   = esc(get('--project'));
+        const p   = esc(normalizeProject(get('--project')));
         const seq = get('--seq');
         const result = sql(`
             SELECT printf('#%03d',seq),title FROM tasks
@@ -196,7 +224,7 @@ switch (cmd) {
 
     case 'check-deps': {
         // Returns pipe-separated rows (#NNN|title|status) of incomplete dependencies for seq N
-        const p   = esc(get('--project'));
+        const p   = esc(normalizeProject(get('--project')));
         const seq = get('--seq');
         const result = sql(`
             SELECT printf('#%03d',seq),title,status FROM tasks
@@ -213,7 +241,7 @@ switch (cmd) {
 
     case 'validate-deps': {
         // Prints any dep seq numbers that don't exist in the project
-        const p    = esc(get('--project'));
+        const p    = esc(normalizeProject(get('--project')));
         const deps = esc(JSON.stringify(all('--dep').map(Number)));
         const result = sql(`
             SELECT j.value FROM json_each('${deps}') j
@@ -224,7 +252,7 @@ switch (cmd) {
     }
 
     case 'changelog': {
-        const p      = esc(get('--project'));
+        const p      = esc(normalizeProject(get('--project')));
         const filter = has('--new-only') ? 'AND in_changelog=0' : '';
         const result = sql(`
             SELECT seq,substr(updated,1,10),type,title,tags FROM tasks
@@ -236,7 +264,7 @@ switch (cmd) {
     }
 
     case 'mark-changelog': {
-        const p = esc(get('--project'));
+        const p = esc(normalizeProject(get('--project')));
         if (has('--all')) {
             sql(`UPDATE tasks SET in_changelog=1 WHERE project='${p}' AND status='completed';`);
         } else {
@@ -249,7 +277,7 @@ switch (cmd) {
     }
 
     case 'recent': {
-        const p     = esc(get('--project'));
+        const p     = esc(normalizeProject(get('--project')));
         const limit = get('--limit') ?? '20';
         const result = sql(`
             SELECT printf('#%03d',seq),type,title,status FROM tasks
@@ -259,8 +287,58 @@ switch (cmd) {
         break;
     }
 
+    case 'migrate': {
+        // Rewrite legacy/duplicate project identifiers to their normalized form.
+        const distinct = sql(`SELECT DISTINCT project FROM tasks;`, '-separator "\n"');
+        const names = distinct ? distinct.split('\n').filter(Boolean) : [];
+
+        // old -> new (only when they differ)
+        const renames = new Map();
+        for (const oldName of names) {
+            const newName = normalizeProject(oldName);
+            if (newName !== oldName) renames.set(oldName, newName);
+        }
+
+        if (renames.size === 0) {
+            process.stdout.write('No project names needed migration.\n');
+            break;
+        }
+
+        // One UPDATE per distinct (old, new) pair. We renumber seq on the
+        // source rows to start at MAX(new.seq)+1, so the UNIQUE(project,
+        // seq) constraint can't trip on seqs that already exist at the
+        // destination. This handles the common case where the same real
+        // project was logged under two different old names with
+        // overlapping sequence numbers.
+        let totalMoved = 0;
+        for (const [oldName, newName] of renames) {
+            const maxNew = Number(sql(
+                `SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE project='${esc(newName)}';`,
+            )) || 0;
+            // Pull source rows as JSON; sqlite3 -json returns a top-level
+            // array like `[{"id":1,"seq":1}, ...]` which is already valid.
+            const json = sql(
+                `SELECT id, seq FROM tasks WHERE project='${esc(oldName)}' ORDER BY id;`,
+                '-json',
+            );
+            if (!json) continue;
+            const rows = JSON.parse(json);
+            let nextSeq = maxNew + 1;
+            for (const { id } of rows) {
+                sql(`UPDATE tasks SET seq=${nextSeq} WHERE id=${id};`);
+                nextSeq++;
+            }
+            const count = rows.length;
+            sql(`UPDATE tasks SET project='${esc(newName)}' WHERE project='${esc(oldName)}';`);
+            process.stdout.write(`${oldName} -> ${newName}  (${count} row${count === 1 ? '' : 's'})\n`);
+            totalMoved += count;
+        }
+        process.stdout.write(`Migrated ${totalMoved} row${totalMoved === 1 ? '' : 's'} across ${renames.size} project${renames.size === 1 ? '' : 's'}.\n`);
+        break;
+    }
+
     default: {
-        const commands = 'init|insert|update|get|list|blocked|unblocked|check-deps|validate-deps|changelog|mark-changelog|recent';
+        const commands = 'init|insert|update|get|list|blocked|unblocked|check-deps|validate-deps|changelog|mark-changelog|recent|migrate';
         process.stderr.write(`Unknown command: ${cmd ?? '(none)'}\nUsage: node task-db.mjs <${commands}> [options]\n`);
         process.exit(1);
     }
