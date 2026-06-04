@@ -533,7 +533,7 @@ describe('end-to-end rendering', () => {
         input_tokens: 50000,
         cache_creation_input_tokens: 25000,
         cache_read_input_tokens: 25000,
-        total_input_tokens: 50000,
+        total_input_tokens: 100000,
         total_output_tokens: 0,
       },
       cwd: '/tmp',
@@ -655,7 +655,7 @@ describe('end-to-end rendering', () => {
         input_tokens: 50000,
         cache_creation_input_tokens: 25000,
         cache_read_input_tokens: 25000,
-        total_input_tokens: 50000,
+        total_input_tokens: 100000,
         total_output_tokens: 0,
       },
       cwd: '/tmp',
@@ -697,6 +697,35 @@ describe('end-to-end rendering', () => {
     } finally {
       unlinkSync(configPath);
     }
+  });
+
+  it('reads total_input_tokens from current_usage nested structure (Claude Code 2.x format)', () => {
+    // Real-world format: token breakdown is nested under current_usage and
+    // total_input_tokens holds the authoritative sum at the top level.
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        total_input_tokens: 152589,
+        total_output_tokens: 8,
+        context_window_size: 200000,
+        current_usage: {
+          input_tokens: 3,
+          output_tokens: 8,
+          cache_creation_input_tokens: 1472,
+          cache_read_input_tokens: 151114,
+        },
+        used_percentage: 76,
+        remaining_percentage: 24,
+      },
+      cwd: '/tmp',
+      rate_limits: { five_hour: { used_percentage: 10, resets_at: fiveHourResets } },
+    });
+
+    const result = run('200', session);
+    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+    ok(line1.includes('153K/200K'), `Expected '153K/200K' from total_input_tokens, got: ${line1}`);
+    ok(!line1.includes('0/200K'), `Should not show '0/200K', got: ${line1}`);
   });
 
   it('derives token count from used_percentage when individual token fields are absent', () => {

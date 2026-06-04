@@ -175,8 +175,19 @@ function resolveContextWindowSize(
 // Single source of truth for "tokens that count against the context window".
 // Used by both the progress bar (computeUsedPct) and the time-to-fill ETA so
 // the two segments agree on what "used" means.
+//
+// Claude Code 2.x moved the per-type breakdown into ctx.current_usage and
+// added ctx.total_input_tokens as the authoritative sum. Older test fixtures
+// still use the flat top-level layout.
 function totalContextTokens(ctx: Record<string, any> | undefined): number {
   if (!ctx) return 0;
+  if (ctx.total_input_tokens != null) return ctx.total_input_tokens;
+  if (ctx.current_usage) {
+    const u = ctx.current_usage;
+    return (u.input_tokens ?? 0)
+      + (u.cache_creation_input_tokens ?? 0)
+      + (u.cache_read_input_tokens ?? 0);
+  }
   return (ctx.input_tokens ?? 0)
     + (ctx.cache_creation_input_tokens ?? 0)
     + (ctx.cache_read_input_tokens ?? 0);
