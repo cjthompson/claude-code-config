@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.31 - 2026-06-04
+
+### Features
+- **task-db**: canonicalize project name at the SQL boundary via `normalizeProject()`, so all URL forms (SSH/HTTPS, with/without `.git`, with/without trailing slash) collapse to the same `host/owner/repo` key. Future inserts/queries automatically land in the right list.
+- **task-db**: new `migrate` subcommand rebuilds the `project` column for existing fragmented data. SELECT DISTINCT project → run each through the normalizer → build a (old → new) map → renumber `seq` per source to `MAX(target.seq)+1` (so the `UNIQUE(project, seq)` constraint can't trip on overlapping seqs) → bulk-update `project`. Idempotent; a second run is a no-op.
+
 ## v0.0.30 - 2026-06-04
 
 ### Fixes
