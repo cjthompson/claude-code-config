@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.26 - 2026-06-03
+
+### Features
+- Statusline context segment now appends the absolute context-window maximum in parentheses after the progress bar, e.g. `80% ████░░░░ (200K)` or `80% ████░░░░ (1M)`. Lets you see at a glance which model class is active. Renders via new `formatTokenCount` helper; gracefully omitted when `context_window_size` is absent (early-session case). Adds 10 tests (7 unit + 3 E2E).
+
 ## v0.0.25 - 2026-06-03
 
 ### Fixes

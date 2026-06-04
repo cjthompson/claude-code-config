@@ -5,7 +5,7 @@ A two-line powerline-style statusline for Claude Code that displays session metr
 Both lines are **width-aware** — segments are progressively dropped as the terminal narrows so lines never wrap.
 
 ```
- Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
+ Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ (200K) │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
  5h 33% ████░░░░░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░░░░░ Fri 10:00AM │ (3m old) ▶
 ```
 
@@ -51,7 +51,7 @@ Enabled by default (`1`).
 |---|---|
 | `statusline.sh` | Entry point — caching, token management, environment gathering |
 | `statusline-render.ts` | Rendering engine — ANSI/powerline output, all display logic |
-| `statusline-render.test.ts` | Test suite — 42 tests using Node's built-in `node:test` runner |
+| `statusline-render.test.ts` | Test suite — 49 tests using Node's built-in `node:test` runner |
 
 ## What It Shows
 
@@ -60,7 +60,7 @@ Enabled by default (`1`).
 | Segment | Source | Example | Drop priority |
 |---|---|---|---|
 | Model name | `session.model.display_name` | `Opus 4.6` | 0 (last to drop) |
-| Context window | `session.context_window.used_percentage` | `45% ████░░░░` | 2 |
+| Context window | `session.context_window.used_percentage` + `.context_window_size` | `45% ████░░░░ (200K)` | 2 |
 | Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | 3 |
 | Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | 4 |
 | Session cost | `session.cost.total_cost_usd` | `$2.10` | 5 |

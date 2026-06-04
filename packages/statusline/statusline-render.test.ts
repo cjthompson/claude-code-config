@@ -11,13 +11,13 @@ import {
   stripAnsi,
   formatDuration,
   formatLocalTime,
+  formatTokenCount,
   cacheAge,
   shortenPath,
   progressBar,
   plTransition,
   plEnd,
   joinSep,
-  formatQuotaWindow,
 } from './statusline-render.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +51,46 @@ describe('formatDuration', () => {
   it('returns hours only when no remainder minutes', () => {
     strictEqual(formatDuration(3600), '1h');
     strictEqual(formatDuration(7200), '2h');
+  });
+});
+
+// ── formatTokenCount ──────────────────────────────────────────
+
+describe('formatTokenCount', () => {
+  it('returns "0" for zero', () => {
+    strictEqual(formatTokenCount(0), '0');
+  });
+
+  it('returns "0" for negative, NaN, or non-finite values', () => {
+    strictEqual(formatTokenCount(-5), '0');
+    strictEqual(formatTokenCount(NaN), '0');
+    strictEqual(formatTokenCount(Infinity), '0');
+  });
+
+  it('returns raw integer for values under 1000', () => {
+    strictEqual(formatTokenCount(1), '1');
+    strictEqual(formatTokenCount(500), '500');
+    strictEqual(formatTokenCount(999), '999');
+  });
+
+  it('formats thousands with K suffix', () => {
+    strictEqual(formatTokenCount(1000), '1K');
+    strictEqual(formatTokenCount(200000), '200K');
+  });
+
+  it('rounds non-round thousands to nearest integer K', () => {
+    strictEqual(formatTokenCount(199500), '200K');
+    strictEqual(formatTokenCount(199400), '199K');
+  });
+
+  it('formats round millions with integer M suffix', () => {
+    strictEqual(formatTokenCount(1_000_000), '1M');
+    strictEqual(formatTokenCount(2_000_000), '2M');
+  });
+
+  it('formats non-round millions with one decimal place', () => {
+    strictEqual(formatTokenCount(1_500_000), '1.5M');
+    strictEqual(formatTokenCount(2_300_000), '2.3M');
   });
 });
 
@@ -349,6 +389,100 @@ describe('end-to-end rendering', () => {
     const lines = result.trimEnd().split('\n');
     strictEqual(lines.length, 2);
     ok(stripAnsi(lines[1]).includes('75%'));
+
+    unlinkSync(cacheFile);
+  });
+
+  it('renders context window max in parentheses (200K)', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 25, resets_at: '2025-06-15T18:00:00Z' },
+      seven_day: { utilization: 10, resets_at: '2025-06-20T00:00:00Z' },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.50, total_duration_ms: 120000 },
+      context_window: {
+        used_percentage: 50,
+        context_window_size: 200000,
+        total_input_tokens: 100000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const now = String(Math.floor(Date.now() / 1000));
+    const result = execFileSync('node', [
+      '--experimental-strip-types',
+      renderScript,
+      cacheFile, now, '200', session, 'main',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+    ok(line1.includes('50'), `Expected '50' percentage in line 1, got: ${line1}`);
+    ok(line1.includes('(200K)'), `Expected '(200K)' in line 1, got: ${line1}`);
+
+    unlinkSync(cacheFile);
+  });
+
+  it('renders context window max as 1M for a million-token window', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 10 },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        used_percentage: 25,
+        context_window_size: 1_000_000,
+        total_input_tokens: 250000,
+        total_output_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const now = String(Math.floor(Date.now() / 1000));
+    const result = execFileSync('node', [
+      '--experimental-strip-types',
+      renderScript,
+      cacheFile, now, '200', session, '',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    ok(stripAnsi(result).includes('(1M)'));
+
+    unlinkSync(cacheFile);
+  });
+
+  it('omits context max when context_window_size is missing', () => {
+    const cacheData = JSON.stringify({
+      five_hour: { utilization: 25 },
+    });
+    writeFileSync(cacheFile, cacheData);
+
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cost: { total_cost_usd: 0.10, total_duration_ms: 30000 },
+      context_window: {
+        used_percentage: 25,
+        // no context_window_size
+        total_input_tokens: 5000,
+      },
+      cwd: '/tmp',
+    });
+
+    const now = String(Math.floor(Date.now() / 1000));
+    const result = execFileSync('node', [
+      '--experimental-strip-types',
+      renderScript,
+      cacheFile, now, '200', session, '',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
+    ok(line1.includes('25%'));
+    ok(!line1.includes('(0)'), `Should not render '(0)' when size is missing. Got: ${line1}`);
 
     unlinkSync(cacheFile);
   });

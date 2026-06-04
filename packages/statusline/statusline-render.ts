@@ -126,6 +126,16 @@ function formatLocalTime(isoStr: string): string {
   return `${h}:${m}${ampm}`;
 }
 
+function formatTokenCount(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}K`;
+  return String(Math.round(n));
+}
+
 function cacheAge(mtime: number): string {
   const ageSec = Math.floor(Date.now() / 1000) - mtime;
   return ageSec < 60 ? 'new' : `${Math.floor(ageSec / 60)}m old`;
@@ -159,6 +169,7 @@ export {
   stripAnsi,
   formatDuration,
   formatLocalTime,
+  formatTokenCount,
   cacheAge,
   shortenPath,
   shortenBranch,
@@ -334,8 +345,11 @@ function main(): void {
 
   if (ctx?.used_percentage != null) {
     const pct = Math.round(ctx.used_percentage);
+    const max = ctx.context_window_size > 0
+      ? ` ${GREEN_DIM}(${formatTokenCount(ctx.context_window_size)})${R_GREEN}`
+      : '';
     line1Segs.push({ section: 22, drop: 2, content:
-      ` ${WHITE}${circleIcon(pct)} ${pct}${PCT} ${R_GREEN}${progressBar(pct, BG_GREEN, 8)} ` });
+      ` ${WHITE}${circleIcon(pct)} ${pct}${PCT} ${R_GREEN}${progressBar(pct, BG_GREEN, 8)}${max} ` });
   }
 
   if (ctx?.total_input_tokens > 0 && ctx?.context_window_size > 0 && cost?.total_duration_ms > 60_000) {
