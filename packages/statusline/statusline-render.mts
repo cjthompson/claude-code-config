@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Claude Code statusline renderer — two-line powerline with session, environment, and quota info
-// Called by statusline.sh with args: <usage-cache-path> <cache-mtime> <term-width> <session-json> <git-branch>
+// Called by statusline.sh with args: <term-width> <session-json> <git-branch>
 
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { resolve, dirname } from 'path';
@@ -9,7 +9,6 @@ import { fileURLToPath } from 'url';
 // ── ANSI ──────────────────────────────────────────────────────
 const RST  = '\x1b[0m';
 const BOLD = '\x1b[1m';
-const DIM  = '\x1b[2m';
 
 const PL_RIGHT = '\u25b6'; // ▶
 const PL_SOFT  = '\u2502'; // │
@@ -227,11 +226,6 @@ function formatTokenCount(n: number): string {
   return String(Math.round(n));
 }
 
-function cacheAge(mtime: number): string {
-  const ageSec = Math.floor(Date.now() / 1000) - mtime;
-  return ageSec < 60 ? 'new' : `${Math.floor(ageSec / 60)}m old`;
-}
-
 // Shorten path: ~/dev/neat-core-js/.worktrees/sso → ~/d/n/.w/sso
 // Always shortens parent dirs: ~/dev/neat-core-js → ~/d/neat-core-js
 // Keeps only the last segment intact; shortens all parent dirs to first char (or .X for dotdirs)
@@ -263,7 +257,6 @@ export {
   formatDuration,
   formatLocalTime,
   formatTokenCount,
-  cacheAge,
   shortenPath,
   shortenBranch,
   progressBar,
@@ -353,7 +346,6 @@ export { renderPowerline, fitSegments, quotaSeg };
 // ── Quota line builder ────────────────────────────────────────
 function buildQuotaLine(
   data: Record<string, any>,
-  cacheMtime: number,
   barWidth: number,
   maxWidth: number,
 ): string {
@@ -364,7 +356,6 @@ function buildQuotaLine(
   const sevenDayFull = data.seven_day?.resets_at
     ? `${new Date(data.seven_day.resets_at).toLocaleDateString('en-US', { weekday: 'short' })} ${formatLocalTime(data.seven_day.resets_at)}`
     : '';
-  const ageStr = ` ${DIM}${GRAY_FG}(${cacheAge(cacheMtime)})${R_DARK} `;
   const sep2 = joinSep(BG_DARK, 240);
 
   const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, `${FIVE}h`, CYAN_FG, batteryIcon, { bar: bar ? barWidth : undefined, reset });
@@ -376,7 +367,6 @@ function buildQuotaLine(
   };
 
   const tiers = [
-    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull), ageStr]),
     wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),
     wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),
     wrapL2([f(true, fiveHrTime),      s(true, '')]),
@@ -393,16 +383,24 @@ export { buildQuotaLine };
 
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
-  const usageCachePath = process.argv[2];
-  const cacheMtime = Number(process.argv[3]);
-  const termWidth = Number(process.argv[4]);
-  const session: Record<string, any> = JSON.parse(process.argv[5] || '{}');
-  const gitBranch = process.argv[6] ?? '';
-  const hasUsage = process.argv[7] === 'true';
+  const termWidth = Number(process.argv[2]);
+  const session: Record<string, any> = JSON.parse(process.argv[3] || '{}');
+  const gitBranch = process.argv[4] ?? '';
 
-  const data: Record<string, any> = hasUsage
-    ? JSON.parse(readFileSync(usageCachePath, 'utf8'))
-    : {};
+  // Normalise session.rate_limits (Unix timestamps, used_percentage) into the
+  // shape buildQuotaLine expects (ISO resets_at strings, utilization field).
+  const rl = session.rate_limits;
+  const data: Record<string, any> = rl ? {
+    five_hour: rl.five_hour ? {
+      utilization: rl.five_hour.used_percentage,
+      resets_at: new Date(rl.five_hour.resets_at * 1000).toISOString(),
+    } : undefined,
+    seven_day: rl.seven_day ? {
+      utilization: rl.seven_day.used_percentage,
+      resets_at: new Date(rl.seven_day.resets_at * 1000).toISOString(),
+    } : undefined,
+  } : {};
+  const hasUsage = !!(rl?.five_hour || rl?.seven_day);
 
   // Config is read on every render (the renderer is spawned fresh per cycle).
   // existsSync short-circuits the common case where no file exists, avoiding
@@ -515,7 +513,7 @@ function main(): void {
   // ════════════════════════════════════════════════════════════════
 
   const line2 = (hasUsage && isSectionEnabled(config, SECTION.LINE2))
-    ? buildQuotaLine(data, cacheMtime, barWidth, maxWidth)
+    ? buildQuotaLine(data, barWidth, maxWidth)
     : '';
 
   // ════════════════════════════════════════════════════════════════
