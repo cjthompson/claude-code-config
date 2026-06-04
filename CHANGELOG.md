@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.27 - 2026-06-03
+
+### Features
+- Statusline now supports per-model context-window size overrides via `~/.claude/statusline-config.json`. Configure custom window sizes with a `modelContextWindows` map (e.g. `{"Claude Sonnet 4.6": 200000}`). The percentage calculation is now token-based, accounting for cache tokens: `round((input_tokens + cache_creation_input_tokens + cache_read_input_tokens) / context_window_size * 100)`, with fallback to `used_percentage` for backward compatibility. New functions `resolveContextWindowSize` and `computeUsedPct` are exported and tested. Adds 18 new tests (7 + 10 unit + 1 E2E).
+
 ## v0.0.26 - 2026-06-03
 
 ### Features
