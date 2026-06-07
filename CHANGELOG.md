@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.32 - 2026-06-07
+
+### Features
+- **project-tasks**: replace the single-line `git remote || basename` project lookup with a 3-tier mechanism — Tier 1 walks up from cwd to the git toplevel (or `/` when not in a git repo) looking for `.claude/project-tasks.json`; Tier 2 falls back to a normalized git remote URL (matches `normalizeProject()` in `task-db.mjs`, so SSH/HTTPS/with-or-without-`.git` collapse to the same key); Tier 3 falls back to the git toplevel basename in git repos only. When all three tiers return empty, the skill now prompts the user to provide a name and offers to create `.claude/project-tasks.json` — preventing the silent directory-basename fallback that fragmented task lists across agents and worktrees. Project reads trim whitespace and tolerate malformed JSON; project writes use `JSON.stringify` so quoted/escaped names round-trip correctly. README updated.
+- **project-tasks**: new test `test-project-discovery.md` covers all four scenarios (file at project root, file at project root with nested cwd, no file with git remote, no file and no git).
+
 ## v0.0.31 - 2026-06-04
 
 ### Features
