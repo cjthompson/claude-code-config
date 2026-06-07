@@ -80,9 +80,83 @@ node ~/.claude/task-db.mjs init
 
 3. Determine the project identifier:
 ```bash
-git remote get-url origin 2>/dev/null | sed 's/\.git$//' || basename "$(git rev-parse --show-toplevel)"
+# Resolve the walk-up boundary first: stop at git toplevel if we're in a
+# git repo, otherwise stop at the filesystem root. This prevents the loop
+# from leaking into a parent's .claude/project-tasks.json when the user
+# is in a deeply nested subdirectory of an unrelated project tree.
+WALK_BOUNDARY="/"
+if command -v git >/dev/null 2>&1; then
+  GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$GIT_TOPLEVEL" ]; then
+    WALK_BOUNDARY="$GIT_TOPLEVEL"
+  fi
+fi
+
+# Tier 1: walk up from cwd to WALK_BOUNDARY looking for .claude/project-tasks.json
+# Loop logic: keep walking while we have a directory above us. We check
+# $dir itself for the file (so the boundary IS searched), then advance
+# via dirname. If the next dirname would cross the boundary, stop.
+dir=$(pwd)
+PROJECT=""
+while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+  if [ -f "$dir/.claude/project-tasks.json" ]; then
+    PROJECT=$(node -e "const j=require(process.argv[1]); const v=((j.projectName||'')+'').trim(); process.stdout.write(v)" "$dir/.claude/project-tasks.json" 2>/dev/null)
+    [ -n "$PROJECT" ] && break
+  fi
+  # Stop after checking the boundary directory itself
+  if [ "$dir" = "$WALK_BOUNDARY" ]; then break; fi
+  parent=$(dirname "$dir")
+  # If dirname didn't advance (already at root), stop
+  if [ "$parent" = "$dir" ]; then break; fi
+  dir="$parent"
+done
+
+# Tier 2: git remote URL, normalized to host/owner/repo form
+if [ -z "$PROJECT" ]; then
+  RAW_REMOTE=$(git remote get-url origin 2>/dev/null)
+  if [ -n "$RAW_REMOTE" ]; then
+    PROJECT=$(printf '%s' "$RAW_REMOTE" \
+      | sed -E 's#^git@([^:]+):#\1/#; s#^https?://##; s#\.git$##; s#/$##')
+  fi
+fi
+
+# Tier 3: git toplevel basename — fires only when the project IS a git repo.
+# In a no-git directory Tier 3 returns empty and the onboarding prompt
+# takes over; this is the only path that may use a directory basename.
+if [ -z "$PROJECT" ]; then
+  PROJECT=$(git rev-parse --show-toplevel 2>/dev/null | xargs basename 2>/dev/null)
+fi
 ```
-Store this value as `$PROJECT` for use in all subsequent commands.
+Store this value as `$PROJECT` for use in all subsequent commands. The Tier 2 normalization (stripping the `git@host:` SSH prefix, the `https?://` prefix, any trailing `.git`, and any trailing `/`) matches the DB layer's `normalizeProject` function in `task-db.mjs`, so SSH/HTTPS/with-or-without-`.git` all collapse to the same key.
+
+   **Onboarding prompt (only if `$PROJECT` is empty after all three tiers):**
+
+   The skill should ask the user to provide a project name and offer to create `.claude/project-tasks.json` so future invocations don't repeat this prompt. Use AskUserQuestion:
+
+   > No `.claude/project-tasks.json` found in this directory or any parent, and no git remote is configured.
+   >
+   > Without an explicit project name, the task list can fragment across agents and worktrees.
+   >
+   > What name should this project use? (e.g. `github.com/acme/core` or just `acme`)
+
+   Then ask whether to create the file. The destination path is the git toplevel if available, else the cwd:
+
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   ```
+
+   > Create `.claude/project-tasks.json` at `$PROJECT_ROOT/.claude/project-tasks.json` with `{ "projectName": "<name>" }`?
+   >
+   > a) Yes, create and commit (recommended for shared projects)
+   > b) Yes, create but don't commit (for personal config)
+   > c) No, just use the name for this session
+
+   If the user picks (a) or (b), write the file:
+   ```bash
+   mkdir -p "$PROJECT_ROOT/.claude"
+   node -e "require('fs').writeFileSync(process.argv[2], JSON.stringify({projectName: process.argv[1]}, null, 2)+'\n')" "$PROJECT" "$PROJECT_ROOT/.claude/project-tasks.json"
+   ```
+   If the user picked (a), also stage it: `git -C "$PROJECT_ROOT" add .claude/project-tasks.json` (do not auto-commit — leave that for the user).
 
 ## Persistent Task List Helper
 
