@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.34 - 2026-06-12
+
+### Features
+- **tests**: add `tests/` directory infrastructure mirroring `plugins/` and `packages/` layout, with `README.md`, `index.md`, and `test-results.md` in each subdirectory. Textual plugin gets `test-textual-css-reference.md` and `test-textual-api-reference.md` with MUST/MUST NOT acceptance criteria.
+- **skill-testing**: new package with `SKILL.md` documenting the full skill-testing process — directory structure, scenario file format, baseline (RED) + GREEN test runs, and PASS/FAIL/PARTIAL evaluation criteria.
+
 ## v0.0.33 - 2026-06-12
 
 ### Features
