@@ -39,6 +39,14 @@
             "version": "1.0.0",
             "keywords": ["rust", "coding", "idioms", "traits"],
             "category": "development"
+        },
+        {
+            "name": "textual",
+            "source": "./plugins/textual",
+            "description": "Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes.",
+            "version": "1.0.0",
+            "keywords": ["textual", "tui", "python", "css", "widgets"],
+            "category": "development"
         }
     ]
 }
