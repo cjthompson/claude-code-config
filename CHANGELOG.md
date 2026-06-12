@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.37 - 2026-06-12
+
+### Tests
+- **textual/test-textual-css-reference**: expand from 4 to 10 scenarios; 6 new tests cover the "adjacent property" and "wrong value" failure modes that cause app crashes: display values, grid-columns vs grid-template-columns, text-style vs font-*, overflow axis requirement, margin: auto invalidity, and Textual-specific border styles.
+
 ## v0.0.36 - 2026-06-12
 
 ### Tests
