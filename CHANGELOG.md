@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.33 - 2026-06-12
+
+### Features
+- **textual**: new plugin with two reference skills — `textual-css-reference` (valid CSS properties, types, invalid properties, and common mistakes) and `textual-api-reference` (complete built-in widget reference covering all widgets with reactive attributes, constructor parameters, and messages emitted). Registered in marketplace.json.
+
 ## v0.0.32 - 2026-06-07
 
 ### Features
