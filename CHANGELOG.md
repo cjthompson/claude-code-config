@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.35 - 2026-06-12
+
+### Fixes
+- **textual/textual-api-reference**: validated all 37 widgets against official docs; removed 5 fabricated messages/attributes, corrected 10 wrong defaults, fixed 6 wrong APIs, added ListItem (missing widget), Footer reactive attrs, shared attributes section, and ToggleButton base documentation.
+
 ## v0.0.34 - 2026-06-12
 
 ### Features
