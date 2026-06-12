@@ -1,0 +1,6 @@
+{
+    "label": "Skill Testing",
+    "description": "Structured approach for creating test scenarios, running baseline/GREEN passes, and verifying SKILL.md behavior changes.",
+    "type": "skill",
+    "files": ["SKILL.md"]
+}
