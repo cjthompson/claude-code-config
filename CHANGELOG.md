@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.36 - 2026-06-12
+
+### Tests
+- **textual/test-textual-api-reference**: revamp 4 existing scenarios (Button label default, Input Blurred message) and add 4 new ones covering Select sentinel/message fabrication, ContentSwitcher message fabrication, Footer reactive attrs, and Toast creation pattern.
+
 ## v0.0.35 - 2026-06-12
 
 ### Fixes
