@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.38 - 2026-06-12
+
+### Features
+- **skill-testing**: add Haiku judge agent as the authoritative verification step. After every run (baseline and GREEN) a separate Haiku subagent checks each MUST/MUST NOT item against the response text, quotes evidence, and returns a PASS/FAIL/PARTIAL verdict. Orchestrating agent no longer judges output itself. Adds full judge prompt template and updates Running Tests steps.
+
 ## v0.0.37 - 2026-06-12
 
 ### Tests
