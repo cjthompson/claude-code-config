@@ -361,6 +361,8 @@ Renders a Markdown string as rich formatted text.
 ### MarkdownViewer
 Interactive Markdown with table of contents and navigation history.
 
+**Import:** `from textual.widgets import MarkdownViewer`
+
 | Attribute | Type | Default |
 |-----------|------|---------|
 | `show_table_of_contents` | `bool` | `True` |
@@ -428,6 +430,8 @@ Expandable/collapsible container with a title bar.
 
 ### ContentSwitcher
 Shows one child widget at a time; switch by widget ID.
+
+**Import:** `from textual.widgets import ContentSwitcher` (NOT `textual.containers`)
 
 | Attribute | Type | Default | Notes |
 |-----------|------|---------|-------|

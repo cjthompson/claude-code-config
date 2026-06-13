@@ -23,3 +23,12 @@ For test scenarios, see:
 | 2026-06-13 | Progressive Step 5 — RichLog message area | GREEN: CSS ✅ / Code ✅ | PASS — identical approach, TIE |
 | 2026-06-13 | Progressive Step 6 — CSS styling | Baseline: CSS ✅ / Runtime ✅ | PASS — used Header { height: 2; } in CSS, text-style: bold, border: round |
 | 2026-06-13 | Progressive Step 6 — CSS styling | GREEN: CSS ✅ / Runtime ❌ | FAIL — skill said tall=True works in Header constructor; actual error: TypeError unexpected keyword argument. Baseline's CSS approach worked. Skill corrected. |
+| 2026-06-13 | Progressive Step 7 — Collapsible sidebar | Baseline: ✅ / Code ✅ | PASS — collapsed=False, title="Users", Ctrl+B toggle |
+| 2026-06-13 | Progressive Step 7 — Collapsible sidebar | GREEN: ✅ / Code ✅ | PASS — identical approach, TIE |
+| 2026-06-13 | Progressive Step 8 — Select filter dropdown | Baseline: CSS ✅ / Code ❌ | FAIL — used `Select.BLANK` (nonexistent); correct sentinel is `Select.NULL` |
+| 2026-06-13 | Progressive Step 8 — Select filter dropdown | GREEN: CSS ✅ / Code ✅ | PASS — used `Select.NULL`, guarded correctly |
+| 2026-06-13 | Progressive Step 9 — Markdown help panel | Baseline: CSS ✅ / Code ✅ | PASS — correct ContentSwitcher.current, import from textual.widgets, show_table_of_contents=True |
+| 2026-06-13 | Progressive Step 9 — Markdown help panel | GREEN v1: Import ❌ | FAIL — ContentSwitcher imported from textual.containers (wrong module). Skill updated with import path. |
+| 2026-06-13 | Progressive Step 9 — Markdown help panel | GREEN v2 (skill fixed): CSS ✅ / Code ✅ | PASS — correct import after skill added import note |
+| 2026-06-13 | Progressive Step 10 — ProgressBar + notifications | Baseline: CSS ✅ / Code ✅ | PASS — total=100, advance(), self.notify(), @work |
+| 2026-06-13 | Progressive Step 10 — ProgressBar + notifications | GREEN: CSS ✅ / Code ✅ | PASS — identical approach, TIE |
