@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.40 - 2026-06-13
+
+### Features
+- **tests/textual**: add `run_textual_test.py` — headless Textual CSS test runner using `run_test()` harness; exits 0 on clean CSS, exits 1 with exact property errors and line numbers
+- **tests/textual**: add `test-textual-app-progressive.md` — 10-step progressive test suite building a real Textual chat app; validates both CSS correctness (via runner) and widget API usage (via Haiku judge); replaces knowledge-retrieval prompts with task-based coding prompts that simulate actual agent usage
+
 ## v0.0.39 - 2026-06-13
 
 ### Fixes
