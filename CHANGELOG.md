@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.39 - 2026-06-13
+
+### Fixes
+- **tests/textual**: record first two CSS test runs; fix grid scenario (prompt now covers rows + columns; MUST NOT items now say "recommended as correct" not "appears in response")
+- **skill-testing**: add two MUST/MUST NOT authoring rules discovered during live test runs: MUST items must be naturally triggered by the prompt; MUST NOT items must be phrased as "recommended as correct" to avoid false failures when agents correctly call out wrong properties
+
 ## v0.0.38 - 2026-06-12
 
 ### Features
