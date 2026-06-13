@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.41 - 2026-06-13
+
+### Fixes
+- **textual-api-reference**: add explicit import module notes for `ContentSwitcher` (`from textual.widgets`, NOT `textual.containers`) and `MarkdownViewer` — live Step 9 test caught an ImportError from the wrong module
+- **tests/textual**: record Steps 8–10 progressive test results; Step 8 caught `Select.BLANK` hallucination (GREEN correctly used `Select.NULL`); Step 9 caught wrong ContentSwitcher import; Step 10 was a TIE (both approaches correct)
+
 ## v0.0.40 - 2026-06-13
 
 ### Features
