@@ -48,9 +48,9 @@ tests/
 - an invalid approach the skill explicitly forbids
 ```
 
-**MUST Contain items come from the skill itself** — they are the exact facts, names, and values the SKILL.md explicitly teaches. If it's not in the skill, it can't be a MUST.
+**MUST Contain items come from the skill itself** — they are the exact facts, names, and values the SKILL.md explicitly teaches. If it's not in the skill, it can't be a MUST. MUST items must be naturally triggered by the prompt — if the prompt doesn't invite a topic, don't add a MUST for it.
 
-**MUST NOT items come from the baseline run** — they are the specific wrong things unguided agents say. Don't write MUST NOT items before running baseline.
+**MUST NOT items come from the baseline run** — they are the specific wrong things unguided agents say. Don't write MUST NOT items before running baseline. Phrase them as **recommended as correct**, not merely **mentioned** — an agent that says "don't use `display: flex`" has not violated a MUST NOT about `display: flex`. Write: "`display: flex` recommended as a working approach" not "`display: flex` appears in response".
 
 ## Running Tests
 

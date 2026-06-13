@@ -82,17 +82,17 @@
 # Test: grid layout — correct property names
 
 ## Prompt
-"How do I define column widths in a Textual grid layout? I want two columns, one twice as wide as the other."
+"How do I set up a Textual grid layout with two columns (one twice as wide as the other) and two equal rows?"
 
 ## MUST Contain
 - `layout: grid` to enable grid layout
-- `grid-columns: 1fr 2fr` as the correct property name for column widths
-- `grid-rows` as the correct property name for row heights (not `grid-template-rows`)
+- `grid-columns: 1fr 2fr` as the correct property for column widths
+- `grid-rows` as the correct property for row heights
 
 ## MUST NOT Contain
-- `grid-template-columns` as a property name (this is CSS3 — Textual uses `grid-columns`)
-- `grid-template-rows` as a property name (Textual uses `grid-rows`)
-- `display: grid` as the way to enable grid layout
+- `grid-template-columns` recommended as the correct property to use (warning against it is fine)
+- `grid-template-rows` recommended as the correct property to use (warning against it is fine)
+- `display: grid` recommended as the way to enable grid layout
 
 ---
 
