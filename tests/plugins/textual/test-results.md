@@ -17,3 +17,9 @@ For test scenarios, see:
 | 2026-06-13 | Progressive Step 2 — Two-column grid | GREEN: CSS ✅ / Code ✅ | PASS |
 | 2026-06-13 | Progressive Step 3 — Input + Button row | Baseline: CSS ✅ / Code ⚠️ | PARTIAL — used Horizontal() container but no `layout: horizontal` in CSS; `height: auto` not `height: 1` |
 | 2026-06-13 | Progressive Step 3 — Input + Button row | GREEN: CSS ✅ / Code ✅ | PASS — explicit `layout: horizontal` in CSS, `height: 1`, `value = ""` to clear (skill guidance followed) |
+| 2026-06-13 | Progressive Step 4 — DataTable in sidebar | Baseline: CSS ✅ / Code ✅ | PASS — correct cursor_type="row", zebra_stripes, add_columns/add_rows |
+| 2026-06-13 | Progressive Step 4 — DataTable in sidebar | GREEN: CSS ✅ / Code ✅ | PASS — used individual add_column with explicit keys |
+| 2026-06-13 | Progressive Step 5 — RichLog message area | Baseline: CSS ✅ / Code ✅ | PASS — RichLog, markup=True, auto_scroll=True, Input.Submitted handled |
+| 2026-06-13 | Progressive Step 5 — RichLog message area | GREEN: CSS ✅ / Code ✅ | PASS — identical approach, TIE |
+| 2026-06-13 | Progressive Step 6 — CSS styling | Baseline: CSS ✅ / Runtime ✅ | PASS — used Header { height: 2; } in CSS, text-style: bold, border: round |
+| 2026-06-13 | Progressive Step 6 — CSS styling | GREEN: CSS ✅ / Runtime ❌ | FAIL — skill said tall=True works in Header constructor; actual error: TypeError unexpected keyword argument. Baseline's CSS approach worked. Skill corrected. |

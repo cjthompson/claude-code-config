@@ -526,6 +526,14 @@ Application title bar, typically docked at top.
 | `icon` | `str` | `"⭘"` | Icon character at top-left |
 | `time_format` | `str` | `"%X"` | Clock display format |
 
+**`tall` cannot be passed to the constructor** — set it after mount or via CSS:
+```python
+# In on_mount:
+self.query_one(Header).tall = True
+# Or in CSS:
+Header { height: 2; }
+```
+
 **`show_clock` does not exist** — a common hallucination. The clock is always shown; control its format with `time_format`.
 
 ---
