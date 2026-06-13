@@ -526,6 +526,8 @@ Application title bar, typically docked at top.
 | `icon` | `str` | `"⭘"` | Icon character at top-left |
 | `time_format` | `str` | `"%X"` | Clock display format |
 
+**`show_clock` does not exist** — a common hallucination. The clock is always shown; control its format with `time_format`.
+
 ---
 
 ### Footer
