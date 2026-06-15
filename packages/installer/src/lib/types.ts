@@ -6,14 +6,16 @@ export interface PackageItem {
     needsUpgrade?: boolean;
     /** Installed file exists and hash matches source — content is up-to-date */
     isCurrent?: boolean;
-    /** Absolute path to source (for skills: the skill dir, for files: the source file) */
+    /** Absolute path to source (for skills: the skill dir, for files/agents: the source file) */
     sourcePath?: string;
     /** Description shown in the info overlay (from SKILL.md or manifest) */
     description?: string;
-    /** Type label shown in info overlay header, e.g. "Skill" or "Package" */
+    /** Type label shown in info overlay header, e.g. "Skill", "Package", or "Agent" */
     typeLabel?: string;
     /** Whether this installed item is queued for removal */
     markedForRemoval?: boolean;
+    /** For plugin descriptors: distinguishes how the item is installed */
+    itemType?: "skill" | "file" | "agent";
 }
 
 /**
@@ -48,7 +50,7 @@ export interface PackageDescriptor {
     id: string;
     label: string;
     description: string;
-    type: "skills" | "files";
+    type: "skills" | "files" | "plugin";
     enabled: boolean;
     items: PackageItem[];
     /** Absolute path to the package directory */

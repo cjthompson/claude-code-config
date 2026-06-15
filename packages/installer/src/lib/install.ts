@@ -1,13 +1,17 @@
 import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { InstallResult, PackageDescriptor, PackageItem } from "./types.ts";
+import type { InstallResult, PackageDescriptor } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
 const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
+const AGENTS_INSTALL_DIR = join(CLAUDE_DIR, "agents");
 
 export async function installPackage(
     pkg: PackageDescriptor,
 ): Promise<InstallResult[]> {
+    if (pkg.type === "plugin") {
+        return installPlugin(pkg);
+    }
     if (pkg.type === "skills") {
         return installSkills(pkg);
     }
@@ -17,10 +21,85 @@ export async function installPackage(
 export async function removePackage(
     pkg: PackageDescriptor,
 ): Promise<InstallResult[]> {
+    if (pkg.type === "plugin") {
+        return removePlugin(pkg);
+    }
     if (pkg.type === "skills") {
         return removeSkills(pkg);
     }
     return removeFiles(pkg);
+}
+
+async function installPlugin(
+    pkg: PackageDescriptor,
+): Promise<InstallResult[]> {
+    await mkdir(SKILLS_INSTALL_DIR, { recursive: true });
+    await mkdir(AGENTS_INSTALL_DIR, { recursive: true });
+    const results: InstallResult[] = [];
+
+    for (const item of pkg.items) {
+        if (!item.enabled || !item.sourcePath) continue;
+
+        try {
+            if (item.itemType === "skill") {
+                const target = join(SKILLS_INSTALL_DIR, item.name);
+                await symlinkItem(item.sourcePath, target);
+                results.push({ packageId: pkg.id, itemName: item.name, status: "created", message: `Linked: ${item.name}` });
+            } else if (item.itemType === "agent") {
+                const target = join(AGENTS_INSTALL_DIR, item.name);
+                await symlinkItem(item.sourcePath, target);
+                results.push({ packageId: pkg.id, itemName: item.name, status: "created", message: `Linked agent: ${item.name}` });
+            } else {
+                // file
+                const dest = join(CLAUDE_DIR, item.name);
+                const existed = await stat(dest).then(() => true, () => false);
+                await mkdir(dirname(dest), { recursive: true });
+                await copyFile(item.sourcePath, dest);
+                results.push({ packageId: pkg.id, itemName: item.name, status: existed ? "updated" : "created", message: existed ? `Updated: ${item.name}` : `Copied: ${item.name}` });
+            }
+        } catch (err) {
+            results.push({ packageId: pkg.id, itemName: item.name, status: "error", message: `${item.name}: ${(err as Error).message}` });
+        }
+    }
+
+    return results;
+}
+
+async function removePlugin(
+    pkg: PackageDescriptor,
+): Promise<InstallResult[]> {
+    const results: InstallResult[] = [];
+
+    for (const item of pkg.items) {
+        if (!item.markedForRemoval) continue;
+
+        try {
+            if (item.itemType === "skill") {
+                await unlink(join(SKILLS_INSTALL_DIR, item.name));
+            } else if (item.itemType === "agent") {
+                await unlink(join(AGENTS_INSTALL_DIR, item.name));
+            } else {
+                await unlink(join(CLAUDE_DIR, item.name));
+            }
+            results.push({ packageId: pkg.id, itemName: item.name, status: "removed", message: `Removed: ${item.name}` });
+        } catch (err) {
+            results.push({ packageId: pkg.id, itemName: item.name, status: "error", message: `${item.name}: ${(err as Error).message}` });
+        }
+    }
+
+    return results;
+}
+
+/** Create a symlink at `target` pointing to `sourcePath`, replacing any existing entry. */
+async function symlinkItem(sourcePath: string, target: string): Promise<void> {
+    try {
+        const linkTarget = await readlink(target);
+        if (resolve(dirname(target), linkTarget) === resolve(sourcePath)) return;
+    } catch {
+        // Not a symlink or doesn't exist
+    }
+    await unlink(target).catch(() => {});
+    await symlink(sourcePath, target);
 }
 
 async function removeSkills(

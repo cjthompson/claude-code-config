@@ -428,7 +428,7 @@ When the scout completes, dispatch the executor as another **background** subage
 
 ```
 Agent tool parameters:
-  subagent_type: "general-purpose"
+  subagent_type: "lean-executor"
   model: "haiku"
   run_in_background: true
   description: "Execute: #{SEQ} {short_title}"
@@ -601,7 +601,7 @@ When user says "check task #NNN":
 node ~/.claude/task-db.mjs get --project "..." --seq N
 ```
 
-2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "general-purpose"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
+2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.

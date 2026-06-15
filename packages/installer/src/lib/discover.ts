@@ -5,6 +5,7 @@ import type { DetectSpec, PackageDescriptor, PackageItem, PackageManifest } from
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
 const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
+const AGENTS_INSTALL_DIR = join(CLAUDE_DIR, "agents");
 
 export async function discoverPackages(
     repoRoot: string,
@@ -34,9 +35,9 @@ export async function discoverPackages(
         if (pkg) packages.push(pkg);
     }
 
-    // Discover skills from plugins/ (Claude Code plugin format)
-    const pluginsPkg = await discoverPluginSkills(repoRoot);
-    if (pluginsPkg) packages.push(pluginsPkg);
+    // Discover skills, files, and agents from plugins/ (Claude Code plugin format)
+    const pluginPkgs = await discoverPlugins(repoRoot);
+    packages.push(...pluginPkgs);
 
     packages.sort((a, b) => a.label.localeCompare(b.label));
     return packages;
@@ -163,58 +164,121 @@ async function discoverFilesPackage(
 }
 
 /**
- * Discover skills from plugins/ directory (Claude Code plugin format).
- * Each plugin at plugins/<name>/ may contain skills/<skillName>/SKILL.md.
+ * Discover plugins/ directory (Claude Code plugin format).
+ * Each plugin at plugins/<name>/ may contain:
+ *   - skills/<skillName>/SKILL.md   → skill items (symlinked to ~/.claude/skills/)
+ *   - manifest.json files[]         → file items (copied to ~/.claude/)
+ *   - agents/<name>.md              → agent items (symlinked to ~/.claude/agents/)
+ * Returns one PackageDescriptor per plugin.
  */
-async function discoverPluginSkills(
+async function discoverPlugins(
     repoRoot: string,
-): Promise<PackageDescriptor | null> {
+): Promise<PackageDescriptor[]> {
     const pluginsDir = join(repoRoot, "plugins");
-    if (!(await exists(pluginsDir))) return null;
+    if (!(await exists(pluginsDir))) return [];
 
     const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
-    const items: PackageItem[] = [];
+    const descriptors: PackageDescriptor[] = [];
 
     for (const pluginEntry of pluginEntries) {
         if (!pluginEntry.isDirectory()) continue;
+        const pluginDir = join(pluginsDir, pluginEntry.name);
+        const items: PackageItem[] = [];
 
-        const skillsDir = join(pluginsDir, pluginEntry.name, "skills");
-        if (!(await exists(skillsDir))) continue;
-
-        const skillEntries = await readdir(skillsDir, { withFileTypes: true });
-        for (const skillEntry of skillEntries) {
-            if (!skillEntry.isDirectory()) continue;
-            const skillPath = join(skillsDir, skillEntry.name);
-            const skillMd = join(skillPath, "SKILL.md");
-
-            if (!(await exists(skillMd))) continue;
-
-            const installed = await isSkillInstalled(skillEntry.name);
-            const description = await extractSkillDescription(skillMd);
-            items.push({
-                name: skillEntry.name,
-                sourcePath: skillPath,
-                enabled: !installed,
-                alreadyInstalled: installed,
-                description,
-                typeLabel: "Skill",
-            });
+        // Skills
+        const skillsDir = join(pluginDir, "skills");
+        if (await exists(skillsDir)) {
+            const skillEntries = await readdir(skillsDir, { withFileTypes: true });
+            for (const skillEntry of skillEntries) {
+                if (!skillEntry.isDirectory()) continue;
+                const skillPath = join(skillsDir, skillEntry.name);
+                const skillMd = join(skillPath, "SKILL.md");
+                if (!(await exists(skillMd))) continue;
+                const installed = await isSkillInstalled(skillEntry.name);
+                const description = await extractSkillDescription(skillMd);
+                items.push({
+                    name: skillEntry.name,
+                    sourcePath: skillPath,
+                    enabled: !installed,
+                    alreadyInstalled: installed,
+                    description,
+                    typeLabel: "Skill",
+                    itemType: "skill",
+                });
+            }
         }
+
+        // Files from manifest.json
+        const manifestPath = join(pluginDir, "manifest.json");
+        if (await exists(manifestPath)) {
+            const manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as { files?: string[]; description?: string };
+            for (const file of manifest.files ?? []) {
+                const dest = join(CLAUDE_DIR, file);
+                const src = join(pluginDir, file);
+                const installed = await exists(dest);
+                let needsUpgrade = false;
+                if (installed && !(await isSymlinkIntoRepo(dest, repoRoot))) {
+                    needsUpgrade = (await fileHash(src)) !== (await fileHash(dest));
+                }
+                items.push({
+                    name: file,
+                    sourcePath: src,
+                    enabled: !installed || needsUpgrade,
+                    alreadyInstalled: installed && !needsUpgrade,
+                    needsUpgrade,
+                    description: manifest.description ?? `File: ${file}`,
+                    typeLabel: "File",
+                    itemType: "file",
+                });
+            }
+        }
+
+        // Agents
+        const agentsDir = join(pluginDir, "agents");
+        if (await exists(agentsDir)) {
+            const agentEntries = await readdir(agentsDir, { withFileTypes: true });
+            for (const agentEntry of agentEntries) {
+                if (!agentEntry.isFile() || !agentEntry.name.endsWith(".md")) continue;
+                const agentPath = join(agentsDir, agentEntry.name);
+                const installed = await exists(join(AGENTS_INSTALL_DIR, agentEntry.name));
+                items.push({
+                    name: agentEntry.name,
+                    sourcePath: agentPath,
+                    enabled: !installed,
+                    alreadyInstalled: installed,
+                    description: `Custom agent type: ${agentEntry.name.replace(".md", "")}`,
+                    typeLabel: "Agent",
+                    itemType: "agent",
+                });
+            }
+        }
+
+        if (items.length === 0) continue;
+        items.sort((a, b) => a.name.localeCompare(b.name));
+
+        // Read plugin.json for label and description
+        const pluginJsonPath = join(pluginDir, ".claude-plugin", "plugin.json");
+        let label = pluginEntry.name;
+        let description = "";
+        if (await exists(pluginJsonPath)) {
+            const pluginJson = JSON.parse(await readFile(pluginJsonPath, "utf-8")) as { name?: string; description?: string };
+            label = pluginJson.name ?? label;
+            description = pluginJson.description ?? "";
+        }
+
+        descriptors.push({
+            id: `plugin:${pluginEntry.name}`,
+            label,
+            description,
+            type: "plugin",
+            enabled: items.some((i) => i.enabled),
+            items,
+            packageDir: pluginDir,
+            manifest: { label, description, type: "skills" },
+        });
     }
 
-    if (items.length === 0) return null;
-    items.sort((a, b) => a.name.localeCompare(b.name));
-
-    return {
-        id: "plugins",
-        label: "Skills",
-        description: "Skills from Claude Code plugins",
-        type: "skills",
-        enabled: items.some((i) => i.enabled),
-        items,
-        packageDir: pluginsDir,
-        manifest: { label: "Skills", description: "Skills from Claude Code plugins", type: "skills" },
-    };
+    return descriptors;
 }
 
 /** Check if a skill is installed: exists in ~/.claude/skills/ (any symlink or directory). */
