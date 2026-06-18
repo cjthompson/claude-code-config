@@ -1,0 +1,23 @@
+{
+    "name": "deep-planning",
+    "version": "1.0.0",
+    "description": "Long-term project planning for multi-day or multi-week implementation work.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["planning", "long-term", "deep"],
+    "interface": {
+        "displayName": "Deep Planning",
+        "shortDescription": "Placeholder for long-term planning workflows.",
+        "longDescription": "Deep Planning is represented in the Codex marketplace for parity with the repository's plugin directories, but this plugin currently has no Codex skill content.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Planning"],
+        "defaultPrompt": [
+            "Create a multi-week implementation plan.",
+            "Break this project into milestones.",
+            "Plan this large refactor."
+        ]
+    }
+}

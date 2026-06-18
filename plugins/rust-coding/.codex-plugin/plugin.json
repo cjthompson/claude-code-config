@@ -1,0 +1,24 @@
+{
+    "name": "rust-coding",
+    "version": "1.0.0",
+    "description": "Guide the agent in writing idiomatic Rust with strong data modeling and build practices.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["rust", "coding", "idioms", "traits"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Rust Coding",
+        "shortDescription": "Idiomatic Rust guidance for data modeling, traits, macros, and modules.",
+        "longDescription": "Rust Coding provides practical guidance for Rust projects, including ownership-aware data modeling, trait implementations, module boundaries, documentation, macro usage, and build-speed practices.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Coding", "Rust", "Review"],
+        "defaultPrompt": [
+            "Review this Rust API design.",
+            "Make this Rust code more idiomatic.",
+            "Help model this Rust state machine."
+        ]
+    }
+}

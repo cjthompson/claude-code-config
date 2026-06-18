@@ -1,8 +1,8 @@
 # claude-code-config
 
-Custom configurations for Claude Code — skills, statusline, and an interactive installer. Also a plugin marketplace for easy one-command skill installation.
+Custom configurations for Claude Code and Codex — skills, statusline, and an interactive installer. Also provides plugin marketplaces for easy skill installation.
 
-## Plugin Marketplace
+## Claude Code Plugin Marketplace
 
 Install skills directly using Claude Code's built-in plugin system:
 
@@ -12,7 +12,7 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
-### Available plugins
+### Available Claude Code plugins
 
 | Plugin | Description |
 |--------|-------------|
@@ -20,6 +20,38 @@ Then browse and install individual plugins from the `/plugin` UI.
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
+| **textual** | Textual Python TUI framework reference: CSS properties and widget APIs |
+
+## Codex Plugin Marketplace
+
+Install the repo-local Codex marketplace from the repository root:
+
+```bash
+codex plugin marketplace add .
+```
+
+Then install available Codex plugins by marketplace name:
+
+```bash
+codex plugin add rust-coding@cjthompson-codex-code-config
+codex plugin add textual@cjthompson-codex-code-config
+codex plugin add orchestration-strategy@cjthompson-codex-code-config
+codex plugin add project-tasks@cjthompson-codex-code-config
+```
+
+Codex marketplace entries live in `.agents/plugins/marketplace.json`; each plugin has its Codex manifest at `plugins/<name>/.codex-plugin/plugin.json`.
+
+### Available Codex plugins
+
+| Plugin | Status | Description |
+|--------|--------|-------------|
+| **project-tasks** | Available | Host-aware task capture, SQLite storage, and changelog generation |
+| **orchestration-strategy** | Available | Host-aware strategy selection for solo, parallel, sequential, or team-style work |
+| **rust-coding** | Available | Idiomatic Rust guidance |
+| **textual** | Available | Textual CSS and widget API references |
+| **agent-team-development** | Not available | Requires Claude Code Agent Teams tools |
+| **deep-planning** | Not available | Placeholder plugin with no Codex skill content yet |
+| **output-styles** | Not available | Targets Claude Code `/output-style`, which is not a Codex plugin feature |
 
 ## Installer
 
@@ -44,13 +76,15 @@ The installer also discovers skills from `plugins/`, so you can use it to symlin
 
 ## Skills
 
-Custom skills for Claude Code, located in `plugins/<name>/skills/`. Each skill is a standalone Claude Code plugin with its own `.claude-plugin/plugin.json`.
+Custom skills for Claude Code and Codex, located in `plugins/<name>/skills/`. Claude Code metadata lives in `.claude-plugin/plugin.json`; Codex metadata lives in `.codex-plugin/plugin.json`.
 
 ### project-tasks
 
-Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Tasks are stored in a global SQLite database (`~/.claude/tasks.db`) and dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
+Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Tasks are stored in a global SQLite database (`~/.claude/tasks.db` for Claude Code, `${CODEX_HOME:-~/.codex}/project-tasks/tasks.db` for Codex) and dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
 
 **Commands:** `task: <desc>`, `fix: <desc>`, `todo: <desc>`, `list tasks`, `run task #N`, `run all tasks`, `update changelog`
+
+**Helper script:** the plugin includes `task-db.mjs` in the plugin payload and a skill-local wrapper at `skills/project-tasks/scripts/task-db.mjs`. The skill resolves that bundled helper first. The TUI installer still copies `task-db.mjs` to `~/.claude/task-db.mjs` as a legacy fallback for manual/symlink installs.
 
 **Project identity:** the task list is keyed by a per-project name. Create `.claude/project-tasks.json` at the project root with `{"projectName": "github.com/owner/repo"}` to lock in a stable identifier (recommended — keeps the list consistent across agents, worktrees, and clones). Without it, the skill falls back to the git remote URL or directory basename and prompts you to create the file the first time.
 

@@ -1,0 +1,23 @@
+{
+    "name": "output-styles",
+    "version": "1.0.0",
+    "description": "Claude Code output styles, represented as unavailable for Codex.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["output", "styles", "formatting"],
+    "interface": {
+        "displayName": "Output Styles",
+        "shortDescription": "Claude Code output styles are not a Codex plugin feature.",
+        "longDescription": "Output Styles is included in the Codex marketplace for repository parity, but the contained output style files target Claude Code's /output-style feature and are not installable as Codex skills.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Formatting"],
+        "defaultPrompt": [
+            "Use the concise output style.",
+            "Install the Claude Code output styles.",
+            "Show available output styles."
+        ]
+    }
+}

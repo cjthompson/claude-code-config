@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * task-db — SQLite helper for the project-tasks Claude Code skill.
- * Installed to ~/.claude/task-db.mjs and called as:
- *   node ~/.claude/task-db.mjs <command> [options]
+ * task-db — SQLite helper for the project-tasks skill.
+ * Claude Code installs this to ~/.claude/task-db.mjs. Codex can run the
+ * bundled plugin helper and set PROJECT_TASKS_HOME to choose the DB location.
  *
  * All SQL is handled internally. Callers pass plain string arguments;
  * no shell escaping is needed on the caller side.
  */
 import { execSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const DB_PATH = join(process.env.HOME, '.claude', 'tasks.db');
+const TASK_HOME = process.env.PROJECT_TASKS_HOME
+    ?? (process.env.CODEX_HOME ? join(process.env.CODEX_HOME, 'project-tasks') : null)
+    ?? join(process.env.HOME, '.claude');
+mkdirSync(TASK_HOME, { recursive: true });
+
+const DB_PATH = join(TASK_HOME, 'tasks.db');
 
 /** Run SQL via sqlite3 stdin. Returns trimmed stdout. */
 function sql(query, flags = '') {

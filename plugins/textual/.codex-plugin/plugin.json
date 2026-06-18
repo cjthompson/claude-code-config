@@ -1,0 +1,24 @@
+{
+    "name": "textual",
+    "version": "1.0.0",
+    "description": "Reference skills for Textual TUI CSS properties and widget APIs.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["textual", "tui", "python", "css", "widgets"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Textual Reference",
+        "shortDescription": "Look up Textual widgets, reactive attributes, messages, and CSS.",
+        "longDescription": "Textual Reference provides compact Codex skills for building Python TUIs with Textual, including valid Textual CSS properties and built-in widget APIs.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Reference", "Python", "TUI"],
+        "defaultPrompt": [
+            "Check whether this Textual CSS is valid.",
+            "Which Textual widget emits this message?",
+            "Help build this Textual form layout."
+        ]
+    }
+}

@@ -1,0 +1,24 @@
+{
+    "name": "agent-team-development",
+    "version": "1.0.0",
+    "description": "Claude Code Agent Teams workflow for coordinated multi-agent development.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Agent Team Development",
+        "shortDescription": "Coordinate Claude Code Agent Teams with isolated worktrees.",
+        "longDescription": "Agent Team Development is included for marketplace parity, but it depends on Claude Code Agent Teams tools such as TeamCreate and TaskCreate. It should remain unavailable in Codex until equivalent team tools are exposed.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Agents", "Workflow", "Worktrees"],
+        "defaultPrompt": [
+            "Use an agent team for this cross-layer plan.",
+            "Coordinate these dependent implementation tasks.",
+            "Integrate teammate commits in dependency order."
+        ]
+    }
+}

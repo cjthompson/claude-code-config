@@ -1,0 +1,92 @@
+{
+    "name": "cjthompson-codex-code-config",
+    "interface": {
+        "displayName": "cjthompson Codex Code Config"
+    },
+    "plugins": [
+        {
+            "name": "project-tasks",
+            "source": {
+                "source": "local",
+                "path": "./plugins/project-tasks"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "orchestration-strategy",
+            "source": {
+                "source": "local",
+                "path": "./plugins/orchestration-strategy"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "agent-team-development",
+            "source": {
+                "source": "local",
+                "path": "./plugins/agent-team-development"
+            },
+            "policy": {
+                "installation": "NOT_AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "rust-coding",
+            "source": {
+                "source": "local",
+                "path": "./plugins/rust-coding"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "textual",
+            "source": {
+                "source": "local",
+                "path": "./plugins/textual"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "deep-planning",
+            "source": {
+                "source": "local",
+                "path": "./plugins/deep-planning"
+            },
+            "policy": {
+                "installation": "NOT_AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "output-styles",
+            "source": {
+                "source": "local",
+                "path": "./plugins/output-styles"
+            },
+            "policy": {
+                "installation": "NOT_AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        }
+    ]
+}

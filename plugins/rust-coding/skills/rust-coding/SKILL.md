@@ -1,6 +1,6 @@
 ---
 name: rust-coding
-description: Guides Claude in writing idiomatic, efficient, well-structured Rust code using proper data modeling, traits, impl organization, macros, and build-speed best practices. TRIGGER when working on .rs files or Rust projects (Cargo.toml present).
+description: Guides the agent in writing idiomatic, efficient, well-structured Rust code using proper data modeling, traits, impl organization, macros, and build-speed best practices. TRIGGER when working on .rs files or Rust projects (Cargo.toml present).
 ---
 
 # Rust Coding Skill

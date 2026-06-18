@@ -11,14 +11,20 @@ Select the most cost-efficient orchestration approach for a multi-task workload,
 
 **Announce at start:** "I'm using the orchestration-strategy skill to evaluate the best approach for this work."
 
+## Host Compatibility
+
+This skill supports both Claude Code and Codex. Use the host's available subagent, delegation, or team tools; do not assume a named tool exists unless it is actually present. If a referenced downstream skill or team feature is absent, choose the nearest supported fallback and state the trade-off.
+
+Use `${AGENT_WORKTREE_DIR:-.agents/worktrees}` as the default worktree parent unless the host or project has already established another directory.
+
 ## The Four Strategies
 
 | Strategy | Mechanism | Cost | Speed | When |
 |----------|-----------|------|-------|------|
 | **Solo** | Do it yourself | 1x | Slowest | < 3 tasks, no complexity |
-| **Parallel agents** | Multiple Agent tool calls | ~Nx | Fastest | Independent tasks |
-| **Sequential subagents** | One Agent at a time with review | ~Nx | Moderate | Dependencies, file overlap |
-| **Agent Teams** | TeamCreate + persistent teammates | 3-7x | Fastest coordinated | Inter-agent communication needed |
+| **Parallel agents** | Multiple subagent/delegation calls | ~Nx | Fastest | Independent tasks |
+| **Sequential subagents** | One subagent at a time with review | ~Nx | Moderate | Dependencies, file overlap |
+| **Agent Teams** | Host team tools + persistent teammates | 3-7x | Fastest coordinated | Inter-agent communication needed |
 
 Parallel and sequential have similar **token cost** (~Nx). They differ in **wall-clock time** (parallel is faster) vs **integration risk** (sequential is safer).
 
@@ -99,12 +105,12 @@ digraph decision {
     "Dependency chains\nor need review?" -> "Need inter-agent\ncommunication?" [label="no"];
     "Need inter-agent\ncommunication?" -> "Teams enabled?" [label="yes"];
     "Need inter-agent\ncommunication?" -> "Sequential\nsubagents" [label="no"];
-    "Teams enabled?" -> "Agent Teams" [label="yes\n(TeamCreate available)"];
+    "Teams enabled?" -> "Agent Teams" [label="yes\n(team tools available)"];
     "Teams enabled?" -> "Evaluate fallback" [label="no"];
 }
 ```
 
-**Detecting Agent Teams:** Check if the TeamCreate tool is available. If it's not in the tool list, teams are not enabled.
+**Detecting Agent Teams:** Check if the host exposes team tools such as `TeamCreate`/`TaskCreate` or an equivalent Codex team interface. If no team interface is available, teams are not enabled.
 
 **Fallback when teams unavailable:** Evaluate whether parallel agents or sequential subagents is the better fallback. Explain the trade-off to the user: "Agent Teams would be ideal here for inter-agent communication, but the feature isn't enabled. Falling back to [chosen strategy] — the trade-off is [specific limitation]."
 
@@ -122,7 +128,7 @@ Worktrees don't just provide isolation — they expand the set of tasks eligible
 
 After selecting a strategy, you MUST communicate these constraints to the downstream skill. This is a checklist — ensure every applicable item is explicitly stated in your instructions:
 
-- [ ] **Which skill to invoke** (dispatching-parallel-agents / subagent-driven-development / agent-team-development)
+- [ ] **Which skill or host mechanism to invoke** (dispatching-parallel-agents / subagent-driven-development / agent-team-development, or the closest available Codex delegation mechanism)
 - [ ] **Isolation strategy** (shared worktree / detached HEAD worktree / serialize)
 - [ ] **Whether cherry-pick integration is needed** (yes if worktrees used)
 - [ ] **Integration ordering** (dependency-topological)
@@ -137,7 +143,7 @@ This is enforced by natural language instructions in context — there is no str
 "Use dispatching-parallel-agents. Tasks are fully independent with no shared files. Shared worktree is fine. Use Sonnet for agents."
 
 **Parallel agents, trivial overlap + worktrees:**
-"Use dispatching-parallel-agents. Each agent MUST use `isolation: "worktree"` on the Agent tool. Agents MUST squash all work into a single commit (`git reset --soft $BASE && git commit`) and report the commit hash. After all agents complete, cherry-pick commits in dependency order, verifying build + tests after each. See the cherry-pick integration protocol."
+"Use dispatching-parallel-agents or the host's equivalent parallel delegation mechanism. Each agent MUST use worktree isolation when the host supports it. Agents MUST squash all work into a single commit (`git reset --soft $BASE && git commit`) and report the commit hash. After all agents complete, cherry-pick commits in dependency order, verifying build + tests after each. See the cherry-pick integration protocol."
 
 **Sequential subagents:**
 "Use subagent-driven-development. Sequential execution avoids file conflicts. No worktree isolation needed. Use Sonnet for agents."
@@ -151,8 +157,8 @@ This applies whenever worktree isolation is used (parallel agents or Agent Teams
 
 ### Worktree Setup
 
-**Location:** `.claude/worktrees/<task-id>/`
-**Creation:** `git worktree add --detach .claude/worktrees/<task-id>`
+**Location:** `${AGENT_WORKTREE_DIR:-.agents/worktrees}/<task-id>/`
+**Creation:** `mkdir -p "${AGENT_WORKTREE_DIR:-.agents/worktrees}"` then `git worktree add --detach "${AGENT_WORKTREE_DIR:-.agents/worktrees}/<task-id>"`
 **Why detached HEAD:** No branches to clean up. Commit hash is the only artifact. `git gc` prunes unreachable commits after worktree removal.
 
 ### Agent Contract
@@ -182,7 +188,7 @@ Before integration, ask the user:
 In topological dependency order (dependencies first, then smallest-diff-first for independents):
 
 1. `git cherry-pick <commit_hash>`
-2. If succeeds → run build + tests (commands from plan or CLAUDE.md; ask user if unknown)
+2. If succeeds → run build + tests (commands from plan, AGENTS.md, or CLAUDE.md; ask user if unknown)
 3. Pass → continue to next
 4. Conflict → resolve using both task descriptions (see below)
 5. Test failure → diagnose, fix, re-verify
@@ -206,7 +212,7 @@ In topological dependency order (dependencies first, then smallest-diff-first fo
 
 After integration verified and agents shut down:
 ```
-git worktree remove .claude/worktrees/<task-id>
+git worktree remove "${AGENT_WORKTREE_DIR:-.agents/worktrees}/<task-id>"
 ```
 No branch cleanup needed. Unreachable commits pruned by `git gc`.
 

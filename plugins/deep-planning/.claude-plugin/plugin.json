@@ -1,0 +1,10 @@
+{
+    "name": "deep-planning",
+    "version": "1.0.0",
+    "description": "Long term project planning for multi-day or multi-week project plans before implementation",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["planning", "long-term", "deep"],
+    "license": "MIT"
+}

@@ -1,0 +1,24 @@
+{
+    "name": "orchestration-strategy",
+    "version": "1.0.0",
+    "description": "Evaluate multi-task workloads and choose solo, parallel, sequential, or team-based execution.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["orchestration", "parallel", "agents", "worktree"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Orchestration Strategy",
+        "shortDescription": "Choose the right execution strategy for multi-task coding work.",
+        "longDescription": "Orchestration Strategy analyzes task count, dependencies, file overlap, and communication needs to select a cost-efficient execution strategy. It uses generic host-aware delegation language so it can guide both Claude Code and Codex workflows.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Planning", "Workflow", "Agents"],
+        "defaultPrompt": [
+            "Choose an execution strategy for this plan.",
+            "Can these tasks run in parallel?",
+            "Review this backlog for file overlap."
+        ]
+    }
+}

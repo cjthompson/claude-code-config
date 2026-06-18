@@ -10,11 +10,81 @@ model: haiku
 
 ## Overview
 
-Capture small tasks and fixes to a SQLite database (`~/.claude/tasks.db`) and execute them cheaply via minimal-context subagents. Auto-generate `CHANGELOG.md` from completed work.
+Capture small tasks and fixes to a SQLite database and execute them cheaply via minimal-context subagents when the host exposes subagent tools. Auto-generate `CHANGELOG.md` from completed work.
 
 **Core principle:** The lead agent is always available. Every task — even a single one — is dispatched to a subagent so the user can keep issuing commands.
 
-> **IMPORTANT:** All database operations MUST use `node ~/.claude/task-db.mjs <command>`. Do NOT call sqlite3 directly — ever. The helper script handles all SQL internally.
+> **IMPORTANT:** All database operations MUST use the resolved helper command `node "$TASK_DB" <command>`. Do NOT call sqlite3 directly — ever. The helper script handles all SQL internally.
+
+## Host Compatibility
+
+This skill supports both Claude Code and Codex.
+
+Run the setup block at the start of every invocation and use the resulting variables in every command:
+
+```bash
+command -v node >/dev/null 2>&1 || echo "ERROR: node is required"
+
+TASK_DB="${PROJECT_TASKS_DB_HELPER:-}"
+if [ -z "$TASK_DB" ]; then
+  for candidate in \
+    "plugins/project-tasks/skills/project-tasks/scripts/task-db.mjs" \
+    "plugins/project-tasks/task-db.mjs" \
+    "skills/project-tasks/scripts/task-db.mjs" \
+    "scripts/task-db.mjs" \
+    "task-db.mjs"
+  do
+    if [ -f "$candidate" ]; then
+      TASK_DB="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$TASK_DB" ]; then
+  for root in "$HOME/.claude" "${CODEX_HOME:-$HOME/.codex}"; do
+    [ -d "$root" ] || continue
+    TASK_DB=$(find "$root" -type f \( \
+      -path "*/project-tasks/skills/project-tasks/scripts/task-db.mjs" -o \
+      -path "*/skills/project-tasks/scripts/task-db.mjs" -o \
+      -path "*/project-tasks/task-db.mjs" \
+    \) -print -quit 2>/dev/null)
+    [ -n "$TASK_DB" ] && break
+  done
+fi
+if [ -z "$TASK_DB" ] && [ -f "$HOME/.claude/task-db.mjs" ]; then
+  TASK_DB="$HOME/.claude/task-db.mjs"
+fi
+test -n "$TASK_DB" || echo "ERROR: task-db.mjs not found"
+test -f "$TASK_DB" || echo "ERROR: task-db.mjs not found at $TASK_DB"
+
+IS_CODEX_HOST=0
+if [ -n "$CODEX_HOME" ] || [ -n "$CODEX_SANDBOX" ] || [ -n "$CODEX_THREAD_ID" ] || [ -n "$CODEX_CI" ]; then
+  IS_CODEX_HOST=1
+fi
+
+if [ -z "$PROJECT_TASKS_HOME" ]; then
+  if [ "$IS_CODEX_HOST" = "1" ]; then
+    PROJECT_TASKS_HOME="${CODEX_HOME:-$HOME/.codex}/project-tasks"
+  else
+    PROJECT_TASKS_HOME="$HOME/.claude"
+  fi
+fi
+export PROJECT_TASKS_HOME
+
+PROJECT_TASKS_CONFIG_DIR="${PROJECT_TASKS_CONFIG_DIR:-}"
+if [ -z "$PROJECT_TASKS_CONFIG_DIR" ]; then
+  if [ "$IS_CODEX_HOST" = "1" ]; then
+    PROJECT_TASKS_CONFIG_DIR=".codex"
+  else
+    PROJECT_TASKS_CONFIG_DIR=".claude"
+  fi
+fi
+export PROJECT_TASKS_CONFIG_DIR
+```
+
+- Claude Code plugin installs should resolve `TASK_DB` from the bundled plugin payload when available. The legacy `~/.claude/task-db.mjs` copy remains a fallback for installs made through this repo's TUI installer.
+- Codex normally resolves `TASK_DB` to the bundled plugin helper or this repo's `plugins/project-tasks/task-db.mjs`, and stores the database in `${CODEX_HOME:-$HOME/.codex}/project-tasks/tasks.db`.
+- If subagent, TaskList, or model-selection tools mentioned below are unavailable in the current host, keep the database operations working and tell the user which execution feature is unavailable. Do not invent tool calls.
 
 ## Session State
 
@@ -34,9 +104,9 @@ hideListRequested = false
 
 ## Rules
 
-- **ALWAYS** use `node ~/.claude/task-db.mjs <command>` for every database operation.
+- **ALWAYS** use `node "$TASK_DB" <command>` for every database operation.
 - **NEVER** call sqlite3 directly, construct SQL strings, or use heredocs with SQL.
-- **NEVER** reference `~/.claude/tasks.db` directly — let `task-db.mjs` manage the path.
+- **NEVER** reference the SQLite database file directly — let `task-db.mjs` manage the path.
 - **NEVER** delete, remove, or recreate `tasks.db`. The database is persistent and contains the user's task history. If the database appears corrupted or you encounter errors, report the problem to the user — do not attempt to fix it by deleting the file.
 
 ## When to Use
@@ -51,38 +121,25 @@ hideListRequested = false
 
 ## Prerequisites
 
-**All commands below use `node ~/.claude/task-db.mjs`. Do not use sqlite3 directly.**
+**All commands below use `node "$TASK_DB"`. Do not use sqlite3 directly.**
 
 Run these steps at the start of **every** skill invocation, before any other operation:
 
-1. Check that `node` is available and `task-db.mjs` is installed:
-```bash
-command -v node >/dev/null 2>&1 || echo "ERROR: node is required"
-test -f ~/.claude/task-db.mjs || echo "ERROR: task-db.mjs not found — run 'npm run install-packages' from the claude-code-config repo"
-```
-If either check fails, inform the user and stop.
+1. Run the Host Compatibility setup block above. If `node` or `task-db.mjs` is unavailable, inform the user and stop.
 
 2. Initialize the database:
 ```bash
-node ~/.claude/task-db.mjs init
+node "$TASK_DB" init
 ```
 - Exit code `0` — database already existed, continue normally
 - Exit code `2` — **first-time setup**: database was just created. Show the user this tip:
-  > **First-time setup tip:** To avoid approval prompts for every task-db command, add this to `~/.claude/settings.json`:
-  > ```json
-  > {
-  >   "permissions": {
-  >     "allow": ["Bash(node ~/.claude/task-db.mjs *)"]
-  >   }
-  > }
-  > ```
-  > This is optional — without it, you will be prompted to approve each command individually.
+  > **First-time setup tip:** To avoid approval prompts for every task-db command, allow `node "$TASK_DB" *` commands in your host's command permissions if your host supports command allowlists.
 
 3. Determine the project identifier:
 ```bash
 # Resolve the walk-up boundary first: stop at git toplevel if we're in a
 # git repo, otherwise stop at the filesystem root. This prevents the loop
-# from leaking into a parent's .claude/project-tasks.json when the user
+# from leaking into a parent's project-tasks.json when the user
 # is in a deeply nested subdirectory of an unrelated project tree.
 WALK_BOUNDARY="/"
 if command -v git >/dev/null 2>&1; then
@@ -92,17 +149,19 @@ if command -v git >/dev/null 2>&1; then
   fi
 fi
 
-# Tier 1: walk up from cwd to WALK_BOUNDARY looking for .claude/project-tasks.json
+# Tier 1: walk up from cwd to WALK_BOUNDARY looking for project-tasks.json
 # Loop logic: keep walking while we have a directory above us. We check
 # $dir itself for the file (so the boundary IS searched), then advance
 # via dirname. If the next dirname would cross the boundary, stop.
 dir=$(pwd)
 PROJECT=""
 while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-  if [ -f "$dir/.claude/project-tasks.json" ]; then
-    PROJECT=$(node -e "const j=require(process.argv[1]); const v=((j.projectName||'')+'').trim(); process.stdout.write(v)" "$dir/.claude/project-tasks.json" 2>/dev/null)
-    [ -n "$PROJECT" ] && break
-  fi
+  for config_dir in "$PROJECT_TASKS_CONFIG_DIR" ".codex" ".claude"; do
+    if [ -f "$dir/$config_dir/project-tasks.json" ]; then
+      PROJECT=$(node -e "const j=require(process.argv[1]); const v=((j.projectName||'')+'').trim(); process.stdout.write(v)" "$dir/$config_dir/project-tasks.json" 2>/dev/null)
+      [ -n "$PROJECT" ] && break 2
+    fi
+  done
   # Stop after checking the boundary directory itself
   if [ "$dir" = "$WALK_BOUNDARY" ]; then break; fi
   parent=$(dirname "$dir")
@@ -131,9 +190,9 @@ Store this value as `$PROJECT` for use in all subsequent commands. The Tier 2 no
 
    **Onboarding prompt (only if `$PROJECT` is empty after all three tiers):**
 
-   The skill should ask the user to provide a project name and offer to create `.claude/project-tasks.json` so future invocations don't repeat this prompt. Use AskUserQuestion:
+   The skill should ask the user to provide a project name and offer to create `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` so future invocations don't repeat this prompt. Use the host's available user-input mechanism.
 
-   > No `.claude/project-tasks.json` found in this directory or any parent, and no git remote is configured.
+   > No project task config found in this directory or any parent, and no git remote is configured.
    >
    > Without an explicit project name, the task list can fragment across agents and worktrees.
    >
@@ -145,7 +204,7 @@ Store this value as `$PROJECT` for use in all subsequent commands. The Tier 2 no
    PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
    ```
 
-   > Create `.claude/project-tasks.json` at `$PROJECT_ROOT/.claude/project-tasks.json` with `{ "projectName": "<name>" }`?
+   > Create `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` at `$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` with `{ "projectName": "<name>" }`?
    >
    > a) Yes, create and commit (recommended for shared projects)
    > b) Yes, create but don't commit (for personal config)
@@ -153,10 +212,10 @@ Store this value as `$PROJECT` for use in all subsequent commands. The Tier 2 no
 
    If the user picks (a) or (b), write the file:
    ```bash
-   mkdir -p "$PROJECT_ROOT/.claude"
-   node -e "require('fs').writeFileSync(process.argv[2], JSON.stringify({projectName: process.argv[1]}, null, 2)+'\n')" "$PROJECT" "$PROJECT_ROOT/.claude/project-tasks.json"
+   mkdir -p "$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR"
+   node -e "require('fs').writeFileSync(process.argv[2], JSON.stringify({projectName: process.argv[1]}, null, 2)+'\n')" "$PROJECT" "$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR/project-tasks.json"
    ```
-   If the user picked (a), also stage it: `git -C "$PROJECT_ROOT" add .claude/project-tasks.json` (do not auto-commit — leave that for the user).
+   If the user picked (a), also stage it: `git -C "$PROJECT_ROOT" add "$PROJECT_TASKS_CONFIG_DIR/project-tasks.json"` (do not auto-commit — leave that for the user).
 
 ## Persistent Task List Helper
 
@@ -221,7 +280,7 @@ When the user provides a task/fix/todo prefix (including `log task:`, `log fix:`
    - Is 5 words or fewer after the prefix
    - Uses a vague action word with no clear target
 
-   If proposing, use AskUserQuestion before logging:
+   If proposing, use the host's available user-input mechanism before logging:
 
    > Here's how I interpreted this task:
    > - {inferred requirement 1}
@@ -232,10 +291,10 @@ When the user provides a task/fix/todo prefix (including `log task:`, `log fix:`
 
    Repeat until accepted.
 
-3. **Insert the task** using `node ~/.claude/task-db.mjs insert`. Pass each requirement as a separate `--req` flag, each tag as a separate `--tag` flag, each dependency seq number as a separate `--dep` flag. All values are passed as plain strings — no escaping of any kind is needed.
+3. **Insert the task** using `node "$TASK_DB" insert`. Pass each requirement as a separate `--req` flag, each tag as a separate `--tag` flag, each dependency seq number as a separate `--dep` flag. All values are passed as plain strings — no escaping of any kind is needed.
 
 ```bash
-node ~/.claude/task-db.mjs insert \
+node "$TASK_DB" insert \
   --project "git@github.com:org/repo" \
   --type "fix" \
   --title "Log lines shouldn't exceed one line" \
@@ -249,7 +308,7 @@ The output is the assigned task ID (e.g. `#001`). Report it to the user.
 
    If the task has dependencies, validate they exist:
    ```bash
-   node ~/.claude/task-db.mjs validate-deps --project "..." --dep 3 --dep 5
+   node "$TASK_DB" validate-deps --project "..." --dep 3 --dep 5
    ```
    If any output is printed, those seq numbers don't exist — warn the user. The task is still logged.
 
@@ -258,7 +317,7 @@ The output is the assigned task ID (e.g. `#001`). Report it to the user.
    - **`todo:` prefix** — skip the execution choice entirely. Inform the user the todo was logged.
    - **`log task:` or `log fix:` prefix** — skip the execution choice entirely (Log Only). Inform the user the task was logged.
    - **`run task:` or `run fix:` prefix** — skip the execution choice prompt (the answer is "Run Now"). Proceed directly to the **Running a Task** pipeline starting at Step 0 (Check Dependencies). Do not ask the user whether to run.
-   - **`task:` or `fix:` prefix** — present the execution choice using AskUserQuestion:
+   - **`task:` or `fix:` prefix** — present the execution choice using the host's available user-input mechanism:
 
 ```
 a) Run Now — dispatch a subagent immediately
@@ -277,7 +336,7 @@ When dispatching a task (via "Run Now", "run task #NNN", or "Auto-Run All"):
 ### Step 0: Check Dependencies
 
 ```bash
-node ~/.claude/task-db.mjs check-deps --project "..." --seq N
+node "$TASK_DB" check-deps --project "..." --seq N
 ```
 
 If any output is printed, the task is **blocked**. Each line is `#NNN|title|status`. Report to the user and do NOT dispatch:
@@ -290,7 +349,7 @@ If any output is printed, the task is **blocked**. Each line is `#NNN|title|stat
 Before proceeding to isolation strategy, create the TaskList entry so the task is visible in the running tasks table:
 
 ```bash
-node ~/.claude/task-db.mjs get --project "$PROJECT" --seq N
+node "$TASK_DB" get --project "$PROJECT" --seq N
 ```
 
 Use the returned `title` and `type` to call `syncTaskToList(N, "pending", type, title)`.
@@ -315,12 +374,12 @@ Present recommendation with brief reasoning. Let user override.
 
 Read the task data:
 ```bash
-node ~/.claude/task-db.mjs get --project "..." --seq N
+node "$TASK_DB" get --project "..." --seq N
 ```
 
 Update status to in_progress:
 ```bash
-node ~/.claude/task-db.mjs update --project "..." --seq N --status in_progress
+node "$TASK_DB" update --project "..." --seq N --status in_progress
 ```
 
 The task runs as a **2-stage pipeline**: a Sonnet scout (read-only) produces an Implementation Map, then a Haiku executor follows it mechanically. Both run as background subagents so the user stays unblocked.
@@ -330,7 +389,7 @@ The task runs as a **2-stage pipeline**: a Sonnet scout (read-only) produces an 
 Dispatch a **background** subagent. Extract `type`, `title`, and each element of the `reqs` JSON array:
 
 ```
-Agent tool parameters:
+Subagent tool parameters:
   subagent_type: "general-purpose"
   model: "sonnet"
   run_in_background: true
@@ -348,7 +407,7 @@ Do NOT write, edit, or create any files. Read-only.
 You are working on the project at {worktree_path}.
 
 ## Project Context
-{Read and paste the full contents of CLAUDE.md here, if it exists}
+{Read and paste the full contents of AGENTS.md or CLAUDE.md here, if either exists}
 
 ## Project Overview
 {Read and paste the full contents of README.md here}
@@ -409,7 +468,7 @@ function names, and code snippets for every change.
 - {file you read but determined needs no modification}
 
 ### Test Command
-- {the command to run tests, from README or CLAUDE.md — or "no tests found"}
+- {the command to run tests, from README, AGENTS.md, or CLAUDE.md — or "no tests found"}
 
 ## Rules
 - Do NOT write, edit, or create any files. Read-only.
@@ -427,7 +486,7 @@ function names, and code snippets for every change.
 When the scout completes, dispatch the executor as another **background** subagent. Pass the scout's **full Implementation Map** verbatim.
 
 ```
-Agent tool parameters:
+Subagent tool parameters:
   subagent_type: "lean-executor"
   model: "haiku"
   run_in_background: true
@@ -478,7 +537,7 @@ Files to Modify, Files to Create, and Test Command sections}
 
 ### Step 3: Handle Completion
 
-When a task runner subagent completes, report results and present review choice using AskUserQuestion:
+When a task runner subagent completes, report results and present review choice using the host's available user-input mechanism:
 
 ```
 a) Accept — mark complete and update changelog
@@ -494,12 +553,12 @@ After presenting the choice (a) Accept / b) Retry / c) Retry with Opus, do not r
 
 1. Update task status:
 ```bash
-node ~/.claude/task-db.mjs update --project "..." --seq N --status completed
+node "$TASK_DB" update --project "..." --seq N --status completed
 ```
 
 2. Check if any tasks were unblocked:
 ```bash
-node ~/.claude/task-db.mjs unblocked --project "..." --seq N
+node "$TASK_DB" unblocked --project "..." --seq N
 ```
 Each output line is `#NNN|title`. If any lines are returned, inform the user:
 `Unblocked: #003 "Create settings modal skeleton" is now ready to run.`
@@ -517,7 +576,7 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
    - Worktree isolation: discard the worktree
    - Direct: run `git checkout .` to restore modified files
 
-2. Ask for optional feedback using AskUserQuestion: "What was wrong with the result? (optional — press Enter to skip)"
+2. Ask for optional feedback using the host's available user-input mechanism: "What was wrong with the result? (optional — press Enter to skip)"
 
 3. Re-dispatch using the 2-stage pipeline (Sonnet scout → Haiku executor) with `## Retry Notes` included in the scout prompt. If user chose "Retry with Opus", dispatch a single Opus agent (combined scout+execute) instead. Update status back to `in_progress`.
 
@@ -540,14 +599,14 @@ If no tasks are currently running, confirm: `No running tasks to hide.`
 ## Listing Tasks
 
 ```bash
-node ~/.claude/task-db.mjs list --project "..."
+node "$TASK_DB" list --project "..."
 # Filtered:
-node ~/.claude/task-db.mjs list --project "..." --status pending
+node "$TASK_DB" list --project "..." --status pending
 ```
 
 Get blocked task seq numbers:
 ```bash
-node ~/.claude/task-db.mjs blocked --project "..."
+node "$TASK_DB" blocked --project "..."
 ```
 
 Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|priority|status|tags|depends_on`.
@@ -566,12 +625,12 @@ Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|
 ## Completing a Task Manually
 
 ```bash
-node ~/.claude/task-db.mjs update --project "..." --seq N --status completed
+node "$TASK_DB" update --project "..." --seq N --status completed
 ```
 
 Check for unblocked tasks:
 ```bash
-node ~/.claude/task-db.mjs unblocked --project "..." --seq N
+node "$TASK_DB" unblocked --project "..." --seq N
 ```
 
 Then auto-update `CHANGELOG.md`, commit, and confirm to the user.
@@ -579,7 +638,7 @@ Then auto-update `CHANGELOG.md`, commit, and confirm to the user.
 ## Cancelling a Task
 
 ```bash
-node ~/.claude/task-db.mjs update --project "..." --seq N --status cancelled
+node "$TASK_DB" update --project "..." --seq N --status cancelled
 ```
 
 Confirm: `Task #NNN cancelled.`
@@ -587,7 +646,7 @@ Confirm: `Task #NNN cancelled.`
 ## Setting Task Priority
 
 ```bash
-node ~/.claude/task-db.mjs update --project "..." --seq N --priority high
+node "$TASK_DB" update --project "..." --seq N --priority high
 ```
 
 Confirm: `Task #NNN priority set to {priority}.`
@@ -598,10 +657,10 @@ When user says "check task #NNN":
 
 1. Read the task:
 ```bash
-node ~/.claude/task-db.mjs get --project "..." --seq N
+node "$TASK_DB" get --project "..." --seq N
 ```
 
-2. Dispatch a **read-only subagent** using the Agent tool with `subagent_type: "lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
+2. Dispatch a **read-only subagent** using an available subagent or delegation tool with `subagent_type: "lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
@@ -667,8 +726,8 @@ When user says "run all tasks":
 
 1. List all pending tasks:
 ```bash
-node ~/.claude/task-db.mjs list --project "..." --status pending
-node ~/.claude/task-db.mjs blocked --project "..."
+node "$TASK_DB" list --project "..." --status pending
+node "$TASK_DB" blocked --project "..."
 ```
 
 2. Present them to the user. Mark blocked tasks. Recommend worktree isolation (multiple tasks = always recommend worktree).
@@ -689,18 +748,18 @@ When user says "update changelog" or "generate changelog", OR automatically afte
 
 **Auto-update** (after each task completion):
 ```bash
-node ~/.claude/task-db.mjs changelog --project "..." --new-only
+node "$TASK_DB" changelog --project "..." --new-only
 ```
 
 After writing entries to `CHANGELOG.md`, mark them:
 ```bash
-node ~/.claude/task-db.mjs mark-changelog --project "..." --seq 1 --seq 2
+node "$TASK_DB" mark-changelog --project "..." --seq 1 --seq 2
 ```
 
 **Regenerate** (on explicit "generate changelog"):
 ```bash
-node ~/.claude/task-db.mjs changelog --project "..."
-node ~/.claude/task-db.mjs mark-changelog --project "..." --all
+node "$TASK_DB" changelog --project "..."
+node "$TASK_DB" mark-changelog --project "..." --all
 ```
 
 Each output row is pipe-separated: `seq|date|type|title|tags`.
@@ -734,7 +793,7 @@ Write `CHANGELOG.md` in **this exact format**:
 
 When starting a new conversation in a project:
 ```bash
-node ~/.claude/task-db.mjs recent --project "..."
+node "$TASK_DB" recent --project "..."
 ```
 
 This helps avoid re-implementing completed work and understand the project trajectory.

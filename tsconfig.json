@@ -3,6 +3,7 @@
         "lib": ["esnext"],
         "strict": true,
         "types": ["node"],
+        "allowImportingTsExtensions": true,
         "noEmit": true
     },
     "include": [
