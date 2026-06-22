@@ -1,0 +1,513 @@
+#!/usr/bin/env python3
+"""claude-optins — TUI to manage per-repo Claude Code plugin opt-ins.
+
+Run from inside a repo. Lists every installed plugin (with its skills and
+agents), shows the effective enabled state and where it comes from
+(user / project / local settings), and lets you toggle a local override.
+
+Keys:
+  j/k, arrows   move          space/enter  cycle: inherit -> on -> off
+  l/right       expand        h/left       collapse
+  a             expand/collapse all        g/G  top/bottom
+  s             cycle sort: default / name / enabled / source / skills+agents / tokens
+  D             delete plugin (removes cache dir, prompts for confirmation)
+  q             quit (changes are saved on every toggle)
+
+Toggles are written to <repo>/.claude/settings.local.json (gitignored,
+personal). With --global / -g / --user, toggles edit the user-level
+defaults in ~/.claude/settings.json instead. Run /reload-plugins inside a
+live Claude Code session, or start a new session, to pick up changes.
+"""
+
+import curses
+import json
+import os
+import re
+import shutil
+import sys
+import time
+
+CLAUDE_DIR = os.path.expanduser("~/.claude")
+CACHE_DIR = os.path.join(CLAUDE_DIR, "plugins", "cache")
+INSTALLED_PLUGINS_PATH = os.path.join(CLAUDE_DIR, "plugins", "installed_plugins.json")
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+# ---------- discovery ----------
+
+def parse_frontmatter(path):
+    """Return (name, description) from a markdown file's YAML frontmatter."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read(8192)
+    except OSError:
+        return None, None
+    m = re.match(r"^---\n(.*?)\n---", text, re.S)
+    name = desc = None
+    if m:
+        for line in m.group(1).splitlines():
+            if line.startswith("name:"):
+                name = line[5:].strip().strip("'\"")
+            elif line.startswith("description:"):
+                desc = line[12:].strip().strip("'\"")
+    return name, desc
+
+
+def latest_version(plugin_dir):
+    def key(v):
+        return [int(p) if p.isdigit() else 0 for p in v.split(".")]
+    versions = [d for d in os.listdir(plugin_dir)
+                if os.path.isdir(os.path.join(plugin_dir, d))]
+    return max(versions, key=key) if versions else None
+
+
+def discover_plugins():
+    """Scan the plugin cache. Returns list of dicts sorted by name.
+
+    Uses installed_plugins.json as the authoritative installed set; plugins
+    present in the cache but absent from the registry are marked installed=False.
+    """
+    registry = load_json(INSTALLED_PLUGINS_PATH).get("plugins", {})
+    plugins = []
+    if not os.path.isdir(CACHE_DIR):
+        return plugins
+    for marketplace in sorted(os.listdir(CACHE_DIR)):
+        mdir = os.path.join(CACHE_DIR, marketplace)
+        if not os.path.isdir(mdir):
+            continue
+        for plugin in sorted(os.listdir(mdir)):
+            pdir = os.path.join(mdir, plugin)
+            if not os.path.isdir(pdir):
+                continue
+            key = f"{plugin}@{marketplace}"
+            ver = latest_version(pdir)
+            if not ver:
+                plugins.append({
+                    "key": key,
+                    "name": plugin,
+                    "marketplace": marketplace,
+                    "version": None,
+                    "skills": [],
+                    "agents": [],
+                    "other_items": [],
+                    "other": 0,
+                    "est_tokens": 0,
+                    "installed": key in registry,
+                })
+                continue
+            root = os.path.join(pdir, ver)
+            skills, agents, est_chars = [], [], 0
+            _known_dirs = {"skills", "commands", "agents"}
+
+            sdir = os.path.join(root, "skills")
+            if os.path.isdir(sdir):
+                for s in sorted(os.listdir(sdir)):
+                    sm = os.path.join(sdir, s, "SKILL.md")
+                    if os.path.isfile(sm):
+                        _, desc = parse_frontmatter(sm)
+                        skills.append((s, desc or ""))
+                        est_chars += len(s) + len(desc or "")
+            cdir = os.path.join(root, "commands")
+            if os.path.isdir(cdir):
+                for c in sorted(os.listdir(cdir)):
+                    if c.endswith(".md"):
+                        _, desc = parse_frontmatter(os.path.join(cdir, c))
+                        skills.append((c[:-3], desc or ""))
+                        est_chars += len(c) + len(desc or "")
+            adir = os.path.join(root, "agents")
+            if os.path.isdir(adir):
+                for a in sorted(os.listdir(adir)):
+                    if a.endswith((".md", ".json")):
+                        nm, desc = (parse_frontmatter(os.path.join(adir, a))
+                                    if a.endswith(".md") else (None, None))
+                        agents.append((nm or a.rsplit(".", 1)[0], desc or ""))
+                        est_chars += len(a) + len(desc or "")
+
+            # Collect hook files — the only non-skill/agent delivery mechanism we track.
+            _hook_dirs = {"hooks", "hooks-handlers"}
+            other_items = []
+            try:
+                for item in sorted(os.listdir(root)):
+                    if item not in _hook_dirs:
+                        continue
+                    item_path = os.path.join(root, item)
+                    if os.path.isdir(item_path):
+                        for f in sorted(os.listdir(item_path)):
+                            if os.path.isfile(os.path.join(item_path, f)):
+                                other_items.append((f"{item}/{f}", ""))
+            except OSError:
+                pass
+
+            plugins.append({
+                "key": key,
+                "name": plugin,
+                "marketplace": marketplace,
+                "version": ver,
+                "skills": skills,
+                "agents": agents,
+                "other_items": other_items,
+                "other": len(other_items),
+                "est_tokens": est_chars // 4,
+                "installed": key in registry,
+            })
+    return plugins
+
+
+# ---------- settings ----------
+
+def find_repo_root():
+    d = os.getcwd()
+    while True:
+        if os.path.exists(os.path.join(d, ".git")) or \
+           os.path.isdir(os.path.join(d, ".claude")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.getcwd()
+        d = parent
+
+
+class Settings:
+    """Three-layer enabledPlugins view. Toggles write to the repo's
+    settings.local.json, or to ~/.claude/settings.json in global mode."""
+
+    def __init__(self, repo_root, global_mode=False):
+        self.repo_root = repo_root
+        self.global_mode = global_mode
+        user_path = os.path.join(CLAUDE_DIR, "settings.json")
+        local_path = os.path.join(repo_root, ".claude", "settings.local.json")
+        self.user_doc = load_json(user_path)
+        self.user = self.user_doc.setdefault("enabledPlugins", {})
+        if global_mode:
+            self.project = {}
+            self.local_doc = {}
+            self.local = {}
+        else:
+            self.project = load_json(os.path.join(repo_root, ".claude", "settings.json")) \
+                .get("enabledPlugins", {})
+            self.local_doc = load_json(local_path)
+            self.local = self.local_doc.setdefault("enabledPlugins", {})
+        if global_mode:
+            self.write_path, self.write_doc, self.target = \
+                user_path, self.user_doc, self.user
+        else:
+            self.write_path, self.write_doc, self.target = \
+                local_path, self.local_doc, self.local
+
+    def effective(self, key, installed=True):
+        """Return (enabled, source) where source is local|project|user|default|uninstalled."""
+        for layer, name in ((self.local, "local"), (self.project, "project"),
+                            (self.user, "user")):
+            if key in layer:
+                return bool(layer[key]), name
+        if not installed:
+            return False, "uninstalled"
+        return True, "default"   # installed plugins default to enabled
+
+    def cycle(self, key):
+        """unset -> on -> off -> unset, in the write-target layer"""
+        if key not in self.target:
+            self.target[key] = True
+        elif self.target[key]:
+            self.target[key] = False
+        else:
+            del self.target[key]
+        self.save()
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.write_path), exist_ok=True)
+        doc = dict(self.write_doc)
+        if not doc.get("enabledPlugins"):
+            doc.pop("enabledPlugins", None)
+        with open(self.write_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+
+
+# ---------- TUI ----------
+
+def build_rows(plugins, expanded):
+    rows = []  # (kind, plugin_index, text)
+    for i, p in enumerate(plugins):
+        rows.append(("plugin", i, None))
+        if p["key"] in expanded:
+            for s, desc in p["skills"]:
+                rows.append(("skill", i, f"{s}  {desc}"))
+            for a, desc in p["agents"]:
+                rows.append(("agent", i, f"{a}  {desc}"))
+            for path, desc in p["other_items"]:
+                rows.append(("other", i, f"{path}  {desc}".rstrip()))
+            if not p["skills"] and not p["agents"] and not p["other_items"]:
+                rows.append(("empty", i, "(no skills, agents, or other files)"))
+    return rows
+
+
+def run(stdscr, plugins, settings):
+    curses.curs_set(0)
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN, -1)
+    curses.init_pair(2, curses.COLOR_RED, -1)
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)
+    curses.init_pair(4, curses.COLOR_CYAN, -1)
+    GREEN, RED, YELLOW, CYAN = (curses.color_pair(i) for i in range(1, 5))
+    curses.init_pair(5, curses.COLOR_WHITE, -1)
+    DIM_WHITE = curses.color_pair(5)
+    try:
+        curses.init_pair(6, 214, -1)   # 256-color orange for delete notification
+        ORANGE = curses.color_pair(6)
+    except Exception:
+        ORANGE = curses.color_pair(3)  # fallback to yellow
+    NOTIFY_SAVED = GREEN | curses.A_BOLD
+    NOTIFY_DELETED = ORANGE | curses.A_BOLD
+
+    SORT_MODES = ["default", "name", "enabled", "source", "skills+agents", "tokens"]
+    SRC_ORDER = {"local": 0, "project": 1, "user": 2, "default": 3,
+                 "uninstalled": 4, "deleted": 5}
+
+    expanded, cursor, top = set(), 0, 0
+    deleted = set()   # keys removed this session; gone from cache but kept in list
+    confirming = None  # key being confirmed for deletion, or None
+    notify_msg, notify_color, notify_at = "", None, 0.0
+    sort_idx = 0
+
+    while True:
+        # Build sorted display list for this frame.
+        sort_mode = SORT_MODES[sort_idx]
+        def _eff(p):
+            return (False, "deleted") if p["key"] in deleted \
+                else settings.effective(p["key"], p["installed"])
+        if sort_mode == "name":
+            display = sorted(plugins, key=lambda p: p["name"].lower())
+        elif sort_mode == "enabled":
+            display = sorted(plugins, key=lambda p: (0 if _eff(p)[0] else 1,
+                                                      p["name"].lower()))
+        elif sort_mode == "source":
+            display = sorted(plugins, key=lambda p: (SRC_ORDER.get(_eff(p)[1], 3),
+                                                      p["name"].lower()))
+        elif sort_mode == "skills+agents":
+            display = sorted(plugins,
+                             key=lambda p: -(len(p["skills"]) + len(p["agents"])))
+        elif sort_mode == "tokens":
+            display = sorted(plugins, key=lambda p: -p["est_tokens"])
+        else:
+            display = plugins
+
+        rows = build_rows(display, expanded)
+        cursor = max(0, min(cursor, len(rows) - 1))
+        h, w = stdscr.getmaxyx()
+        body_h = h - 4
+        if cursor < top:
+            top = cursor
+        if cursor >= top + body_h:
+            top = cursor - body_h + 1
+
+        enabled_tok = sum(p["est_tokens"] for p in plugins
+                          if settings.effective(p["key"], p["installed"])[0])
+        scope = "GLOBAL defaults" if settings.global_mode else settings.repo_root
+        stdscr.erase()
+        stdscr.addnstr(0, 0, f" claude-optins — {scope}", w - 1, curses.A_BOLD)
+        info_segs = [
+            (" ", True), (str(len(plugins)), False),
+            (" plugins · enabled startup cost ≈", True), (f"{enabled_tok} tok", False),
+            (" · sort: ", True), (sort_mode, False),
+            (" · writes ", True),
+            (settings.write_path.replace(os.path.expanduser("~"), "~"), False),
+        ]
+        x = 0
+        for seg, is_label in info_segs:
+            if x >= w - 1:
+                break
+            n = min(len(seg), w - 1 - x)
+            stdscr.addnstr(1, x, seg, n, curses.A_DIM if is_label else 0)
+            x += len(seg)
+
+        for vis, idx in enumerate(range(top, min(top + body_h, len(rows)))):
+            kind, pi, text = rows[idx]
+            p = display[pi]
+            attr = curses.A_REVERSE if idx == cursor else 0
+            y = vis + 2
+            if kind == "plugin":
+                if p["key"] in deleted:
+                    on, src = False, "deleted"
+                else:
+                    on, src = settings.effective(p["key"], p["installed"])
+                if src in ("uninstalled", "deleted"):
+                    mark, color = ("?", YELLOW)
+                else:
+                    mark, color = ("✓", GREEN) if on else ("✗", RED)
+                if src == "local":
+                    src_tag = "local   "
+                elif src == "project":
+                    src_tag = "project "
+                elif src == "user":
+                    src_tag = "user    "
+                elif src == "uninstalled":
+                    src_tag = "uninst  "
+                elif src == "deleted":
+                    src_tag = "deleted "
+                else:
+                    src_tag = "default "
+                arrow = "▾" if p["key"] in expanded else "▸"
+                name_str = f"{arrow} {p['name']}@{p['marketplace']}"
+                ns, na, no, tok = (len(p["skills"]), len(p["agents"]),
+                                   p["other"], p["est_tokens"])
+                tok_str = (f"{tok // 1000}k" if tok >= 10000 else str(tok))
+                info_segs = [
+                    ("[ ", True),
+                    (f"{ns:>2}", False), (" skills  ", True),
+                    (f"{na:>1}", False), (" agents  ", True),
+                    (f"{no:>2}", False), (" other  ~", True),
+                    (f"{tok_str:>4}", False), (" tok ]", True),
+                ]
+                info_str = "".join(s for s, _ in info_segs)
+                if src in ("uninstalled", "deleted"):
+                    name_color = DIM_WHITE | curses.A_DIM
+                elif on:
+                    name_color = GREEN
+                else:
+                    name_color = RED
+                stdscr.addnstr(y, 0, " ", 1, attr)
+                stdscr.addnstr(y, 1, mark, 1, color | attr | curses.A_BOLD)
+                editable = "user" if settings.global_mode else "local"
+                stdscr.addnstr(y, 2, f" {src_tag}", 9,
+                               (YELLOW if src == editable else curses.A_DIM) | attr)
+                # name column: col 11 to info column
+                info_col = w - len(info_str) - 1
+                if info_col > 11:
+                    name_width = max(1, info_col - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    ix = info_col
+                    for seg, is_label in info_segs:
+                        if ix >= w - 1:
+                            break
+                        n = min(len(seg), w - 1 - ix)
+                        stdscr.addnstr(y, ix, seg, n,
+                                       (curses.A_DIM if is_label else 0) | attr)
+                        ix += len(seg)
+                else:
+                    name_width = max(1, w - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+            else:
+                tag = {"skill": "skill", "agent": "agent", "other": "other", "empty": ""}[kind]
+                color = CYAN if kind == "agent" else YELLOW if kind == "other" else 0
+                stdscr.addnstr(y, 11, f"· {tag:<5} {text}", w - 12,
+                               color | attr | curses.A_DIM)
+
+        if confirming:
+            p_conf = plugins[next(i for i, p in enumerate(plugins)
+                                  if p["key"] == confirming)]
+            label = f"{p_conf['name']}@{p_conf['marketplace']}"
+            footer_segs = [
+                (" Delete ", False), (label, False), ("?  ", False),
+                ("y", True), (" = confirm   any other key = cancel", False),
+            ]
+        else:
+            footer_segs = [
+                (" ", False),
+                ("space", True), (":cycle  ", False),
+                ("l", True), (":expand  ", False),
+                ("h", True), (":collapse  ", False),
+                ("a", True), (":all  ", False),
+                ("s", True), (f":sort({sort_mode})  ", False),
+                ("D", True), (":delete  ", False),
+                ("q", True), (":quit ", False),
+            ]
+        # Fill the row with reversed background first, then render segments on top.
+        stdscr.addnstr(h - 1, 0, " " * (w - 1), w - 1, curses.A_REVERSE)
+        x = 0
+        for seg_text, is_key in footer_segs:
+            if x >= w - 1:
+                break
+            n = min(len(seg_text), w - 1 - x)
+            attr = curses.A_REVERSE | (curses.A_BOLD if is_key else 0)
+            stdscr.addnstr(h - 1, x, seg_text, n, attr)
+            x += len(seg_text)
+        # Notification badge: appears for 2 s on the far right, then clears.
+        showing_notify = notify_msg and (time.time() - notify_at) < 2.0
+        stdscr.timeout(100 if showing_notify else -1)
+        if showing_notify:
+            badge = f" {notify_msg} "
+            bx = max(0, w - len(badge) - 1)
+            stdscr.addnstr(h - 1, bx, badge, len(badge), notify_color)
+        stdscr.refresh()
+
+        ch = stdscr.getch()
+        kind, pi, _ = rows[cursor] if rows else ("plugin", 0, None)
+        key = display[pi]["key"] if display else None
+
+        if confirming:
+            if ch == ord("y"):
+                p_del = display[next(i for i, p in enumerate(display)
+                                     if p["key"] == confirming)]
+                plugin_dir = os.path.join(CACHE_DIR, p_del["marketplace"],
+                                          p_del["name"])
+                shutil.rmtree(plugin_dir, ignore_errors=True)
+                settings.target.pop(confirming, None)
+                settings.save()
+                deleted.add(confirming)
+                notify_msg, notify_color, notify_at = "deleted", NOTIFY_DELETED, time.time()
+            confirming = None
+            continue
+
+        if ch in (ord("q"), 27):
+            return
+        elif ch in (ord("j"), curses.KEY_DOWN):
+            cursor += 1
+        elif ch in (ord("k"), curses.KEY_UP):
+            cursor -= 1
+        elif ch == ord("g"):
+            cursor = 0
+        elif ch == ord("G"):
+            cursor = len(rows) - 1
+        elif ch in (ord(" "), ord("\n"), curses.KEY_ENTER) and key:
+            _, src = settings.effective(key, display[pi]["installed"])
+            if src not in ("uninstalled", "deleted"):
+                settings.cycle(key)
+                notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+        elif ch in (ord("l"), curses.KEY_RIGHT) and key:
+            expanded.add(key)
+        elif ch in (ord("h"), curses.KEY_LEFT) and key:
+            if key in expanded:
+                expanded.discard(key)
+                # jump cursor back to the plugin row
+                cursor = next(i for i, r in enumerate(build_rows(display, expanded))
+                              if r[0] == "plugin" and r[1] == pi)
+        elif ch == ord("a"):
+            expanded = set() if expanded else {p["key"] for p in display}
+        elif ch == ord("s"):
+            sort_idx = (sort_idx + 1) % len(SORT_MODES)
+            cursor = 0
+        elif ch == ord("D") and key and kind == "plugin" and key not in deleted:
+            confirming = key
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="claude-optins",
+        description="Manage Claude Code plugin opt-ins per repo (default) "
+                    "or user-wide defaults (--global).")
+    ap.add_argument("-g", "--global", "--user", dest="global_mode",
+                    action="store_true",
+                    help="edit user-level defaults in ~/.claude/settings.json "
+                         "instead of the repo's .claude/settings.local.json")
+    args = ap.parse_args()
+
+    plugins = discover_plugins()
+    if not plugins:
+        sys.exit(f"No plugins found in {CACHE_DIR}")
+    settings = Settings(find_repo_root(), global_mode=args.global_mode)
+    curses.wrapper(run, plugins, settings)
+    print(f"Opt-ins saved to {settings.write_path}")
+    print("Run /reload-plugins in a live session (or start a new one) to apply.")
+
+
+if __name__ == "__main__":
+    main()

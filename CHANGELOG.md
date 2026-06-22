@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.42 - 2026-06-22
+
+### Changes
+- **installer**: `files`-type packages now support an optional `destDir` field in `manifest.json` (with `~` expansion, defaulting to `~/.claude/`). Discovery, install, and remove all honor it.
+- **claude-optin**: now installs to `~/.local/bin/` instead of `~/.claude/`, so it can be run as a bare `claude-optin` command when `~/.local/bin` is on `PATH`. Manifest example, README, and install destination updated.
+
 ## v0.0.41 - 2026-06-13
 
 ### Fixes

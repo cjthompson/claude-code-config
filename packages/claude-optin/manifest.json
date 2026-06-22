@@ -1,0 +1,8 @@
+{
+    "label": "claude-optin",
+    "description": "TUI to manage per-repo Claude Code plugin opt-ins. Lists installed plugins (with skills and agents), shows the effective enabled state and its source (user / project / local), and toggles local overrides written to .claude/settings.local.json (or ~/.claude/settings.json with --global).",
+    "example": "~/.local/bin/claude-optin            # toggle opt-ins for the current repo\n  ~/.local/bin/claude-optin --global   # edit user-level defaults",
+    "type": "files",
+    "destDir": "~/.local/bin",
+    "files": ["claude-optin"]
+}

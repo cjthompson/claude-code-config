@@ -33,8 +33,13 @@ export interface PackageManifest {
     label: string;
     description: string;
     type: "skills" | "files";
-    /** For "files" type: list of files to copy to ~/.claude/ */
+    /** For "files" type: list of files to copy to the destination dir */
     files?: string[];
+    /**
+     * For "files" type: destination directory for the files (supports ~ expansion).
+     * Defaults to ~/.claude/ when omitted.
+     */
+    destDir?: string;
     /** For "files" type: key-value pairs to merge into ~/.claude/settings.json */
     settings?: Record<string, unknown>;
     /** Optional example output shown in the info overlay */

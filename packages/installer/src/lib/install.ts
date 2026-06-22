@@ -1,10 +1,16 @@
 import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { InstallResult, PackageDescriptor } from "./types.ts";
+import type { InstallResult, PackageDescriptor, PackageManifest } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
 const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
 const AGENTS_INSTALL_DIR = join(CLAUDE_DIR, "agents");
+
+/** Resolve a files-package destination dir, expanding a leading ~. Defaults to ~/.claude/. */
+function resolveDestDir(manifest: PackageManifest): string {
+    if (!manifest.destDir) return CLAUDE_DIR;
+    return manifest.destDir.replace(/^~/, process.env.HOME!);
+}
 
 export async function installPackage(
     pkg: PackageDescriptor,
@@ -138,6 +144,7 @@ async function removeFiles(
     const results: InstallResult[] = [];
     const manifest = pkg.manifest;
     const files = manifest.files ?? [];
+    const destDir = resolveDestDir(manifest);
 
     for (const item of pkg.items) {
         if (!item.markedForRemoval) continue;
@@ -168,7 +175,7 @@ async function removeFiles(
         } else {
             for (const file of files) {
                 try {
-                    await unlink(join(CLAUDE_DIR, file));
+                    await unlink(join(destDir, file));
                     results.push({
                         packageId: pkg.id,
                         itemName: file,
@@ -244,13 +251,14 @@ async function installFiles(
     const results: InstallResult[] = [];
     const manifest = pkg.manifest;
     const files = manifest.files ?? [];
+    const destDir = resolveDestDir(manifest);
 
-    await mkdir(CLAUDE_DIR, { recursive: true });
+    await mkdir(destDir, { recursive: true });
 
     // Copy files
     for (const file of files) {
         const src = join(pkg.packageDir, file);
-        const dest = join(CLAUDE_DIR, file);
+        const dest = join(destDir, file);
         try {
             const existed = await stat(dest).then(() => true, () => false);
             await mkdir(dirname(dest), { recursive: true });

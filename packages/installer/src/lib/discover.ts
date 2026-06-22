@@ -97,19 +97,21 @@ async function discoverFilesPackage(
     const files = manifest.files ?? [];
     if (files.length === 0) return null;
 
+    const destDir = resolveDestDir(manifest);
+
     // Check if all files are already installed (or use detect override for the files item)
     const filesItemName = files.join(", ");
     const filesDetect = manifest.detect?.[filesItemName];
     const allExist = filesDetect
         ? await checkDetect(filesDetect)
-        : (await Promise.all(files.map((f) => exists(join(CLAUDE_DIR, f))))).every(Boolean);
+        : (await Promise.all(files.map((f) => exists(join(destDir, f))))).every(Boolean);
 
     // If files exist, check if any are outdated (hash mismatch).
     // Symlinks pointing into the repo are excluded — they auto-update.
     let needsUpgrade = false;
     if (allExist) {
         for (const file of files) {
-            const dest = join(CLAUDE_DIR, file);
+            const dest = join(destDir, file);
             if (await isSymlinkIntoRepo(dest, repoRoot)) continue;
             const src = join(pkgDir, file);
             if (await fileHash(src) !== await fileHash(dest)) {
@@ -122,7 +124,7 @@ async function discoverFilesPackage(
     const allInstalled = allExist && !needsUpgrade;
     const isCurrent = allExist && !needsUpgrade;
 
-    const filesDesc = `Files: ${files.join(", ")}\nInstall destination: ~/.claude/`;
+    const filesDesc = `Files: ${files.join(", ")}\nInstall destination: ${manifest.destDir ?? "~/.claude/"}`;
     const exampleDesc = manifest.example ? `\nExample:\n  ${manifest.example}` : "";
     const items: PackageItem[] = [
         {
@@ -279,6 +281,12 @@ async function discoverPlugins(
     }
 
     return descriptors;
+}
+
+/** Resolve a files-package destination dir, expanding a leading ~. Defaults to ~/.claude/. */
+function resolveDestDir(manifest: PackageManifest): string {
+    if (!manifest.destDir) return CLAUDE_DIR;
+    return manifest.destDir.replace(/^~/, process.env.HOME!);
 }
 
 /** Check if a skill is installed: exists in ~/.claude/skills/ (any symlink or directory). */
