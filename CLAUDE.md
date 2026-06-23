@@ -16,11 +16,9 @@ This repository contains configurable elements for Claude Code, including skills
 
 - **Make changes directly in this repository** — Any updates to skills, statusline, configurations, or packages should be committed to this repo via pull request.
 
-- **AskUserQuestion: Run `install-packages`?** — After changes are committed and merged, ask the user if they want to run `npm run install-packages` to reinstall/apply updates to your Claude Code configuration.
+- **AskUserQuestion: Run `install-packages`?** — After changes to anything in `packages/` are committed and merged, ask the user if they want to run `npm run install-packages` to reinstall/apply updates. Changes to `plugins/` are installed via the marketplace and take effect automatically — do not prompt to reinstall for plugin-only changes.
 
-- **`~/.claude` is off-limits** — Never read or write files directly under `~/.claude/`. Always work in this repository (`plugins/`, `packages/`, etc.). The installed copies under `~/.claude/` are symlinked and will reflect changes automatically.
-
-- **Symlinked items** — Some items like skills are symlinked rather than copied during installation. Changes to these symlinked resources take effect automatically without requiring a reinstall, though running the installer may help propagate other related changes.
+- **`~/.claude` is off-limits** — Never read or write files directly under `~/.claude/`. Always work in this repository (`plugins/`, `packages/`, etc.).
 
 ## Skill Editing Verification
 
