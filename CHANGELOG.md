@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.45 - 2026-06-23
+
+### Changes
+- **CLAUDE.md**: clarified that `npm run install-packages` is only needed for `packages/` changes; `plugins/` are installed via marketplace and take effect automatically.
+
 ## v0.0.44 - 2026-06-23
 
 ### Changes
