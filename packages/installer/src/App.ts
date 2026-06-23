@@ -39,7 +39,8 @@ export function App({ repoRoot }: AppProps) {
 
     const flat = useMemo(() => buildFlatItems(packages), [packages]);
 
-    const hasSelections = packages.some((p) =>
+    const visiblePackages = packages.filter((p) => p.type !== "plugin");
+    const hasSelections = visiblePackages.some((p) =>
         p.enabled || p.items.some((i) => i.markedForRemoval),
     );
 
@@ -107,7 +108,7 @@ export function App({ repoRoot }: AppProps) {
         } else if (input === "i" && focusedItem) {
             setInfoVisible(true);
         } else if (key.return && hasSelections) {
-            runInstall(packages);
+            runInstall(visiblePackages);
         }
     });
 
