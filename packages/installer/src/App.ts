@@ -1,14 +1,32 @@
-import { createElement as h, useState, useCallback } from "react";
+import { createElement as h, useState, useCallback, useMemo } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import { Card } from "./components/Card.ts";
+import { SectionHeader } from "./components/SectionHeader.ts";
+import { DetailFooter } from "./components/DetailFooter.ts";
 import { InfoOverlay } from "./components/InfoOverlay.ts";
-import { InstallButton } from "./components/InstallButton.ts";
+import { ToggleItem } from "./components/ToggleItem.ts";
 import { ResultsView } from "./components/ResultsView.ts";
 import { usePackageDiscovery } from "./hooks/usePackageDiscovery.ts";
 import { useInstaller } from "./hooks/useInstaller.ts";
+import type { PackageDescriptor } from "./lib/types.ts";
 
 interface AppProps {
     repoRoot: string;
+}
+
+interface FlatItem {
+    pkgIdx: number;
+    itemIdx: number;
+}
+
+function buildFlatItems(packages: PackageDescriptor[]): FlatItem[] {
+    const flat: FlatItem[] = [];
+    for (let pi = 0; pi < packages.length; pi++) {
+        if (packages[pi]!.type === "plugin") continue;
+        for (let ii = 0; ii < packages[pi]!.items.length; ii++) {
+            flat.push({ pkgIdx: pi, itemIdx: ii });
+        }
+    }
+    return flat;
 }
 
 export function App({ repoRoot }: AppProps) {
@@ -16,14 +34,21 @@ export function App({ repoRoot }: AppProps) {
     const { packages, setPackages, loading, error } = usePackageDiscovery(repoRoot);
     const { phase, results, runInstall } = useInstaller();
 
-    const [focusIndex, setFocusIndex] = useState(0);
-    const [cardItemIndex, setCardItemIndex] = useState<Record<number, number>>({});
+    const [cursor, setCursor] = useState(0);
     const [infoVisible, setInfoVisible] = useState(false);
+
+    const flat = useMemo(() => buildFlatItems(packages), [packages]);
 
     const hasSelections = packages.some((p) =>
         p.enabled || p.items.some((i) => i.markedForRemoval),
     );
-    const totalFocusable = packages.length + 1;
+
+    const focusedEntry = flat[cursor];
+    const focusedPkg = focusedEntry ? packages[focusedEntry.pkgIdx] : undefined;
+    const focusedItem = focusedEntry && focusedPkg
+        ? focusedPkg.items[focusedEntry.itemIdx]
+        : undefined;
+    const footerDescription = focusedItem?.description ?? focusedPkg?.description ?? "";
 
     const toggleItem = useCallback(
         (pkgIdx: number, itemIdx: number) => {
@@ -33,7 +58,6 @@ export function App({ repoRoot }: AppProps) {
                     const pkg = { ...p };
 
                     if (pkg.type === "files") {
-                        // All items in a files package toggle together
                         const item = pkg.items[0]!;
                         if (item.alreadyInstalled) {
                             const marking = !item.markedForRemoval;
@@ -61,119 +85,102 @@ export function App({ repoRoot }: AppProps) {
         [setPackages],
     );
 
-    useInput(
-        (input, key) => {
-            if (phase === "done" || phase === "installing") {
-                if (input === "q") exit();
-                return;
-            }
+    useInput((input, key) => {
+        if (phase === "done" || phase === "installing") {
+            if (input === "q") exit();
+            return;
+        }
 
-            if (infoVisible) {
-                if (key.escape) setInfoVisible(false);
-                return;
-            }
+        if (infoVisible) {
+            if (key.escape || input === "i") setInfoVisible(false);
+            return;
+        }
 
-            if (input === "q") {
-                exit();
-                return;
-            }
+        if (input === "q") { exit(); return; }
 
-            if (key.tab) {
-                setFocusIndex((prev) =>
-                    key.shift
-                        ? (prev - 1 + totalFocusable) % totalFocusable
-                        : (prev + 1) % totalFocusable,
-                );
-                return;
-            }
+        if (key.upArrow) {
+            setCursor((c) => Math.max(0, c - 1));
+        } else if (key.downArrow) {
+            setCursor((c) => Math.min(flat.length - 1, c + 1));
+        } else if (input === " " && focusedEntry) {
+            toggleItem(focusedEntry.pkgIdx, focusedEntry.itemIdx);
+        } else if (input === "i" && focusedItem) {
+            setInfoVisible(true);
+        } else if (key.return && hasSelections) {
+            runInstall(packages);
+        }
+    });
 
-            if (focusIndex < packages.length) {
-                const pkg = packages[focusIndex]!;
-                const currentItem = cardItemIndex[focusIndex] ?? 0;
+    if (loading) return h(Text, null, "Discovering packages...");
+    if (error) return h(Text, { color: "red" }, "Error: " + error);
+    if (flat.length === 0) return h(Text, { color: "yellow" }, "No packages found.");
 
-                if (key.upArrow) {
-                    setCardItemIndex((prev) => ({
-                        ...prev,
-                        [focusIndex]: Math.max(0, currentItem - 1),
-                    }));
-                } else if (key.downArrow) {
-                    setCardItemIndex((prev) => ({
-                        ...prev,
-                        [focusIndex]: Math.min(pkg.items.length - 1, currentItem + 1),
-                    }));
-                } else if (input === " ") {
-                    toggleItem(focusIndex, currentItem);
-                } else if (input === "i") {
-                    setInfoVisible(true);
-                }
-                return;
-            }
-
-            if (focusIndex === packages.length && key.return && hasSelections) {
-                runInstall(packages);
-            }
-        },
-    );
-
-    if (loading) {
-        return h(Text, null, "Discovering packages...");
+    if (phase === "installing") {
+        return h(Box, { flexDirection: "column", paddingX: 1 },
+            h(Text, null, "Installing..."),
+            h(ResultsView, { results }),
+        );
     }
 
-    if (error) {
-        return h(Text, { color: "red" }, "Error: " + error);
+    if (phase === "done") {
+        return h(Box, { paddingX: 1 }, h(ResultsView, { results }));
     }
 
-    if (packages.length === 0) {
-        return h(Text, { color: "yellow" }, "No packages found.");
+    if (infoVisible && focusedItem) {
+        return h(Box, { flexDirection: "column", paddingX: 1 },
+            h(InfoOverlay, {
+                typeLabel: focusedItem.typeLabel ?? "Item",
+                name: focusedItem.name,
+                description: focusedItem.description ?? "(No description available)",
+            }),
+        );
     }
+
+    // Build list nodes: section header per package group, then indented items
+    const listNodes: ReturnType<typeof h>[] = [];
+    let lastPkgIdx = -1;
+
+    for (let ci = 0; ci < flat.length; ci++) {
+        const { pkgIdx, itemIdx } = flat[ci]!;
+        const pkg = packages[pkgIdx]!;
+        const item = pkg.items[itemIdx]!;
+
+        if (pkgIdx !== lastPkgIdx) {
+            lastPkgIdx = pkgIdx;
+            const hasRemovals = pkg.items.some((i) => i.markedForRemoval);
+            const hasUpgrades = pkg.items.some((i) => i.needsUpgrade);
+            const status = hasRemovals ? "REMOVE" : hasUpgrades ? "UPGRADE" : pkg.enabled ? "ON" : "OFF";
+            listNodes.push(h(SectionHeader, { key: `hdr-${pkgIdx}`, label: pkg.label, status }));
+        }
+
+        listNodes.push(h(Box, { key: `item-${pkgIdx}-${itemIdx}`, paddingLeft: 2 },
+            h(ToggleItem, {
+                name: item.name,
+                enabled: item.enabled,
+                focused: ci === cursor,
+                alreadyInstalled: item.alreadyInstalled,
+                needsUpgrade: item.needsUpgrade,
+                isCurrent: item.isCurrent,
+                markedForRemoval: item.markedForRemoval,
+            }),
+        ));
+    }
+
+    const installLine = hasSelections
+        ? h(Text, { color: "cyan" }, "↵ Install Selected")
+        : h(Text, { color: "gray", dimColor: true }, "↵ Nothing selected");
 
     return h(Box, { flexDirection: "column", paddingX: 1 },
         h(Box, { justifyContent: "center", marginBottom: 1 },
             h(Text, { bold: true, color: "cyan" }, "Claude Code Config Installer"),
         ),
-
-        phase === "selecting" && infoVisible ? (() => {
-            const pkg = packages[focusIndex];
-            const item = pkg?.items[cardItemIndex[focusIndex] ?? 0];
-            return item
-                ? h(InfoOverlay, {
-                    key: "_info",
-                    typeLabel: item.typeLabel ?? "Item",
-                    name: item.name,
-                    description: item.description ?? "(No description available)",
-                })
-                : null;
-        })() : null,
-
-        phase === "selecting" && !infoVisible ? [
-            ...packages.map((pkg, i) =>
-                h(Card, {
-                    key: pkg.id,
-                    label: pkg.label,
-                    description: pkg.description,
-                    enabled: pkg.enabled,
-                    items: pkg.items,
-                    focused: focusIndex === i,
-                    focusedItem: cardItemIndex[i] ?? 0,
-                }),
+        ...listNodes,
+        h(Box, { marginTop: 1 }, installLine),
+        h(DetailFooter, { description: footerDescription }),
+        h(Box, { justifyContent: "center", marginTop: 1 },
+            h(Text, { color: "gray" },
+                "↑↓ move  space toggle  i info  enter install  q quit",
             ),
-            h(InstallButton, {
-                key: "_install",
-                focused: focusIndex === packages.length,
-                disabled: !hasSelections,
-            }),
-            h(Box, { key: "_help", justifyContent: "center", marginTop: 1 },
-                h(Text, { color: "gray" },
-                    "tab navigate  \u2191\u2193 items  space toggle  i info  enter install  q quit",
-                ),
-            ),
-        ] : null,
-
-        phase === "installing" ? h(Box, { flexDirection: "column" },
-            h(Text, null, "Installing..."),
-            h(ResultsView, { results }),
-        ) : null,
-
-        phase === "done" ? h(ResultsView, { results }) : null,
+        ),
     );
 }
