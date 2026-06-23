@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.44 - 2026-06-23
+
+### Changes
+- **skills**: added `disable-model-invocation: true` to 5 advisory/reference skills (`agent-team-development`, `orchestration-strategy`, `rust-coding`, `textual-api-reference`, `textual-css-reference`) to prevent auto-triggering on description match and reduce unnecessary token usage. All 5 remain explicitly invocable by name.
+
 ## v0.0.43 - 2026-06-22
 
 ### Changes
