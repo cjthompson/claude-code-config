@@ -1,0 +1,24 @@
+{
+    "name": "project-tasks",
+    "version": "1.0.0",
+    "description": "Capture project tasks inline, store them in SQLite, dispatch work, and generate changelogs.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "license": "MIT",
+    "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Project Tasks",
+        "shortDescription": "Track tasks, fixes, todos, and changelog entries from chat.",
+        "longDescription": "Project Tasks captures task:, fix:, and todo: requests into a SQLite-backed project task list. It supports dependency tracking, task review, changelog generation, and host-aware helper paths for Claude Code and Codex.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Tasks", "Write", "Workflow"],
+        "defaultPrompt": [
+            "task: add tests for the parser edge cases",
+            "list tasks",
+            "update changelog"
+        ]
+    }
+}

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.43 - 2026-06-22
+
+### Changes
+- **project-tasks**: the SQLite helper now ships inside the plugin at `bin/task-db` instead of being copied to `~/.claude/task-db.mjs` by the TUI installer (the plugin `manifest.json` that drove that copy was removed; it no longer appears in `install-packages`). SKILL.md resolves the helper once into `$TASK_DB`: on Claude Code the plugin's `bin/` is on the Bash tool's `PATH`, so it uses the bare `task-db` command; on other hosts (e.g. Codex) or TUI-installer setups it falls back to `node <path>/bin/task-db`, with the legacy `~/.claude/task-db.mjs` as a last resort. The DB location is configurable via `PROJECT_TASKS_HOME`/`CODEX_HOME` (defaults to `~/.claude`), and a `.codex-plugin/plugin.json` makes the plugin installable under Codex. Supersedes the `feat/codex-support` branch's approach.
+
 ## v0.0.42 - 2026-06-22
 
 ### Changes

@@ -1,16 +1,24 @@
 #!/usr/bin/env node
 /**
- * task-db — SQLite helper for the project-tasks Claude Code skill.
- * Installed to ~/.claude/task-db.mjs and called as:
- *   node ~/.claude/task-db.mjs <command> [options]
+ * task-db — SQLite helper for the project-tasks skill.
+ * Ships in the plugin's bin/ directory. On Claude Code that dir is added to the
+ * Bash tool's PATH (invoked as the bare command `task-db`); other hosts (e.g.
+ * Codex) run it via `node <path-to-bin/task-db>`. Set PROJECT_TASKS_HOME (or
+ * CODEX_HOME) to choose the DB location; defaults to ~/.claude.
  *
  * All SQL is handled internally. Callers pass plain string arguments;
  * no shell escaping is needed on the caller side.
  */
 import { execSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const DB_PATH = join(process.env.HOME, '.claude', 'tasks.db');
+const TASK_HOME = process.env.PROJECT_TASKS_HOME
+    ?? (process.env.CODEX_HOME ? join(process.env.CODEX_HOME, 'project-tasks') : null)
+    ?? join(process.env.HOME, '.claude');
+mkdirSync(TASK_HOME, { recursive: true });
+
+const DB_PATH = join(TASK_HOME, 'tasks.db');
 
 /** Run SQL via sqlite3 stdin. Returns trimmed stdout. */
 function sql(query, flags = '') {
@@ -339,7 +347,7 @@ switch (cmd) {
 
     default: {
         const commands = 'init|insert|update|get|list|blocked|unblocked|check-deps|validate-deps|changelog|mark-changelog|recent|migrate';
-        process.stderr.write(`Unknown command: ${cmd ?? '(none)'}\nUsage: node task-db.mjs <${commands}> [options]\n`);
+        process.stderr.write(`Unknown command: ${cmd ?? '(none)'}\nUsage: task-db <${commands}> [options]\n`);
         process.exit(1);
     }
 }

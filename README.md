@@ -23,7 +23,7 @@ Then browse and install individual plugins from the `/plugin` UI.
 
 ## Installer
 
-For packages that aren't available as plugins (statusline, task-db helper), use the interactive TUI installer:
+For packages that aren't available as plugins (statusline, claude-optin), use the interactive TUI installer:
 
 ```bash
 npm install

@@ -4,10 +4,11 @@ Tests for the `task-db` package.
 
 ## Overview
 
-No automated tests exist yet. `task-db.mjs` is a CLI wrapper over SQLite used by the
-project-tasks skill.
+No automated tests exist yet. `task-db` is a CLI wrapper over SQLite used by the
+project-tasks skill. It now ships inside the plugin and is added to the Bash
+tool's `PATH` (via the plugin's `bin/` directory) while the plugin is enabled.
 
-**Source:** `packages/task-db/task-db.mjs`
+**Source:** `plugins/project-tasks/bin/task-db`
 
 ## Test Files
 
@@ -24,7 +25,7 @@ import assert from 'node:assert';
 
 test('insert and list tasks', () => {
   const result = execFileSync('node', [
-    'packages/task-db/task-db.mjs', 'insert',
+    'plugins/project-tasks/bin/task-db', 'insert',
     '--project', 'test-project',
     '--type', 'task',
     '--title', 'Test task',
@@ -39,8 +40,8 @@ Subcommands to cover: `init`, `insert`, `list`, `get`, `update`, `changelog`,
 
 ## How to Add Tests
 
-1. Create `packages/task-db/task-db.test.mts`
+1. Create `plugins/project-tasks/task-db.test.mts`
 2. Use `node:test` and `node:child_process.execFileSync`
-3. Run with: `node --experimental-strip-types --test packages/task-db/task-db.test.mts`
+3. Run with: `node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts`
 
 **Record results in:** [test-results.md](test-results.md)
