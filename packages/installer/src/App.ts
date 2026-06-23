@@ -21,9 +21,15 @@ interface FlatItem {
 function buildFlatItems(packages: PackageDescriptor[]): FlatItem[] {
     const flat: FlatItem[] = [];
     for (let pi = 0; pi < packages.length; pi++) {
-        if (packages[pi]!.type === "plugin") continue;
-        for (let ii = 0; ii < packages[pi]!.items.length; ii++) {
-            flat.push({ pkgIdx: pi, itemIdx: ii });
+        const pkg = packages[pi]!;
+        if (pkg.type === "plugin") continue;
+        // files packages toggle as a single unit — expose only one row per package
+        if (pkg.type === "files") {
+            flat.push({ pkgIdx: pi, itemIdx: 0 });
+        } else {
+            for (let ii = 0; ii < pkg.items.length; ii++) {
+                flat.push({ pkgIdx: pi, itemIdx: ii });
+            }
         }
     }
     return flat;
@@ -114,7 +120,7 @@ export function App({ repoRoot }: AppProps) {
 
     if (loading) return h(Text, null, "Discovering packages...");
     if (error) return h(Text, { color: "red" }, "Error: " + error);
-    if (flat.length === 0) return h(Text, { color: "yellow" }, "No packages found.");
+    if (flat.length === 0) return h(Text, { color: "yellow" }, "No installable packages found.");
 
     if (phase === "installing") {
         return h(Box, { flexDirection: "column", paddingX: 1 },

@@ -30,7 +30,7 @@ npm install
 npm run install-packages
 ```
 
-Uses a card-based interface. Navigate with `tab`/`↑↓`, toggle with `space`, view details with `i`, install with `enter`.
+Uses a flat checklist. Navigate with `↑↓`, toggle with `space`, view details with `i`, install with `enter`. Only `packages/` entries are shown — plugins are installed via the Claude Code marketplace.
 
 To install one or more packages by name without the TUI (fully non-interactive):
 
@@ -39,8 +39,6 @@ npm run install-package statusline
 ```
 
 Names are matched case-insensitively against package IDs, package labels, and individual item names. Exits non-zero if any name is not found or if any install fails.
-
-The installer also discovers skills from `plugins/`, so you can use it to symlink-install plugin skills locally if you prefer that workflow over the plugin system.
 
 ## Skills
 
