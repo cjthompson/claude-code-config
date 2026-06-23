@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.46 - 2026-06-23
+
+### Changes
+- **plugins**: removed `version` field from all `plugin.json` files. Claude Code now uses the git commit SHA for update detection, so every commit auto-delivers to marketplace subscribers.
+
 ## v0.0.45 - 2026-06-23
 
 ### Changes
