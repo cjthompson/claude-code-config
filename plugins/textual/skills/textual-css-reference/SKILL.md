@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: textual-css-reference
 description: Use when writing Textual TUI CSS styles or checking valid CSS properties
 ---

@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: orchestration-strategy
 description: Use when facing multiple implementation tasks that could benefit from parallelization or when deciding between solo, parallel agent, sequential subagent, or agent team approaches
 ---

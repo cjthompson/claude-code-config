@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: agent-team-development
 description: Use when work requires inter-agent communication, cross-layer coordination, or configurable autonomy with Claude Code Agent Teams
 ---

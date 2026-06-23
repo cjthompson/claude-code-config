@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: textual-api-reference
 description: Use when working with Textual TUI widgets — looking up available components, reactive attributes, constructor parameters, or messages emitted
 ---
