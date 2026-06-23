@@ -1,6 +1,5 @@
 {
     "name": "project-tasks",
-    "version": "1.0.0",
     "description": "Capture project tasks inline, store them in SQLite, dispatch work, and generate changelogs.",
     "author": {
         "name": "cjthompson"

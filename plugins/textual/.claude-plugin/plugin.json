@@ -1,6 +1,5 @@
 {
     "name": "textual",
-    "version": "1.0.0",
     "description": "Reference skills for the Textual TUI framework — CSS properties and widget API",
     "author": { "name": "cjthompson" },
     "keywords": ["textual", "tui", "python", "css", "widgets"],

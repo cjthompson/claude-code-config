@@ -1,6 +1,5 @@
 {
     "name": "output-styles",
-    "version": "1.0.0",
     "description": "Custom output styles for Claude Code — selectable via /output-style.",
     "author": { "name": "cjthompson" },
     "keywords": ["output", "styles", "formatting"],
