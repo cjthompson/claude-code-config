@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+# repo-status.sh — branch, HEAD time, remote sync, local changes, and open PRs
+#                  for every sub-repo in this workspace directory.
+# Run from any directory; paths resolve relative to the script's own location.
+#
+# Requires: git, gh (GitHub CLI, authenticated), jq
+# macOS note: uses 'stat -f %m' and 'date -j -f' (both macOS-native).
+set -uo pipefail
+
+# ── Configuration ──────────────────────────────────────────────────────────────
+AUTHORS=("chris-gusto")   # GitHub login(s) to search for open PRs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+SYNC_MODE=0
+SCAN_ARG=""
+for arg in "$@"; do
+  case "$arg" in
+    --sync) SYNC_MODE=1 ;;
+    *)      SCAN_ARG="$arg" ;;
+  esac
+done
+
+SCAN_DIR="$(cd "${SCAN_ARG:-$PWD}" 2>/dev/null && pwd)" \
+  || { echo "Directory not found: ${SCAN_ARG:-$PWD}" >&2; exit 1; }
+
+# ── Colors (auto-disabled when stdout is not a terminal) ───────────────────────
+if [ -t 1 ]; then
+  BOLD=$'\033[1m' RED=$'\033[0;31m' GREEN=$'\033[0;32m' BLUE=$'\033[0;34m'
+  YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' DIM=$'\033[2m' RESET=$'\033[0m'
+else
+  BOLD='' RED='' GREEN='' BLUE='' YELLOW='' CYAN='' DIM='' RESET=''
+fi
+
+# ── read_yn: prompt for y/n, ignore everything else, return 0=yes 1=no ─────────
+read_yn() {
+  local prompt=$1 ans
+  while true; do
+    printf "%s" "$prompt"
+    read -r -n 1 ans
+    echo
+    [[ "$ans" == [yY] ]] && return 0
+    [[ "$ans" == [nN] || -z "$ans" ]] && return 1
+    printf "  Please press y or n.\n"
+  done
+}
+
+# ── relative_time: epoch → "Xm ago" / "Xh ago" / "Xd ago" ────────────────────
+relative_time() {
+  local ts=$1 now diff
+  now=$(date +%s); diff=$(( now - ts ))
+  if   (( diff <     60 )); then echo "just now"
+  elif (( diff <   3600 )); then echo "$(( diff / 60 ))m ago"
+  elif (( diff <  86400 )); then echo "$(( diff / 3600 ))h ago"
+  elif (( diff < 604800 )); then echo "$(( diff / 86400 ))d ago"
+  else                           echo "$(( diff / 604800 ))w ago"
+  fi
+}
+
+# ── iso_to_epoch: "2026-06-23T10:30:00Z" → epoch (macOS date) ─────────────────
+iso_to_epoch() {
+  date -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" "+%s" 2>/dev/null || echo 0
+}
+
+# ── iso_to_abs: ISO 8601 UTC → "Jun 23 14:05" ─────────────────────────────────
+iso_to_abs() {
+  date -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" "+%b %d %H:%M" 2>/dev/null || echo "$1"
+}
+
+# ── remote_to_slug: git remote URL → "Org/Repo" ───────────────────────────────
+remote_to_slug() {
+  local url="${1%.git}"; echo "${url##*github.com[:/]}"
+}
+
+# ── newest_mtime: newest mtime (epoch) among files touched by uncommitted changes
+newest_mtime() {
+  local dir=$1 newest=0 line path full mtime
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    path="${line:3}"
+    [[ "$path" == *" -> "* ]] && path="${path##* -> }"   # rename: take new name
+    path="${path%\"}" path="${path#\"}"                   # strip git-added quotes
+    full="$dir/$path"; [[ -e "$full" ]] || continue
+    mtime=$(stat -f %m "$full" 2>/dev/null) || continue
+    (( mtime > newest )) && newest=$mtime
+  done < <(git -C "$dir" status --porcelain 2>/dev/null)
+  echo "$newest"
+}
+
+# ── change_counts: staged / unstaged / untracked from git status ───────────────
+change_counts() {
+  local dir=$1 staged=0 unstaged=0 untracked=0 x y
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    x="${line:0:1}" y="${line:1:1}"
+    if [[ "$x$y" == "??" ]]; then (( untracked++ ))
+    else
+      [[ "$x" != " " ]]                    && (( staged++ ))
+      [[ "$y" != " " && "$y" != "?" ]]     && (( unstaged++ ))
+    fi
+  done < <(git -C "$dir" status --porcelain 2>/dev/null)
+  echo "$staged $unstaged $untracked"
+}
+
+# ── detect_primary: return the repo's primary/default branch name ──────────────
+detect_primary() {
+  local repo=$1 primary
+  primary="$(git -C "$repo" symbolic-ref refs/remotes/origin/HEAD --short \
+               2>/dev/null | sed 's|origin/||')"
+  if [[ -z "$primary" ]]; then
+    local c
+    for c in main master development; do
+      if git -C "$repo" show-ref --verify --quiet \
+             "refs/remotes/origin/$c" 2>/dev/null; then
+        primary="$c"; break
+      fi
+    done
+  fi
+  echo "${primary:-}"
+}
+
+# ── ahead_behind: "N_ahead N_behind" between two git refs ─────────────────────
+ahead_behind() {
+  local repo=$1 left=$2 right=$3 ab
+  ab="$(git -C "$repo" rev-list --left-right --count \
+          "${left}...${right}" 2>/dev/null)" || { echo "0 0"; return; }
+  echo "${ab%%$'\t'*} ${ab##*$'\t'}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discover repos — any sub-dir with .git (file or directory)
+# ─────────────────────────────────────────────────────────────────────────────
+REPOS=()
+for d in "$SCAN_DIR"/*/; do
+  d="${d%/}"
+  [[ "$(basename "$d")" == .* ]] && continue   # skip .claude etc.
+  [[ -e "$d/.git" ]] || continue
+  REPOS+=("$d")
+done
+if (( ${#REPOS[@]} > 1 )); then
+  IFS=$'\n' REPOS=($(printf '%s\n' "${REPOS[@]}" | sort)); unset IFS
+fi
+if (( ${#REPOS[@]} == 0 )); then
+  echo "No git repos found in $SCRIPT_DIR" >&2; exit 0
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 — background: git fetch (all repos) + gh pr list (all repos/authors)
+# ─────────────────────────────────────────────────────────────────────────────
+WORK_DIR="$(mktemp -d /tmp/repo-status.XXXXXX)"
+FETCH_DONE_DIR="$WORK_DIR/fetch_done"
+mkdir -p "$FETCH_DONE_DIR"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+TOTAL_REPOS=${#REPOS[@]}
+
+# Progress bar monitor — polls sentinel files, self-terminates when all fetches done
+if [ -t 2 ]; then
+  (
+    while true; do
+      done_count=$(ls "$FETCH_DONE_DIR" 2>/dev/null | wc -l | tr -d ' ')
+      bar_done='' bar_left=''
+      for (( j=0; j<done_count; j++ ));        do bar_done+='█'; done
+      for (( j=done_count; j<TOTAL_REPOS; j++ )); do bar_left+='░'; done
+      printf "\r${DIM}Fetching from %d remotes…  [%s%s] %d/%d${RESET}" \
+        "$TOTAL_REPOS" "$bar_done" "$bar_left" "$done_count" "$TOTAL_REPOS" >&2
+      [ "$done_count" -ge "$TOTAL_REPOS" ] && break
+      sleep 0.1
+    done
+    sleep 0.15   # let the full bar be visible for a moment
+    printf "\r\033[2K" >&2
+  ) &
+fi
+
+for repo in "${REPOS[@]}"; do
+  name="$(basename "$repo")"
+  remote="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
+  slug="$(remote_to_slug "$remote")"
+
+  # Fetch — touch sentinel file on completion so the progress bar can count it
+  ( git -C "$repo" fetch --quiet --prune --no-tags 2>/dev/null
+    touch "$FETCH_DONE_DIR/$name" ) &
+
+  for author in "${AUTHORS[@]}"; do
+    (
+      gh pr list --repo "$slug" --author "$author" --state open \
+        --json number,title,updatedAt,url --limit 50 2>/dev/null \
+      || echo "[]"
+    ) > "$WORK_DIR/${name}__${author}.json" &
+  done
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2 — sequential (while network jobs run): local git info
+# Uses parallel indexed arrays (bash 3.2-compatible, no declare -A)
+# ─────────────────────────────────────────────────────────────────────────────
+BRANCH_DATA=()    # branch name (or "detached@SHA")
+CHANGES_DATA=()   # "staged unstaged untracked total"
+MTIME_DATA=()     # epoch of newest dirty file (0 = clean)
+HEAD_TIME_DATA=() # epoch of HEAD commit
+
+for repo in "${REPOS[@]}"; do
+  br="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")"
+  [[ "$br" == "HEAD" ]] && \
+    br="detached@$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
+  BRANCH_DATA+=("$br")
+
+  read -r s u t <<< "$(change_counts "$repo")"
+  total=$(( s + u + t ))
+  CHANGES_DATA+=("$s $u $t $total")
+  MTIME_DATA+=( $(( total > 0 ? $(newest_mtime "$repo") : 0 )) )
+
+  HEAD_TIME_DATA+=( "$(git -C "$repo" log -1 --format="%ct" 2>/dev/null || echo 0)" )
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 — wait, then gather remote-sync info per repo
+# ─────────────────────────────────────────────────────────────────────────────
+wait
+[ -t 2 ] && printf "\r\033[2K" >&2   # ensure progress bar line is cleared
+
+# SYNC_DATA[i]    = "ahead behind upstream_ref"  |  "0 0 none"
+# PRIMARY_DATA[i] = primary branch name (may be "")
+# P_SYNC_DATA[i]  = "pa pb"  |  "- - <reason>"
+SYNC_DATA=()
+PRIMARY_DATA=()
+P_SYNC_DATA=()
+
+for i in "${!REPOS[@]}"; do
+  repo="${REPOS[$i]}"
+  br="${BRANCH_DATA[$i]}"
+
+  # Current branch vs its upstream tracking branch
+  upstream="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name \
+                '@{u}' 2>/dev/null || true)"
+  if [[ -n "$upstream" ]]; then
+    read -r a b <<< "$(ahead_behind "$repo" HEAD "$upstream")"
+    SYNC_DATA+=("$a $b $upstream")
+  else
+    SYNC_DATA+=("0 0 none")
+  fi
+
+  # Primary (default) branch
+  primary="$(detect_primary "$repo")"
+  PRIMARY_DATA+=("$primary")
+
+  # Primary branch local vs remote (only when on a different branch)
+  if [[ -n "$primary" && "$br" != "$primary" ]]; then
+    local_ref="refs/heads/$primary"
+    remote_ref="refs/remotes/origin/$primary"
+    if ! git -C "$repo" show-ref --verify --quiet "$remote_ref" 2>/dev/null; then
+      P_SYNC_DATA+=("- - no_remote")
+    elif ! git -C "$repo" show-ref --verify --quiet "$local_ref" 2>/dev/null; then
+      P_SYNC_DATA+=("- - no_local")
+    else
+      read -r pa pb <<< "$(ahead_behind "$repo" "$local_ref" "$remote_ref")"
+      P_SYNC_DATA+=("$pa $pb ok")
+    fi
+  else
+    P_SYNC_DATA+=("- - same")
+  fi
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4 — render all repos; collect pull/push candidates
+# ─────────────────────────────────────────────────────────────────────────────
+PULL_IDXS=()    # current branch behind remote
+P_PULL_IDXS=()  # primary branch behind remote (when on a feature branch)
+PUSH_IDXS=()    # non-primary branch ahead of remote (purely, no diverge)
+
+echo ""
+for i in "${!REPOS[@]}"; do
+  repo="${REPOS[$i]}"
+  name="$(basename "$repo")"
+  br="${BRANCH_DATA[$i]}"
+  read -r staged unstaged untracked total <<< "${CHANGES_DATA[$i]}"
+  mtime="${MTIME_DATA[$i]}"
+  head_ts="${HEAD_TIME_DATA[$i]}"
+  read -r cur_a cur_b upstream <<< "${SYNC_DATA[$i]}"
+  primary="${PRIMARY_DATA[$i]}"
+  p_sync="${P_SYNC_DATA[$i]}"
+
+  # ── Header: repo name + branch ──────────────────────────────────────────────
+  printf "${BOLD}${CYAN}▸ %-20s${RESET}  branch: ${YELLOW}%s${RESET}\n" \
+    "$name" "$br"
+
+  # ── HEAD commit time ─────────────────────────────────────────────────────────
+  if (( head_ts > 0 )); then
+    h_rel="$(relative_time "$head_ts")"
+    h_abs="$(date -r "$head_ts" '+%b %d %H:%M' 2>/dev/null)"
+    printf "  HEAD: %s (%s)" "$h_abs" "$h_rel"
+  else
+    printf "  HEAD: unknown"
+  fi
+
+  # ── Current branch sync status (inline after HEAD) ──────────────────────────
+  if [[ "$upstream" == "none" ]]; then
+    printf "  ${DIM}· no upstream${RESET}"
+  elif (( cur_a == 0 && cur_b == 0 )); then
+    printf "  ${GREEN}· ✓ in sync${RESET}"
+  elif (( cur_a > 0 && cur_b == 0 )); then
+    printf "  ${YELLOW}· ↑ %d ahead${RESET}" "$cur_a"
+    [[ -n "$primary" && "$br" != "$primary" ]] && PUSH_IDXS+=("$i")
+  elif (( cur_b > 0 && cur_a == 0 )); then
+    printf "  ${RED}· ↓ %d behind${RESET}" "$cur_b"
+    PULL_IDXS+=("$i")
+  else
+    printf "  ${RED}· ↑ %d ahead  ↓ %d behind (diverged)${RESET}" "$cur_a" "$cur_b"
+    PULL_IDXS+=("$i")
+  fi
+  echo ""
+
+  # ── Primary branch sync (only shown when on a feature branch) ───────────────
+  if [[ -n "$primary" && "$br" != "$primary" ]]; then
+    read -r pa pb p_reason <<< "$p_sync"
+    printf "  primary: ${BLUE}%s${RESET}" "$primary"
+    case "$p_reason" in
+      no_remote) printf "  ${DIM}(remote not found)${RESET}" ;;
+      no_local)  printf "  ${DIM}(not checked out locally)${RESET}" ;;
+      same)      ;;   # shouldn't happen
+      ok)
+        if   [[ "$pa" == "0" && "$pb" == "0" ]]; then
+          printf "  ${GREEN}✓ in sync${RESET}"
+        elif [[ "$pa" == "0" ]]; then
+          printf "  ${RED}↓ %s behind${RESET}" "$pb"
+          P_PULL_IDXS+=("$i")
+        elif [[ "$pb" == "0" ]]; then
+          printf "  ${YELLOW}↑ %s ahead${RESET}" "$pa"
+        else
+          printf "  ${RED}↑ %s ahead  ↓ %s behind (diverged)${RESET}" "$pa" "$pb"
+          P_PULL_IDXS+=("$i")
+        fi
+        ;;
+    esac
+    echo ""
+  fi
+
+  # ── Local changes ────────────────────────────────────────────────────────────
+  if (( total == 0 )); then
+    printf "  ${GREEN}✓ clean${RESET}\n"
+  else
+    parts=()
+    (( staged    > 0 )) && parts+=("${staged} staged")
+    (( unstaged  > 0 )) && parts+=("${unstaged} modified")
+    (( untracked > 0 )) && parts+=("${untracked} untracked")
+    joined="$(IFS=', '; printf '%s' "${parts[*]}")"
+    if (( mtime > 0 )); then
+      rel="$(relative_time "$mtime")"
+      abs="$(date -r "$mtime" '+%b %d %H:%M')"
+      printf "  ${RED}✗ %s${RESET}  ${DIM}last edit: %s (%s)${RESET}\n" \
+        "$joined" "$rel" "$abs"
+    else
+      printf "  ${RED}✗ %s${RESET}\n" "$joined"
+    fi
+  fi
+
+  # ── Open PRs ─────────────────────────────────────────────────────────────────
+  has_prs=0
+  for author in "${AUTHORS[@]}"; do
+    tmp="$WORK_DIR/${name}__${author}.json"
+    [[ -f "$tmp" ]] || continue
+    while IFS=$'\t' read -r num updated_at url title; do
+      has_prs=1
+      epoch="$(iso_to_epoch "$updated_at")"
+      rel="$(relative_time "$epoch")"
+      abs="$(iso_to_abs "$updated_at")"
+      (( ${#title} > 60 )) && title="${title:0:57}…"
+      printf "  ${BOLD}  PR #%-5s${RESET}  %-62s  updated %s (%s)\n" \
+        "$num" "$title" "$rel" "$abs"
+      printf "  ${DIM}          %s${RESET}\n" "$url"
+    done < <(
+      jq -r '.[] | [.number|tostring, .updatedAt, .url, .title] | join("\t")' \
+        "$tmp" 2>/dev/null
+    )
+  done
+  (( has_prs == 0 )) && printf "  ${DIM}  no open PRs${RESET}\n"
+
+  echo ""
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5 — interactive offers (only when both stdin and stdout are a TTY)
+# ─────────────────────────────────────────────────────────────────────────────
+[ -t 0 ] && [ -t 1 ] || [[ "$SYNC_MODE" == 1 ]] || exit 0
+
+# ── Offer: pull current branch ─────────────────────────────────────────────────
+if (( ${#PULL_IDXS[@]} > 0 )); then
+  printf "${BOLD}── Pull (current branch behind remote) ─────────────────────────────────${RESET}\n"
+  for i in "${PULL_IDXS[@]}"; do
+    read -r a b _ <<< "${SYNC_DATA[$i]}"
+    printf "  %-20s  %s  ${RED}↓ %s behind${RESET}\n" \
+      "$(basename "${REPOS[$i]}")" "${BRANCH_DATA[$i]}" "$b"
+  done
+  if (( SYNC_MODE )) || read_yn "Pull? [y/N] "; then
+    for i in "${PULL_IDXS[@]}"; do
+      repo="${REPOS[$i]}"
+      printf "${BOLD}→ %s${RESET}  " "$(basename "$repo")"
+      old="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
+      if git -C "$repo" pull --ff-only --quiet 2>/dev/null; then
+        new="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
+        if [[ "$old" == "$new" ]]; then
+          printf "${DIM}already up to date${RESET}\n"
+        else
+          msg="$(git -C "$repo" log -1 --format="%s" 2>/dev/null)"
+          printf "${GREEN}%s → %s${RESET}  %s\n" "$old" "$new" "$msg"
+        fi
+      else
+        printf "${RED}pull failed (conflicts? check manually)${RESET}\n"
+      fi
+    done
+  fi
+  echo ""
+fi
+
+# ── Offer: update local primary branch from remote ────────────────────────────
+if (( ${#P_PULL_IDXS[@]} > 0 )); then
+  printf "${BOLD}── Pull (primary branch behind remote) ─────────────────────────────────${RESET}\n"
+  for i in "${P_PULL_IDXS[@]}"; do
+    read -r _ pb _ <<< "${P_SYNC_DATA[$i]}"
+    printf "  %-20s  %s  ${RED}↓ %s behind${RESET}\n" \
+      "$(basename "${REPOS[$i]}")" "${PRIMARY_DATA[$i]}" "$pb"
+  done
+  if (( SYNC_MODE )) || read_yn "Update local primary branches? [y/N] "; then
+    for i in "${P_PULL_IDXS[@]}"; do
+      repo="${REPOS[$i]}"; primary="${PRIMARY_DATA[$i]}"
+      printf "${BOLD}→ %s (%s)${RESET}  " "$(basename "$repo")" "$primary"
+
+      # Detect if primary is checked out in another worktree — git refuses to
+      # update a branch that's live elsewhere, so we tell the user where to pull.
+      worktree_path="$(git -C "$repo" worktree list --porcelain 2>/dev/null | \
+        awk -v br="refs/heads/$primary" '
+          /^worktree / { wt = substr($0,10) }
+          $0 == "branch " br { print wt }
+        ')"
+      if [[ -n "$worktree_path" ]]; then
+        printf "${YELLOW}checked out at %s — run \`git pull\` there${RESET}\n" \
+          "$worktree_path"
+        continue
+      fi
+
+      old="$(git -C "$repo" rev-parse --short "$primary" 2>/dev/null)"
+      if git -C "$repo" fetch --quiet origin "${primary}:${primary}" 2>/dev/null; then
+        new="$(git -C "$repo" rev-parse --short "$primary" 2>/dev/null)"
+        if [[ "$old" == "$new" ]]; then
+          printf "${DIM}already up to date${RESET}\n"
+        else
+          msg="$(git -C "$repo" log -1 "$primary" --format="%s" 2>/dev/null)"
+          printf "${GREEN}%s → %s${RESET}  %s\n" "$old" "$new" "$msg"
+        fi
+      else
+        printf "${RED}fetch failed${RESET}\n"
+      fi
+    done
+  fi
+  echo ""
+fi
+
+# ── Offer: push non-primary branches ahead of remote ─────────────────────────
+if (( ${#PUSH_IDXS[@]} > 0 )); then
+  printf "${BOLD}── Push (non-primary branch ahead of remote) ───────────────────────────${RESET}\n"
+  for i in "${PUSH_IDXS[@]}"; do
+    read -r a _ _ <<< "${SYNC_DATA[$i]}"
+    printf "  %-20s  %s  ${YELLOW}↑ %s ahead${RESET}\n" \
+      "$(basename "${REPOS[$i]}")" "${BRANCH_DATA[$i]}" "$a"
+  done
+  if (( SYNC_MODE )) || read_yn "Push? [y/N] "; then
+    for i in "${PUSH_IDXS[@]}"; do
+      repo="${REPOS[$i]}"
+      printf "${BOLD}→ %s (%s)${RESET}  " "$(basename "$repo")" "${BRANCH_DATA[$i]}"
+      sha="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
+      if git -C "$repo" push --quiet 2>/dev/null; then
+        msg="$(git -C "$repo" log -1 --format="%s" 2>/dev/null)"
+        printf "${GREEN}pushed %s${RESET}  %s\n" "$sha" "$msg"
+      else
+        printf "${RED}push failed (check manually)${RESET}\n"
+      fi
+    done
+  fi
+  echo ""
+fi

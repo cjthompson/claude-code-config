@@ -1,0 +1,7 @@
+{
+    "label": "Git Utils",
+    "description": "Workspace-level git status and sync tools",
+    "type": "files",
+    "files": ["repos"],
+    "destDir": "~/.local/bin"
+}
