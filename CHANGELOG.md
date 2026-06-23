@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.47 - 2026-06-23
+
+### Changes
+- **packages/git-utils**: added `repos` script — workspace-level git status, branch sync, local changes, and open PRs for every repo in a directory, with interactive pull/push offers.
+
 ## v0.0.46 - 2026-06-23
 
 ### Changes
