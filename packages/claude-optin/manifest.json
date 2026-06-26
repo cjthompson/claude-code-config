@@ -1,6 +1,6 @@
 {
     "label": "claude-optin",
-    "description": "TUI to manage per-repo Claude Code plugin opt-ins. Lists installed plugins (with skills and agents), shows the effective enabled state and its source (user / project / local), and toggles local overrides written to .claude/settings.local.json (or ~/.claude/settings.json with --global).",
+    "description": "TUI to manage per-repo Claude Code opt-ins for both plugins and MCP servers. Lists installed plugins (with skills and agents) and MCP servers discovered from .mcp.json files plus ~/.claude.json, shows each one's effective enabled state and its source (user / project / local), and toggles overrides written to .claude/settings.local.json (or ~/.claude/settings.json with --global).",
     "example": "~/.local/bin/claude-optin            # toggle opt-ins for the current repo\n  ~/.local/bin/claude-optin --global   # edit user-level defaults",
     "type": "files",
     "destDir": "~/.local/bin",
