@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.49 - 2026-06-25
+
+### Changes
+- **packages/claude-optin**: added MCP server management. The TUI now has two tabs — Plugins and MCP Servers — switched with `Tab`, sharing the same keybindings and three-state (inherit → on → off) toggling. Servers are discovered from every `.mcp.json` found walking the current directory up to `$HOME`, plus user-scope servers in `~/.claude.json`; toggling moves a name between `enabledMcpjsonServers` / `disabledMcpjsonServers` so a disabled server stays defined but loads no context. Names listed in settings with no matching definition are shown flagged as orphans. The `D` (delete) hint now shows only on the Plugins tab, since delete is plugin-only. Added a `test_claude_optin.py` unit suite covering discovery and settings logic.
+
 ## v0.0.48 - 2026-06-25
 
 ### Changes
