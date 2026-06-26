@@ -6,6 +6,7 @@
   ],
   "scripts": {
     "install-packages": "npm -w @cjthompson/claude-code-config-installer start",
+    "install-plugins": "node --experimental-strip-types scripts/install-plugins.ts",
     "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall",
     "install-package": "npm -w @cjthompson/claude-code-config-installer run install-package --"
   },
