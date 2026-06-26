@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""claude-optins — TUI to manage per-repo Claude Code plugin opt-ins.
+"""claude-optins — TUI to manage per-repo Claude Code opt-ins.
 
-Run from inside a repo. Lists every installed plugin (with its skills and
-agents), shows the effective enabled state and where it comes from
-(user / project / local settings), and lets you toggle a local override.
+Run from inside a repo. Manages two things that add to a session's startup
+context, in two tabs switched with TAB:
+
+  • Plugins — every installed plugin (with its skills and agents), its
+    effective enabled state, and where that comes from.
+  • MCP servers — every server defined in a .mcp.json found walking from
+    the current directory up to your home directory, plus user-scope
+    servers in ~/.claude.json. Toggling moves a name between the
+    enabledMcpjsonServers / disabledMcpjsonServers lists; a disabled
+    server stays defined but isn't started, so it costs no context.
 
 Keys:
+  tab           switch Plugins / MCP Servers tab
   j/k, arrows   move          space/enter  cycle: inherit -> on -> off
   l/right       expand        h/left       collapse
   a             expand/collapse all        g/G  top/bottom
   s             cycle sort: default / name / enabled / source / skills+agents / tokens
-  D             delete plugin (removes cache dir, prompts for confirmation)
+  D             delete plugin (removes cache dir, prompts; Plugins tab only)
   q             quit (changes are saved on every toggle)
 
 Toggles are written to <repo>/.claude/settings.local.json (gitignored,
@@ -30,6 +38,9 @@ import time
 CLAUDE_DIR = os.path.expanduser("~/.claude")
 CACHE_DIR = os.path.join(CLAUDE_DIR, "plugins", "cache")
 INSTALLED_PLUGINS_PATH = os.path.join(CLAUDE_DIR, "plugins", "installed_plugins.json")
+# User-scope MCP definitions and the running config live here. This is a
+# file (~/.claude.json), not under the ~/.claude/ directory.
+CLAUDE_JSON_PATH = os.path.expanduser("~/.claude.json")
 
 
 def load_json(path):
@@ -90,6 +101,7 @@ def discover_plugins():
             ver = latest_version(pdir)
             if not ver:
                 plugins.append({
+                    "kind": "plugin",
                     "key": key,
                     "name": plugin,
                     "marketplace": marketplace,
@@ -146,6 +158,7 @@ def discover_plugins():
                 pass
 
             plugins.append({
+                "kind": "plugin",
                 "key": key,
                 "name": plugin,
                 "marketplace": marketplace,
@@ -160,7 +173,99 @@ def discover_plugins():
     return plugins
 
 
+def _mcp_entry(name, definition, source):
+    """Shape an MCP server like a plugin entry so the renderer can share code."""
+    transport = definition.get("type")
+    if not transport:
+        transport = "stdio" if definition.get("command") else "http"
+    detail_items = []
+    if definition.get("url"):
+        detail_items.append(("url", definition["url"]))
+    if definition.get("command"):
+        cmd = definition["command"]
+        if definition.get("args"):
+            cmd = cmd + " " + " ".join(definition["args"])
+        detail_items.append(("command", cmd))
+    return {
+        "kind": "mcp",
+        "key": name,
+        "name": name,
+        "source": source,
+        "transport": transport,
+        "definition": definition,
+        "detail_items": detail_items,
+        "est_tokens": None,   # can't be known without connecting to the server
+        "orphan": False,
+    }
+
+
+def discover_mcp_servers(start_dir, home=None, user_json_path=None):
+    """Servers defined in .mcp.json files walking start_dir up to home,
+    plus user-scope mcpServers in ~/.claude.json. Nearer .mcp.json files
+    win on name collision; the user scope is the lowest precedence.
+
+    Returns a list of MCP entry dicts sorted by name.
+    """
+    home = os.path.realpath(home or os.path.expanduser("~"))
+    user_json_path = user_json_path or CLAUDE_JSON_PATH
+
+    # Walk cwd -> home, collecting (name -> (definition, rel_source)).
+    # Iterate nearest first so the first definition seen for a name wins.
+    found = {}
+    d = os.path.realpath(start_dir)
+    while True:
+        mcp_path = os.path.join(d, ".mcp.json")
+        if os.path.isfile(mcp_path):
+            servers = load_json(mcp_path).get("mcpServers", {})
+            rel = os.path.relpath(mcp_path, home)
+            for name, definition in servers.items():
+                if name not in found:
+                    found[name] = (definition, rel)
+        if d == home:
+            break
+        parent = os.path.dirname(d)
+        if parent == d:   # reached filesystem root before home
+            break
+        d = parent
+
+    entries = [_mcp_entry(name, defi, src) for name, (defi, src) in found.items()]
+
+    # User-scope definitions from ~/.claude.json (lowest precedence).
+    user_servers = load_json(user_json_path).get("mcpServers", {})
+    for name, definition in user_servers.items():
+        if name not in found:
+            entries.append(_mcp_entry(name, definition, "user"))
+
+    return sorted(entries, key=lambda e: e["name"].lower())
+
+
+def add_orphans(servers, referenced_names):
+    """Append entries for names referenced in enabled/disabled lists that
+    have no matching definition, flagged orphan=True."""
+    known = {s["name"] for s in servers}
+    orphans = []
+    for name in sorted(referenced_names, key=str.lower):
+        if name not in known:
+            e = _mcp_entry(name, {}, "orphan")
+            e["orphan"] = True
+            e["transport"] = "?"
+            orphans.append(e)
+    return servers + orphans
+
+
 # ---------- settings ----------
+
+def _resolve_mcp_map(doc):
+    """Collapse a settings doc's two MCP name-lists into name -> enabled.
+    A name in disabledMcpjsonServers resolves to False even if also listed
+    as enabled (off wins, the safe default)."""
+    m = {}
+    for n in doc.get("enabledMcpjsonServers") or []:
+        m[n] = True
+    for n in doc.get("disabledMcpjsonServers") or []:
+        m[n] = False
+    return m
+
 
 def find_repo_root():
     d = os.getcwd()
@@ -175,8 +280,10 @@ def find_repo_root():
 
 
 class Settings:
-    """Three-layer enabledPlugins view. Toggles write to the repo's
-    settings.local.json, or to ~/.claude/settings.json in global mode."""
+    """Three-layer view of enabledPlugins and the MCP enable/disable
+    name-lists, which share the same settings files. Toggles write to the
+    repo's settings.local.json, or to ~/.claude/settings.json in global
+    mode."""
 
     def __init__(self, repo_root, global_mode=False):
         self.repo_root = repo_root
@@ -186,12 +293,13 @@ class Settings:
         self.user_doc = load_json(user_path)
         self.user = self.user_doc.setdefault("enabledPlugins", {})
         if global_mode:
+            project_doc = {}
             self.project = {}
             self.local_doc = {}
             self.local = {}
         else:
-            self.project = load_json(os.path.join(repo_root, ".claude", "settings.json")) \
-                .get("enabledPlugins", {})
+            project_doc = load_json(os.path.join(repo_root, ".claude", "settings.json"))
+            self.project = project_doc.get("enabledPlugins", {})
             self.local_doc = load_json(local_path)
             self.local = self.local_doc.setdefault("enabledPlugins", {})
         if global_mode:
@@ -200,6 +308,12 @@ class Settings:
         else:
             self.write_path, self.write_doc, self.target = \
                 local_path, self.local_doc, self.local
+
+        # MCP enable/disable state per layer, resolved from the two
+        # name-lists in each settings doc.
+        self.user_mcp = _resolve_mcp_map(self.user_doc)
+        self.project_mcp = _resolve_mcp_map(project_doc)
+        self.local_mcp = _resolve_mcp_map(self.local_doc)
 
     def effective(self, key, installed=True):
         """Return (enabled, source) where source is local|project|user|default|uninstalled."""
@@ -221,11 +335,43 @@ class Settings:
             del self.target[key]
         self.save()
 
+    def effective_mcp(self, name):
+        """Return (enabled, source) for an MCP server. Unset at every layer
+        defaults to off — a .mcp.json server isn't loaded until approved."""
+        for m, layer in ((self.local_mcp, "local"), (self.project_mcp, "project"),
+                         (self.user_mcp, "user")):
+            if name in m:
+                return m[name], layer
+        return False, "default"
+
+    def cycle_mcp(self, name):
+        """unset -> enabled -> disabled -> unset, in the write-target layer.
+        Moves the name between enabledMcpjsonServers / disabledMcpjsonServers
+        in the write doc."""
+        en = self.write_doc.setdefault("enabledMcpjsonServers", [])
+        dis = self.write_doc.setdefault("disabledMcpjsonServers", [])
+        if name in en:
+            en.remove(name)
+            dis.append(name)
+        elif name in dis:
+            dis.remove(name)
+        else:
+            en.append(name)
+        # Keep the write layer's resolved map in sync for effective_mcp.
+        refreshed = _resolve_mcp_map(self.write_doc)
+        if self.global_mode:
+            self.user_mcp = refreshed
+        else:
+            self.local_mcp = refreshed
+        self.save()
+
     def save(self):
         os.makedirs(os.path.dirname(self.write_path), exist_ok=True)
         doc = dict(self.write_doc)
-        if not doc.get("enabledPlugins"):
-            doc.pop("enabledPlugins", None)
+        for empty_key in ("enabledPlugins", "enabledMcpjsonServers",
+                          "disabledMcpjsonServers"):
+            if not doc.get(empty_key):
+                doc.pop(empty_key, None)
         with open(self.write_path, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")
@@ -233,23 +379,32 @@ class Settings:
 
 # ---------- TUI ----------
 
-def build_rows(plugins, expanded):
-    rows = []  # (kind, plugin_index, text)
-    for i, p in enumerate(plugins):
-        rows.append(("plugin", i, None))
-        if p["key"] in expanded:
-            for s, desc in p["skills"]:
+def build_rows(display, expanded):
+    """Rows are (kind, entry_index, text). entry_index points into the
+    active tab's display list (all plugins, or all MCP servers)."""
+    rows = []
+    for i, e in enumerate(display):
+        rows.append((e["kind"], i, None))
+        if e["key"] not in expanded:
+            continue
+        if e["kind"] == "plugin":
+            for s, desc in e["skills"]:
                 rows.append(("skill", i, f"{s}  {desc}"))
-            for a, desc in p["agents"]:
+            for a, desc in e["agents"]:
                 rows.append(("agent", i, f"{a}  {desc}"))
-            for path, desc in p["other_items"]:
+            for path, desc in e["other_items"]:
                 rows.append(("other", i, f"{path}  {desc}".rstrip()))
-            if not p["skills"] and not p["agents"] and not p["other_items"]:
+            if not e["skills"] and not e["agents"] and not e["other_items"]:
                 rows.append(("empty", i, "(no skills, agents, or other files)"))
+        else:   # mcp
+            for label, val in e["detail_items"]:
+                rows.append(("mcp-detail", i, f"{label}  {val}"))
+            if not e["detail_items"]:
+                rows.append(("empty", i, "(no connection details)"))
     return rows
 
 
-def run(stdscr, plugins, settings):
+def run(stdscr, plugins, servers, settings):
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_GREEN, -1)
@@ -269,40 +424,58 @@ def run(stdscr, plugins, settings):
 
     SORT_MODES = ["default", "name", "enabled", "source", "skills+agents", "tokens"]
     SRC_ORDER = {"local": 0, "project": 1, "user": 2, "default": 3,
-                 "uninstalled": 4, "deleted": 5}
+                 "uninstalled": 4, "orphan": 4, "deleted": 5}
 
     expanded, cursor, top = set(), 0, 0
+    tab = 0           # 0 = Plugins, 1 = MCP Servers
+    TAB_NAMES = ["Plugins", "MCP Servers"]
     deleted = set()   # keys removed this session; gone from cache but kept in list
     confirming = None  # key being confirmed for deletion, or None
     notify_msg, notify_color, notify_at = "", None, 0.0
     sort_idx = 0
 
     while True:
-        # Build sorted display list for this frame.
+        # Build sorted display list for this frame. Plugins and servers are
+        # sorted independently within their sections.
         sort_mode = SORT_MODES[sort_idx]
         def _eff(p):
             return (False, "deleted") if p["key"] in deleted \
                 else settings.effective(p["key"], p["installed"])
         if sort_mode == "name":
-            display = sorted(plugins, key=lambda p: p["name"].lower())
+            plug = sorted(plugins, key=lambda p: p["name"].lower())
         elif sort_mode == "enabled":
-            display = sorted(plugins, key=lambda p: (0 if _eff(p)[0] else 1,
-                                                      p["name"].lower()))
+            plug = sorted(plugins, key=lambda p: (0 if _eff(p)[0] else 1,
+                                                  p["name"].lower()))
         elif sort_mode == "source":
-            display = sorted(plugins, key=lambda p: (SRC_ORDER.get(_eff(p)[1], 3),
-                                                      p["name"].lower()))
+            plug = sorted(plugins, key=lambda p: (SRC_ORDER.get(_eff(p)[1], 3),
+                                                  p["name"].lower()))
         elif sort_mode == "skills+agents":
-            display = sorted(plugins,
-                             key=lambda p: -(len(p["skills"]) + len(p["agents"])))
+            plug = sorted(plugins,
+                          key=lambda p: -(len(p["skills"]) + len(p["agents"])))
         elif sort_mode == "tokens":
-            display = sorted(plugins, key=lambda p: -p["est_tokens"])
+            plug = sorted(plugins, key=lambda p: -p["est_tokens"])
         else:
-            display = plugins
+            plug = plugins
+        # Servers only support name/enabled/source ordering; other modes
+        # fall back to their default (already name-sorted) order.
+        if sort_mode == "enabled":
+            srv = sorted(servers,
+                         key=lambda s: (0 if settings.effective_mcp(s["name"])[0]
+                                        else 1, s["name"].lower()))
+        elif sort_mode == "source":
+            srv = sorted(servers,
+                         key=lambda s: (SRC_ORDER.get(
+                             "orphan" if s["orphan"]
+                             else settings.effective_mcp(s["name"])[1], 3),
+                             s["name"].lower()))
+        else:
+            srv = servers
+        display = list(plug) if tab == 0 else list(srv)
 
         rows = build_rows(display, expanded)
         cursor = max(0, min(cursor, len(rows) - 1))
         h, w = stdscr.getmaxyx()
-        body_h = h - 4
+        body_h = h - 5   # title + info + tab bar + footer + spacer
         if cursor < top:
             top = cursor
         if cursor >= top + body_h:
@@ -314,8 +487,9 @@ def run(stdscr, plugins, settings):
         stdscr.erase()
         stdscr.addnstr(0, 0, f" claude-optins — {scope}", w - 1, curses.A_BOLD)
         info_segs = [
-            (" ", True), (str(len(plugins)), False),
-            (" plugins · enabled startup cost ≈", True), (f"{enabled_tok} tok", False),
+            (" ", True), (str(len(plugins)), False), (" plugins  ", True),
+            (str(len(servers)), False), (" mcp · enabled plugin cost ≈", True),
+            (f"{enabled_tok} tok", False),
             (" · sort: ", True), (sort_mode, False),
             (" · writes ", True),
             (settings.write_path.replace(os.path.expanduser("~"), "~"), False),
@@ -328,11 +502,21 @@ def run(stdscr, plugins, settings):
             stdscr.addnstr(1, x, seg, n, curses.A_DIM if is_label else 0)
             x += len(seg)
 
+        # Tab bar: "Plugins | MCP Servers", active tab bold/underlined.
+        tx = 1
+        for ti, tname in enumerate(TAB_NAMES):
+            if ti:
+                stdscr.addnstr(2, tx, " | ", max(0, w - 1 - tx), curses.A_DIM)
+                tx += 3
+            tattr = (curses.A_BOLD | curses.A_UNDERLINE) if ti == tab else curses.A_DIM
+            stdscr.addnstr(2, tx, tname, max(0, w - 1 - tx), tattr)
+            tx += len(tname)
+
         for vis, idx in enumerate(range(top, min(top + body_h, len(rows)))):
             kind, pi, text = rows[idx]
             p = display[pi]
             attr = curses.A_REVERSE if idx == cursor else 0
-            y = vis + 2
+            y = vis + 3
             if kind == "plugin":
                 if p["key"] in deleted:
                     on, src = False, "deleted"
@@ -394,8 +578,51 @@ def run(stdscr, plugins, settings):
                 else:
                     name_width = max(1, w - 12)
                     stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+            elif kind == "mcp":
+                s = display[pi]
+                on, src = settings.effective_mcp(s["name"])
+                if s["orphan"]:
+                    mark, color = ("?", YELLOW)
+                else:
+                    mark, color = ("✓", GREEN) if on else ("✗", RED)
+                src_tag = {"local": "local   ", "project": "project ",
+                           "user": "user    "}.get(src, "default ")
+                arrow = "▾" if s["key"] in expanded else "▸"
+                name_str = f"{arrow} {s['name']}"
+                info_segs = [
+                    ("[ ", True), (f"{s['transport']:<5}", False),
+                    (" ", True), (s["source"], False), (" ]", True),
+                ]
+                info_str = "".join(seg for seg, _ in info_segs)
+                if s["orphan"]:
+                    name_color = DIM_WHITE | curses.A_DIM
+                elif on:
+                    name_color = GREEN
+                else:
+                    name_color = RED
+                stdscr.addnstr(y, 0, " ", 1, attr)
+                stdscr.addnstr(y, 1, mark, 1, color | attr | curses.A_BOLD)
+                editable = "user" if settings.global_mode else "local"
+                stdscr.addnstr(y, 2, f" {src_tag}", 9,
+                               (YELLOW if src == editable else curses.A_DIM) | attr)
+                info_col = w - len(info_str) - 1
+                if info_col > 11:
+                    name_width = max(1, info_col - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    ix = info_col
+                    for seg, is_label in info_segs:
+                        if ix >= w - 1:
+                            break
+                        n = min(len(seg), w - 1 - ix)
+                        stdscr.addnstr(y, ix, seg, n,
+                                       (curses.A_DIM if is_label else 0) | attr)
+                        ix += len(seg)
+                else:
+                    name_width = max(1, w - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
             else:
-                tag = {"skill": "skill", "agent": "agent", "other": "other", "empty": ""}[kind]
+                tag = {"skill": "skill", "agent": "agent", "other": "other",
+                       "empty": "", "mcp-detail": "·"}[kind]
                 color = CYAN if kind == "agent" else YELLOW if kind == "other" else 0
                 stdscr.addnstr(y, 11, f"· {tag:<5} {text}", w - 12,
                                color | attr | curses.A_DIM)
@@ -411,14 +638,16 @@ def run(stdscr, plugins, settings):
         else:
             footer_segs = [
                 (" ", False),
+                ("tab", True), (":switch  ", False),
                 ("space", True), (":cycle  ", False),
                 ("l", True), (":expand  ", False),
                 ("h", True), (":collapse  ", False),
                 ("a", True), (":all  ", False),
                 ("s", True), (f":sort({sort_mode})  ", False),
-                ("D", True), (":delete  ", False),
-                ("q", True), (":quit ", False),
             ]
+            if tab == 0:   # delete is plugin-only
+                footer_segs += [("D", True), (":delete  ", False)]
+            footer_segs += [("q", True), (":quit ", False)]
         # Fill the row with reversed background first, then render segments on top.
         stdscr.addnstr(h - 1, 0, " " * (w - 1), w - 1, curses.A_REVERSE)
         x = 0
@@ -440,7 +669,8 @@ def run(stdscr, plugins, settings):
 
         ch = stdscr.getch()
         kind, pi, _ = rows[cursor] if rows else ("plugin", 0, None)
-        key = display[pi]["key"] if display else None
+        entry = display[pi] if display and rows else None
+        key = entry["key"] if entry else None
 
         if confirming:
             if ch == ord("y"):
@@ -458,6 +688,9 @@ def run(stdscr, plugins, settings):
 
         if ch in (ord("q"), 27):
             return
+        elif ch in (ord("\t"), curses.KEY_BTAB):
+            tab = (tab + 1) % len(TAB_NAMES)
+            cursor, top = 0, 0
         elif ch in (ord("j"), curses.KEY_DOWN):
             cursor += 1
         elif ch in (ord("k"), curses.KEY_UP):
@@ -466,25 +699,30 @@ def run(stdscr, plugins, settings):
             cursor = 0
         elif ch == ord("G"):
             cursor = len(rows) - 1
-        elif ch in (ord(" "), ord("\n"), curses.KEY_ENTER) and key:
-            _, src = settings.effective(key, display[pi]["installed"])
-            if src not in ("uninstalled", "deleted"):
-                settings.cycle(key)
+        elif ch in (ord(" "), ord("\n"), curses.KEY_ENTER) and entry:
+            if entry["kind"] == "plugin":
+                _, src = settings.effective(entry["key"], entry["installed"])
+                if src not in ("uninstalled", "deleted"):
+                    settings.cycle(entry["key"])
+                    notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+            elif entry["kind"] == "mcp":
+                settings.cycle_mcp(entry["name"])
                 notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
         elif ch in (ord("l"), curses.KEY_RIGHT) and key:
             expanded.add(key)
         elif ch in (ord("h"), curses.KEY_LEFT) and key:
             if key in expanded:
                 expanded.discard(key)
-                # jump cursor back to the plugin row
+                # jump cursor back to the entry's own row
                 cursor = next(i for i, r in enumerate(build_rows(display, expanded))
-                              if r[0] == "plugin" and r[1] == pi)
+                              if r[0] in ("plugin", "mcp") and r[1] == pi)
         elif ch == ord("a"):
-            expanded = set() if expanded else {p["key"] for p in display}
+            expanded = set() if expanded else {e["key"] for e in display}
         elif ch == ord("s"):
             sort_idx = (sort_idx + 1) % len(SORT_MODES)
             cursor = 0
-        elif ch == ord("D") and key and kind == "plugin" and key not in deleted:
+        elif ch == ord("D") and entry and entry["kind"] == "plugin" \
+                and key not in deleted:
             confirming = key
 
 
@@ -492,8 +730,8 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(
         prog="claude-optins",
-        description="Manage Claude Code plugin opt-ins per repo (default) "
-                    "or user-wide defaults (--global).")
+        description="Manage Claude Code plugin and MCP-server opt-ins per "
+                    "repo (default) or user-wide defaults (--global).")
     ap.add_argument("-g", "--global", "--user", dest="global_mode",
                     action="store_true",
                     help="edit user-level defaults in ~/.claude/settings.json "
@@ -501,10 +739,16 @@ def main():
     args = ap.parse_args()
 
     plugins = discover_plugins()
-    if not plugins:
-        sys.exit(f"No plugins found in {CACHE_DIR}")
     settings = Settings(find_repo_root(), global_mode=args.global_mode)
-    curses.wrapper(run, plugins, settings)
+
+    servers = discover_mcp_servers(os.getcwd())
+    referenced = set(settings.local_mcp) | set(settings.project_mcp) \
+        | set(settings.user_mcp)
+    servers = add_orphans(servers, referenced)
+
+    if not plugins and not servers:
+        sys.exit(f"No plugins found in {CACHE_DIR} and no MCP servers found")
+    curses.wrapper(run, plugins, servers, settings)
     print(f"Opt-ins saved to {settings.write_path}")
     print("Run /reload-plugins in a live session (or start a new one) to apply.")
 

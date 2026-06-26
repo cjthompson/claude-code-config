@@ -5,10 +5,11 @@
 ### Changes
 - **packages/git-utils**: `repos` no longer hangs on interactive git/gh credential, SSH host-key, or passphrase prompts — prompts are disabled, subprocess stdin is redirected, network calls are wrapped with a timeout where available, and the whole process group is killed on exit/interrupt.
 
-## v0.0.49 - 2026-07-01
+## v0.0.49 - 2026-06-28
 
 ### Changes
 - **packages/git-utils**: added a package README documenting the `repos` script's usage, `--sync` flag, requirements, and configuration; linked from the top-level README.
+- **packages/claude-optin**: added MCP server management. The TUI now has two tabs — Plugins and MCP Servers — switched with `Tab`, sharing the same keybindings and three-state (inherit → on → off) toggling. Servers are discovered from every `.mcp.json` found walking the current directory up to `$HOME`, plus user-scope servers in `~/.claude.json`; toggling moves a name between `enabledMcpjsonServers` / `disabledMcpjsonServers` so a disabled server stays defined but loads no context. Names listed in settings with no matching definition are shown flagged as orphans. The `D` (delete) hint now shows only on the Plugins tab, since delete is plugin-only. Added a `test_claude_optin.py` unit suite covering discovery and settings logic.
 
 ## v0.0.48 - 2026-06-25
 
