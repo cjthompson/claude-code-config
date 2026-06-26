@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.48 - 2026-06-25
+
+### Changes
+- **packages/claude-optin**: added README documenting the token-reduction purpose, installation, keybindings, and how to enable/disable plugins at the user and project level.
+
 ## v0.0.47 - 2026-06-23
 
 ### Changes
