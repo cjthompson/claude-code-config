@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.49 - 2026-07-01
+
+### Changes
+- **packages/git-utils**: added a package README documenting the `repos` script's usage, `--sync` flag, requirements, and configuration; linked from the top-level README.
+
 ## v0.0.48 - 2026-06-25
 
 ### Changes
