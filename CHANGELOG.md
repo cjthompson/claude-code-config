@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.50 - 2026-07-01
+
+### Changes
+- **packages/git-utils**: `repos` no longer hangs on interactive git/gh credential, SSH host-key, or passphrase prompts — prompts are disabled, subprocess stdin is redirected, network calls are wrapped with a timeout where available, and the whole process group is killed on exit/interrupt.
+
 ## v0.0.49 - 2026-07-01
 
 ### Changes
