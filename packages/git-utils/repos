@@ -11,6 +11,24 @@ set -uo pipefail
 AUTHORS=("chris-gusto")   # GitHub login(s) to search for open PRs
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Never let git/ssh/gh block on an interactive prompt (credential, SSH host-key
+# confirmation, passphrase) — fail fast instead of hanging the whole script.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes"
+export GH_PROMPT_DISABLED=1
+
+# Best-effort extra safety net: cap any single network call in case it hangs
+# for a reason other than a prompt (e.g. a stalled connection). `timeout` is
+# GNU coreutils and isn't guaranteed on stock macOS, so degrade gracefully.
+# Plain string (not an array) — this script targets bash 3.2, where
+# "${arr[@]}" on an empty array trips `set -u`'s unbound-variable check.
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout 15"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout 15"
+fi
+
 SYNC_MODE=0
 SCAN_ARG=""
 for arg in "$@"; do
@@ -149,7 +167,7 @@ fi
 WORK_DIR="$(mktemp -d /tmp/repo-status.XXXXXX)"
 FETCH_DONE_DIR="$WORK_DIR/fetch_done"
 mkdir -p "$FETCH_DONE_DIR"
-trap 'rm -rf "$WORK_DIR"' EXIT
+trap 'rm -rf "$WORK_DIR"; kill -- -$$ 2>/dev/null' EXIT INT TERM
 
 TOTAL_REPOS=${#REPOS[@]}
 
@@ -177,13 +195,14 @@ for repo in "${REPOS[@]}"; do
   slug="$(remote_to_slug "$remote")"
 
   # Fetch — touch sentinel file on completion so the progress bar can count it
-  ( git -C "$repo" fetch --quiet --prune --no-tags 2>/dev/null
+  ( $TIMEOUT_BIN git -C "$repo" fetch --quiet --prune --no-tags \
+      </dev/null 2>/dev/null
     touch "$FETCH_DONE_DIR/$name" ) &
 
   for author in "${AUTHORS[@]}"; do
     (
-      gh pr list --repo "$slug" --author "$author" --state open \
-        --json number,title,updatedAt,url --limit 50 2>/dev/null \
+      $TIMEOUT_BIN gh pr list --repo "$slug" --author "$author" \
+        --state open --json number,title,updatedAt,url --limit 50 </dev/null 2>/dev/null \
       || echo "[]"
     ) > "$WORK_DIR/${name}__${author}.json" &
   done
@@ -395,7 +414,8 @@ if (( ${#PULL_IDXS[@]} > 0 )); then
       repo="${REPOS[$i]}"
       printf "${BOLD}→ %s${RESET}  " "$(basename "$repo")"
       old="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
-      if git -C "$repo" pull --ff-only --quiet 2>/dev/null; then
+      if $TIMEOUT_BIN git -C "$repo" pull --ff-only --quiet \
+          </dev/null 2>/dev/null; then
         new="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
         if [[ "$old" == "$new" ]]; then
           printf "${DIM}already up to date${RESET}\n"
@@ -438,7 +458,8 @@ if (( ${#P_PULL_IDXS[@]} > 0 )); then
       fi
 
       old="$(git -C "$repo" rev-parse --short "$primary" 2>/dev/null)"
-      if git -C "$repo" fetch --quiet origin "${primary}:${primary}" 2>/dev/null; then
+      if $TIMEOUT_BIN git -C "$repo" fetch --quiet origin \
+          "${primary}:${primary}" </dev/null 2>/dev/null; then
         new="$(git -C "$repo" rev-parse --short "$primary" 2>/dev/null)"
         if [[ "$old" == "$new" ]]; then
           printf "${DIM}already up to date${RESET}\n"
@@ -467,7 +488,7 @@ if (( ${#PUSH_IDXS[@]} > 0 )); then
       repo="${REPOS[$i]}"
       printf "${BOLD}→ %s (%s)${RESET}  " "$(basename "$repo")" "${BRANCH_DATA[$i]}"
       sha="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"
-      if git -C "$repo" push --quiet 2>/dev/null; then
+      if $TIMEOUT_BIN git -C "$repo" push --quiet </dev/null 2>/dev/null; then
         msg="$(git -C "$repo" log -1 --format="%s" 2>/dev/null)"
         printf "${GREEN}pushed %s${RESET}  %s\n" "$sha" "$msg"
       else
