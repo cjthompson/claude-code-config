@@ -85,6 +85,12 @@ A two-line powerline-style statusline for Claude Code showing session metrics an
 
 Both lines are width-aware — segments drop progressively as the terminal narrows.
 
+## git-utils
+
+Workspace-level git status and sync tools. Located in `packages/git-utils/`. Install via the TUI installer or `npm run install-package git-utils` (installs `repos` to `~/.local/bin/`).
+
+`repos` scans every sub-repo in a workspace directory and reports branch, ahead/behind status, local changes, and open PRs for each. Run `repos --sync` to non-interactively pull/push repos that are in sync range. Requires `git`, `gh`, and `jq`.
+
 ## claude-optin
 
 A curses TUI to manage per-repo Claude Code plugin opt-ins. Lists every installed plugin (with its skills and agents), shows the effective enabled state and where it comes from (user / project / local settings), and lets you toggle a local override. Located in `packages/claude-optin/`. Install via the TUI installer or `npm run install-package claude-optin` (installs to `~/.local/bin/`), then run `claude-optin` from inside a repo (assuming `~/.local/bin` is on your `PATH`).
