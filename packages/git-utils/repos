@@ -167,7 +167,13 @@ fi
 WORK_DIR="$(mktemp -d /tmp/repo-status.XXXXXX)"
 FETCH_DONE_DIR="$WORK_DIR/fetch_done"
 mkdir -p "$FETCH_DONE_DIR"
-trap 'rm -rf "$WORK_DIR"; kill -- -$$ 2>/dev/null' EXIT INT TERM
+cleanup() {
+  rm -rf "$WORK_DIR"
+  kill -- -$$ 2>/dev/null
+}
+trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 130' INT
+trap 'cleanup; trap - EXIT; exit 143' TERM
 
 TOTAL_REPOS=${#REPOS[@]}
 
