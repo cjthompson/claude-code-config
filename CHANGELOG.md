@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.51 - 2026-07-02
+
+### Changes
+- **packages/git-utils**: fixed `repos` not exiting on Ctrl-C (SIGINT) or SIGTERM — the previous combined `EXIT INT TERM` trap never called `exit`, so the script would resume execution after cleaning up backgrounded jobs instead of terminating. It now uses a `cleanup()` function plus explicit `INT`/`TERM` traps that exit (130/143) after cleanup.
+
 ## v0.0.50 - 2026-07-01
 
 ### Changes
