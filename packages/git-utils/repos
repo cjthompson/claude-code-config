@@ -177,6 +177,13 @@ trap 'cleanup; trap - EXIT; exit 143' TERM
 
 TOTAL_REPOS=${#REPOS[@]}
 
+# Precompute basenames once — avoids spawning `basename` on every 0.1s tick below.
+REPO_NAMES=()
+for repo in "${REPOS[@]}"; do REPO_NAMES+=("$(basename "$repo")"); done
+
+# Max number of in-flight repo names to list before collapsing to "+K more".
+INFLIGHT_CAP=6
+
 # Progress bar monitor — polls sentinel files, self-terminates when all fetches done
 if [ -t 2 ]; then
   (
@@ -185,8 +192,26 @@ if [ -t 2 ]; then
       bar_done='' bar_left=''
       for (( j=0; j<done_count; j++ ));        do bar_done+='█'; done
       for (( j=done_count; j<TOTAL_REPOS; j++ )); do bar_left+='░'; done
-      printf "\r${DIM}Fetching from %d remotes…  [%s%s] %d/%d${RESET}" \
-        "$TOTAL_REPOS" "$bar_done" "$bar_left" "$done_count" "$TOTAL_REPOS" >&2
+
+      # List every repo that hasn't produced a fetch-done sentinel yet — these
+      # are the ones currently in flight (fetches run in parallel, so several
+      # can be active at once). Cap the list so a large workspace can't blow
+      # the line out across multiple terminal rows.
+      inflight='' ninflight=0
+      for name in "${REPO_NAMES[@]}"; do
+        [ -e "$FETCH_DONE_DIR/$name" ] && continue
+        ninflight=$(( ninflight + 1 ))
+        if (( ninflight <= INFLIGHT_CAP )); then
+          if [ -z "$inflight" ]; then inflight="$name"; else inflight="$inflight, $name"; fi
+        fi
+      done
+      extra=$(( ninflight - INFLIGHT_CAP ))
+      (( extra > 0 )) && inflight="$inflight, +${extra} more"
+      suffix=''
+      [ -n "$inflight" ] && suffix="  $inflight"
+
+      printf "\r${DIM}Fetching from %d remotes…  [%s%s] %d/%d%s${RESET}\033[K" \
+        "$TOTAL_REPOS" "$bar_done" "$bar_left" "$done_count" "$TOTAL_REPOS" "$suffix" >&2
       [ "$done_count" -ge "$TOTAL_REPOS" ] && break
       sleep 0.1
     done

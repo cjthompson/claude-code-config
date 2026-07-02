@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.52 - 2026-07-02
+
+### Changes
+- **packages/git-utils**: `repos` now shows every repo currently in flight (not just one) to the right of the Phase 1 fetch progress bar, alphabetically listed and capped at 6 names with a "+K more" suffix beyond that — since fetches run in parallel, a single "first incomplete repo" display could get stuck on a slow repo while the bar advanced from others finishing.
+
 ## v0.0.51 - 2026-07-02
 
 ### Changes
