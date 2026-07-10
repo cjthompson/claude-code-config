@@ -66,11 +66,12 @@ Guides Claude in writing idiomatic Rust code with proper data modeling, traits, 
 
 ## Output Styles
 
-Custom Claude Code output styles, installed into `~/.claude/output-styles/` and selectable via `/output-style`. Located in `packages/output-styles/`. Install via the TUI installer or `npm run install-package output-styles`.
+Custom Claude Code output styles, installed into `~/.claude/output-styles/` and selectable via `/output-style`. Located in `plugins/output-styles/`. Install via the TUI installer or `npm run install-package output-styles`.
 
 | Style | Description |
 |-------|-------------|
 | **Concise** | Terse one-or-two-sentence answers; action lists are captured as tasks rather than buried in prose |
+| **Terse** | Headline-and-bullet answers with all process narration stripped; detail loads only on request |
 
 ## Statusline
 
