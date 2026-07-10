@@ -17,6 +17,14 @@
             "category": "development"
         },
         {
+            "name": "output-styles",
+            "source": "./plugins/output-styles",
+            "description": "Various output-styles",
+            "version": "1.0.0",
+            "keywords": ["output", "output-styles", "terse", "concise"],
+            "category": "development"
+        },
+        {
             "name": "orchestration-strategy",
             "source": "./plugins/orchestration-strategy",
             "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
