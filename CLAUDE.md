@@ -18,7 +18,7 @@ This repository contains configurable elements for Claude Code, including skills
 
 - **AskUserQuestion: Run `install-packages`?** — After changes to anything in `packages/` are committed and merged, ask the user if they want to run `npm run install-packages` to reinstall/apply updates. Changes to `plugins/` are installed via the marketplace and take effect automatically — do not prompt to reinstall for plugin-only changes.
 
-- **`~/.claude` is off-limits** — Never read or write files directly under `~/.claude/`. Always work in this repository (`plugins/`, `packages/`, etc.).
+- **`~/.claude` is off-limits** — Never read or write files directly under `~/.claude/`. Always work in this repository (`docs/`, `plugins/`, `packages/`, etc.).
 
 ## Skill Editing Verification
 
