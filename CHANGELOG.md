@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.53 - 2026-07-10
+
+### Changes
+- **plugins/output-styles**: rewrote the "Terse" output style for clarity — each rule now stated exactly once (label-block spec was defined three times), resolved the conflicting 2+/two-bullet trigger rules in favor of a hard trigger at 2+ items, merged the overlapping plan-mode sections, consolidated the scattered filler bans and snippet exceptions, and cut dead meta-commentary. No rules lost; body reorganized from 14 sections into 7.
+
 ## v0.0.52 - 2026-07-02
 
 ### Changes
