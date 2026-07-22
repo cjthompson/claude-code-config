@@ -5,5 +5,6 @@
         "name": "cjthompson"
     },
     "keywords": ["tasks", "changelog", "sqlite", "subagents"],
-    "license": "MIT"
+    "license": "MIT",
+    "version": "1.0.1"
 }

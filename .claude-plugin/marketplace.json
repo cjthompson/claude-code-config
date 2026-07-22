@@ -12,8 +12,16 @@
             "name": "project-tasks",
             "source": "./plugins/project-tasks",
             "description": "Capture tasks inline with task:/fix:/todo: prefixes, store in SQLite, dispatch to subagents, and auto-generate changelogs.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+            "category": "development"
+        },
+        {
+            "name": "lean-agents",
+            "source": "./plugins/lean-agents",
+            "description": "Reduced-toolset sub-agent profiles (lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with project-tasks, which dispatches to these agents by name.",
+            "version": "1.0.1",
+            "keywords": ["subagents", "token-overhead", "context-window", "routing", "escalation"],
             "category": "development"
         },
         {

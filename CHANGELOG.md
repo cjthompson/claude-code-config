@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.1 - 2026-07-22
+
+### Changes
+- **plugins/lean-agents**: new plugin. Houses the four reduced-toolset sub-agent profiles — `lean-executor` (6 tools: Bash, Edit, EnterWorktree, ExitWorktree, Read, Write), `standard-executor` (8 tools, includes Skill + Agent for self-escalation), `main` (12 tools, interactive profile with Glob/Grep/LSP/AskUserQuestion), and `full-executor` (31 tools, no MCP). Plus a plugin-scoped `CLAUDE.md` documenting the five-tier escalation ladder (lean → standard → main → full → general-purpose) and routing rules. Each agent's `description:` field embeds its tool roster for parent-agent comparison. Moved from `plugins/project-tasks/agents/` so the agents can evolve independently of the consumer skill.
+- **plugins/project-tasks**: trimmed. The `agents/` directory was removed (all four agent files migrated to the new `lean-agents` plugin). The skill still dispatches to `lean-executor` and `general-purpose` by name — `lean-agents` must be enabled alongside `project-tasks` for those dispatches to resolve.
+
 ## v0.0.53 - 2026-07-10
 
 ### Changes

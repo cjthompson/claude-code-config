@@ -1,0 +1,10 @@
+{
+    "name": "lean-agents",
+    "description": "Reduced-toolset sub-agent profiles (lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with the project-tasks skill, which dispatches tasks to these agents by name.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["subagents", "token-overhead", "context-window", "routing", "escalation"],
+    "license": "MIT",
+    "version": "1.0.1"
+}
