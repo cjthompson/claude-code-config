@@ -1,0 +1,23 @@
+# command-watchdog patterns.
+#
+# A Bash command matching ANY regex below is run under command-watchdog.py
+# (live output + idle-hang detection). Everything else is delegated to rtk
+# (if installed) or left untouched.
+#
+# Format per line:  <regex>  [idle_seconds]
+#   - idle_seconds is optional (default 90). It must be the LAST token and be
+#     all digits; a regex containing spaces is otherwise preserved intact.
+#   - Regexes are matched (search, not anchored) against the command AFTER
+#     leading `VAR=val` env assignments are stripped. Use \A to anchor to the
+#     first real token; drop \A to match the command anywhere (e.g. to catch
+#     `cd foo && bin/rspec ...`).
+#   - Blank lines and lines starting with # are ignored.
+#
+# Examples (uncomment / add your own):
+#   \Abin/rails\b                    120
+#   \A(?:bundle\s+exec\s+)?rake\b     180
+#   \Ayarn\s+(build|test)\b           180
+
+\A(?:\./)?(?:bin/rspec|bundle\s+exec\s+rspec|rspec)\b   90
+
+fresheyes\.sh\b   300

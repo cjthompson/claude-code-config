@@ -20,6 +20,7 @@ Then browse and install individual plugins from the `/plugin` UI.
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
+| **command-watchdog** | Idle-hang detection for Bash commands (rspec, fresheyes.sh) — kills silently-stuck runs after a configurable timeout |
 
 ## Installer
 
@@ -63,6 +64,18 @@ End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agen
 ### rust-coding
 
 Guides Claude in writing idiomatic Rust code with proper data modeling, traits, `impl` organization, macros, and build-speed best practices. Automatically triggers when working on `.rs` files or projects with a `Cargo.toml`.
+
+## Hooks
+
+Custom Claude Code hooks, located in `plugins/<name>/hooks/`. Like skills, each is a standalone plugin with its own `.claude-plugin/plugin.json`.
+
+### command-watchdog
+
+A `PreToolUse` hook on the `Bash` tool. Any command matching a regex in `hooks/watchdog-patterns.txt` (ships with `rspec` and `fresheyes.sh` by default) runs under an idle-hang watchdog instead of directly: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so.
+
+Commands that don't match any pattern are delegated to `rtk hook claude` if `rtk` is installed, otherwise passed through unmodified.
+
+To add a pattern, edit `plugins/command-watchdog/hooks/watchdog-patterns.txt` — one `<regex>  [idle_seconds]` per line. See the file's header comment for the exact matching rules.
 
 ## Output Styles
 

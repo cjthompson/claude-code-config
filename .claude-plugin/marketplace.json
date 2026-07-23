@@ -63,6 +63,14 @@
             "version": "1.0.0",
             "keywords": ["textual", "tui", "python", "css", "widgets"],
             "category": "development"
+        },
+        {
+            "name": "command-watchdog",
+            "source": "./plugins/command-watchdog",
+            "description": "Idle-hang watchdog for Bash commands matching configurable patterns (rspec, fresheyes.sh) — kills them when output and CPU both go flat, with rtk fallback for everything else.",
+            "version": "1.0.0",
+            "keywords": ["hooks", "bash", "watchdog", "idle-detection"],
+            "category": "development"
         }
     ]
 }

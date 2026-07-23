@@ -1,0 +1,9 @@
+{
+    "name": "command-watchdog",
+    "description": "PreToolUse hook that runs Bash commands matching configurable patterns (rspec, fresheyes.sh, ...) under an idle-hang watchdog: kills them if output and CPU progress both go flat for a sustained window.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["hooks", "bash", "watchdog", "idle-detection", "rspec"],
+    "license": "MIT"
+}
