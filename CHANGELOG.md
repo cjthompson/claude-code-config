@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.55 - 2026-07-29
+
+### Changes
+- **plugins/lean-agents**: `Glob`/`Grep` are no longer escalation triggers. `standard-executor` was documented as needing a `full-executor` spawn (~30–40k System-tools tokens) for any search work; since it has Bash, `rg`/`grep` (content) and `find` (path/filename patterns) cover the same ground without adding a tool to its roster. Updated the guidance in `standard-executor`, `full-executor`, `main`, `lean-executor`, and the plugin's routing `CLAUDE.md` so `LSP` (semantic navigation) and `AskUserQuestion` — not search — are what justify moving up the ladder. Also carved search out of the "do not improvise with the tools you have" rule, which previously contradicted using shell search. No agent's `tools:` frontmatter changed.
+- **plugins/lean-agents**: added output-bounding guidance for shell search. `Grep` caps results at 250 by default; `grep -rn` does not, so the agents that search via Bash are now told to scope to a path, prefer `rg` (gitignore-aware) with `-l`/`-c`, cap with `head`, and exclude `node_modules`/`.git` when using `grep`/`find`. Agents that *do* hold `Glob`/`Grep` are told to prefer them over shelling out. Notes the `Bash(rg:*)`/`Bash(find:*)` permission prerequisite for `lean-executor`, which cannot escalate if a search is denied.
+- **plugins/lean-agents**: first tests — `tests/scenarios.md` with 8 routing scenarios evaluated in three passes (bare rosters / OLD v0.0.54 guidance / current guidance), plus `tests/plugins/lean-agents/` index and results. Honest outcome: the suite did **not** reproduce spurious `full-executor` escalation for search, even under the old contradictory text, so this change is a consistency fix plus a search-hygiene improvement rather than a measured token saving. The measured delta is scenario 8 — `standard-executor` now emits bounded, gitignore-aware `rg -n` where the old text led it to an unbounded `grep -rn` at repo root with a temp-file spill. GREEN also caught a real defect in the first draft (`rg --include` is `grep` syntax), now fixed.
+- **plugins/project-tasks**: fixed dispatch prompts that told a `lean-executor` (no `Glob`/`Grep`) to search with `Glob`/`Grep`, and a rule that forbade every command except `git log`/`Glob`/`Grep`/`Read`. Now specifies bounded `rg`/`find` while keeping the read-only constraint intact.
+
 ## v0.0.54 - 2026-07-22
 
 ### Changes

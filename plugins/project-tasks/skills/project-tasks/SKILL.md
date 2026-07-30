@@ -692,7 +692,12 @@ From the requirements, identify specific searchable terms: filenames, function n
 variable names, class names, config keys, CLI flags. Ignore generic words.
 
 ### Step 3: Search the codebase
-For each keyword, use Glob and Grep to search. Use Read to inspect promising matches.
+For each keyword, search with Bash and use Read to inspect promising matches:
+- Content: `rg -n 'keyword' .` — add `-l` when you only need which files match.
+- Filenames: `rg --files -g '**/*keyword*'`, or `find . -name '*keyword*'`.
+Keep output small: `rg` respects `.gitignore`, so prefer it over `grep`; append `| head -n 50`
+for keywords likely to match widely. If you must use `grep`/`find`, exclude vendored trees
+(`--exclude-dir={node_modules,.git}` / `-path ./node_modules -prune -o`).
 
 ### Step 4: Verdict per requirement
 - **Found** — clear evidence in code (file:line) or git (commit hash)
@@ -716,7 +721,9 @@ For each keyword, use Glob and Grep to search. Use Read to inspect promising mat
 
 ## Rules
 - Do NOT write, edit, or delete any files.
-- Do NOT run any commands other than git log, Glob, Grep, and Read.
+- Read-only commands only: `git log`, `rg`, `find`, and the Read tool. No commands that
+  modify the repo, the index, or anything outside it — no `git add`/`commit`/`checkout`,
+  no installs, no writes or redirects.
 ```
 
 3. Present the report with an overall confidence summary:

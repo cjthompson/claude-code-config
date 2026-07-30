@@ -33,6 +33,7 @@ No other packages have automated tests yet.
 | Plugin | Test Type | Status | Index |
 |--------|-----------|--------|-------|
 | agent-team-development | Scenario-based (7 scenarios) | Has tests | [index.md](plugins/agent-team-development/index.md) |
+| lean-agents | Scenario-based (8 scenarios, 3-pass) | Has tests | [index.md](plugins/lean-agents/index.md) |
 | orchestration-strategy | Scenario-based (7 scenarios) | Has tests | [index.md](plugins/orchestration-strategy/index.md) |
 | project-tasks | Scenario-based + individual test files | Has tests | [index.md](plugins/project-tasks/index.md) |
 | rust-coding | Scenario-based | No tests yet | [index.md](plugins/rust-coding/index.md) |
