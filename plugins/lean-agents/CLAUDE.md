@@ -5,9 +5,11 @@ When delegating a task to a sub-agent via the Agent tool, pick by tool need, not
 Escalation ladder (cheapest → most expensive):
 
 1. **`lean-executor`** — Bash, Edit, EnterWorktree, ExitWorktree, Read, Write. Tight parallel fan-out where each worker needs file I/O + shell + worktree isolation only. No skills, no spawning, no network, no MCP. Smallest possible toolset.
-2. **`standard-executor`** — Bash, Edit, Read, Write, WebFetch, WebSearch, Skill, **Agent**. Everyday workhorse. Adds skill invocation and self-escalation. ~7–9k System-tools tokens. No Cron/Worktree/Monitor/Task family/LSP/AskUserQuestion/MCP. Does not carry `Glob`/`Grep`, but **needs no escalation for search** — Bash gives it `rg`/`grep` for content and `find` for filename/path patterns.
-3. **`main`** — Agent, AskUserQuestion, Bash, Edit, Glob, Grep, LSP, Read, Skill, WebFetch, WebSearch, Write. Interactive profile: adds LSP and AskUserQuestion (plus Glob/Grep as ergonomic conveniences) so the agent can plan, explore code, and ask clarifying questions. ~14–18k System-tools tokens. No Cron/Worktree/Monitor/Task family/MCP.
+2. **`standard-executor`** — Bash, Edit, Read, Write, WebFetch, WebSearch, Skill, **Agent**, **SendMessage**. Everyday workhorse. Adds skill invocation and self-escalation. ~7–9k System-tools tokens. No Cron/Worktree/Monitor/Task family/LSP/AskUserQuestion/MCP. Does not carry `Glob`/`Grep`, but **needs no escalation for search** — Bash gives it `rg`/`grep` for content and `find` for filename/path patterns.
+3. **`main`** — Agent, AskUserQuestion, Bash, Edit, Glob, Grep, LSP, Read, SendMessage, Skill, WebFetch, WebSearch, Write. Interactive profile: adds LSP and AskUserQuestion (plus Glob/Grep as ergonomic conveniences) so the agent can plan, explore code, and ask clarifying questions. ~14–18k System-tools tokens. No Cron/Worktree/Monitor/Task family/MCP.
 4. **`full-executor`** — Everything in `main` plus CronCreate/Delete/List, NotebookEdit, EnterPlanMode, EnterWorktree/ExitWorktree, ExitPlanMode, Monitor, PushNotification, ReportFindings, RemoteTrigger, ScheduleWakeup, the Task family. ~30–40k System-tools tokens. No MCP.
+
+Any profile carrying `Agent` also carries `SendMessage`, so it can resume a sub-agent it already spawned (relaying follow-up context) instead of spawning a fresh one that starts with no memory of the task.
 5. **`general-purpose`** — Full default roster including MCP tools. Backstop when nothing else fits.
 
 Rules:

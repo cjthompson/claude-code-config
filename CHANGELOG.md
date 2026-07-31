@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.56 - 2026-07-31
+
+### Changes
+- **plugins/lean-agents**: any agent carrying the `Agent` tool now also carries `SendMessage`, so it can resume a sub-agent it already spawned instead of spawning a fresh one with no memory of the task. Updated `tools:` frontmatter and roster descriptions on `standard-executor`, `main`, and `full-executor`, plus the shared ladder rosters in the plugin's routing `CLAUDE.md`. `lean-executor` is unaffected — it has neither `Agent` nor `SendMessage`.
+
 ## v0.0.55 - 2026-07-29
 
 ### Changes
