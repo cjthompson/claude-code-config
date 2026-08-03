@@ -325,6 +325,12 @@ class Settings:
             return False, "uninstalled"
         return True, "default"   # installed plugins default to enabled
 
+    def counts(self, plugins):
+        """(on, off) totals via effective() — a key's mere presence in
+        enabledPlugins isn't enough; only the boolean value decides on/off."""
+        on = sum(1 for p in plugins if self.effective(p["key"], p["installed"])[0])
+        return on, len(plugins) - on
+
     def cycle(self, key):
         """unset -> on -> off -> unset, in the write-target layer"""
         if key not in self.target:
@@ -483,11 +489,14 @@ def run(stdscr, plugins, servers, settings):
 
         enabled_tok = sum(p["est_tokens"] for p in plugins
                           if settings.effective(p["key"], p["installed"])[0])
+        on_count, off_count = settings.counts(plugins)
         scope = "GLOBAL defaults" if settings.global_mode else settings.repo_root
         stdscr.erase()
         stdscr.addnstr(0, 0, f" claude-optins — {scope}", w - 1, curses.A_BOLD)
         info_segs = [
-            (" ", True), (str(len(plugins)), False), (" plugins  ", True),
+            (" ", True), (str(len(plugins)), False), (" plugins (", True),
+            (str(on_count), False), (" on/", True), (str(off_count), False),
+            (" off)  ", True),
             (str(len(servers)), False), (" mcp · enabled plugin cost ≈", True),
             (f"{enabled_tok} tok", False),
             (" · sort: ", True), (sort_mode, False),
