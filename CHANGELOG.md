@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.57 - 2026-08-03
+
+### Changes
+- **plugins/lean-agents**: fixed a broken escalation path — `main` and `standard-executor` were documented to spawn `full-executor` for `EnterPlanMode`/`ExitPlanMode`, but the harness blocks both tools inside any subagent regardless of its `tools:` frontmatter (confirmed by a live runtime error: "ExitPlanMode is not available inside subagents"). Removed the false escalation promise from `main.md`, `standard-executor.md`, and the plugin's routing `CLAUDE.md`. Added a "Plan Mode Handoff" section to `main.md`: instead of escalating or assuming plan-mode-ending is approval, `main` now ends its turn with a plain statement asking the user to exit plan mode and explicitly confirm before it runs any non-read-only tool. Added two new routing scenarios (`tests/scenarios.md`) covering this. No agent's `tools:` frontmatter changed — `full-executor` still lists the plan-mode tools as a harmless no-op for the untested case where it's run as a top-level session agent itself.
+
 ## v0.0.56 - 2026-07-31
 
 ### Changes
