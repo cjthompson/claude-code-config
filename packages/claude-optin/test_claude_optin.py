@@ -180,6 +180,25 @@ class McpSettingsTests(unittest.TestCase):
             self.assertEqual(s.effective_mcp("G"), (True, "user"))
 
 
+class PluginCountTests(unittest.TestCase):
+    def _plugin(self, name):
+        return {"key": f"{name}@m", "name": name, "installed": True}
+
+    def test_counts_use_boolean_value_not_key_presence(self):
+        # a@m is an explicit false, b@m an explicit true, c@m has no key at
+        # all (so it defaults on since it's installed) -- key presence alone
+        # must not be mistaken for "enabled".
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            write_json(os.path.join(home, ".claude", "settings.json"),
+                       {"enabledPlugins": {"a@m": False, "b@m": True}})
+            co.CLAUDE_DIR = os.path.join(home, ".claude")
+            s = co.Settings(repo, global_mode=True)
+            plugins = [self._plugin("a"), self._plugin("b"), self._plugin("c")]
+            self.assertEqual(s.counts(plugins), (2, 1))
+
+
 class RowBuildingTests(unittest.TestCase):
     def _plugin(self, name):
         return {"kind": "plugin", "key": f"{name}@m", "name": name,

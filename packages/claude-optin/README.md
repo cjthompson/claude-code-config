@@ -47,6 +47,8 @@ claude-optin --global     # manage your user-wide defaults
 
 The header shows the total estimated token cost of all currently-enabled plugins so you can see the impact of your changes. (MCP servers load their tool schemas at connect time, so their cost can't be estimated statically and is shown as `?`.)
 
+The header also shows an `N on/M off` count. Trust that count (or the ✓/✗ mark on each row) over eyeballing raw JSON — a plugin key merely *existing* in `enabledPlugins` doesn't mean it's enabled; many keys are explicit `false` entries. Counting keys instead of checking their boolean values is a common way to misread `~/.claude/settings.json` by hand.
+
 ## How it works
 
 Plugins have three possible states at each settings layer:
