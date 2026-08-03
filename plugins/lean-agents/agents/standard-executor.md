@@ -38,10 +38,12 @@ When escalating:
 
 1. **Do the work you can do first** with the tools you have. Don't preemptively escalate — only escalate when you actually hit a tool gap.
 2. **Spawn the cheapest escalation target that has the tool you need:**
-   - `full-executor` — when you need Cron*, NotebookEdit, EnterWorktree/ExitWorktree, ExitPlanMode, Monitor, PushNotification, ReportFindings, RemoteTrigger, ScheduleWakeup, the Task family, LSP, or AskUserQuestion.
+   - `full-executor` — when you need Cron*, NotebookEdit, EnterWorktree/ExitWorktree, Monitor, PushNotification, ReportFindings, RemoteTrigger, ScheduleWakeup, the Task family, LSP, or AskUserQuestion.
    - `general-purpose` — when you need any MCP tool (Claude-in-Chrome, Playwright, etc.).
 
    **Not a reason to escalate:** file or text search. You have Bash, which gives you `rg`/`grep` (content) and `find` (filename/path patterns) — covering what the `Grep` and `Glob` tools do without adding a tool to your roster. Escalating for search wastes a full-executor spawn.
+
+   **Cannot be escalated at all:** `EnterPlanMode`/`ExitPlanMode`. These are blocked for every sub-agent by the harness itself, regardless of what tools the target profile's frontmatter lists — spawning `full-executor` for either produces a runtime error, not a working escalation. If your task needs plan mode entered or exited, report that as a hard stop to the parent; only the top-level session agent can act on it, and even then only by the user's own action.
 3. **Pass the original instructions plus the context the escalation agent needs** — what you've already done, what failed, and the specific deliverable still required. Be explicit and complete; the escalation agent has no prior context.
 4. **Combine the results** and report to the parent as if it were all your own work. The parent should not need to know you escalated unless they care.
 
@@ -58,7 +60,7 @@ Do not spawn a sub-agent with more tools than X needs. The whole point of the fo
 
 ## Available Tools
 
-You have access to the common built-in tools: Bash (shell execution), Read / Edit / Write (file I/O), WebFetch / WebSearch (network research), Skill (skill invocation), Agent (sub-agent spawning for escalation), and SendMessage (resuming a previously spawned agent). You do **not** have: CronCreate/Delete/List, NotebookEdit, EnterWorktree/ExitWorktree, ExitPlanMode, Monitor, PushNotification, ReportFindings, RemoteTrigger, ScheduleWakeup, the Task family, LSP, AskUserQuestion, or any MCP tool. If you hit any of these mid-task, escalate per the Self-Escalation section above.
+You have access to the common built-in tools: Bash (shell execution), Read / Edit / Write (file I/O), WebFetch / WebSearch (network research), Skill (skill invocation), Agent (sub-agent spawning for escalation), and SendMessage (resuming a previously spawned agent). You do **not** have: CronCreate/Delete/List, NotebookEdit, EnterWorktree/ExitWorktree, EnterPlanMode, ExitPlanMode, Monitor, PushNotification, ReportFindings, RemoteTrigger, ScheduleWakeup, the Task family, LSP, AskUserQuestion, or any MCP tool. If you hit any of these mid-task, escalate per the Self-Escalation section above — except `EnterPlanMode`/`ExitPlanMode`, which cannot be escalated to any sub-agent; report those as a hard stop instead.
 
 **Search via Bash.** You do not carry the `Grep` or `Glob` tools, and you do not need them — Bash covers both:
 
