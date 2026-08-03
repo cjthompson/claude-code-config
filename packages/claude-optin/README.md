@@ -47,7 +47,7 @@ claude-optin --global     # manage your user-wide defaults
 
 The header shows the total estimated token cost of all currently-enabled plugins so you can see the impact of your changes. (MCP servers load their tool schemas at connect time, so their cost can't be estimated statically and is shown as `?`.)
 
-The header also shows an `N on/M off` count. Trust that count (or the ✓/✗ mark on each row) over eyeballing raw JSON — a plugin key merely *existing* in `enabledPlugins` doesn't mean it's enabled; many keys are explicit `false` entries. Counting keys instead of checking their boolean values is a common way to misread `~/.claude/settings.json` by hand.
+The header also shows an `N on/M off` count, resolved the same way `claude-optin` resolves everything else: **only the layer(s) currently in view**. A plugin key merely *existing* in `enabledPlugins` doesn't mean it's enabled — check the boolean, not just presence. And `--global`/`-g` intentionally shows *only* the user layer (that's what "GLOBAL defaults" in the header means): a plugin off there can still be `true` in a specific repo's `.claude/settings.local.json` or `.claude/settings.json`, and will show as on/actively used in that repo. Run plain `claude-optin` (no `-g`) from inside a repo to see its actual effective state — the merge of local → project → user.
 
 ## How it works
 
