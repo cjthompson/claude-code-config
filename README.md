@@ -84,7 +84,7 @@ Custom Claude Code output styles, installed into `~/.claude/output-styles/` and 
 | Style | Description |
 |-------|-------------|
 | **Concise** | Terse one-or-two-sentence answers; action lists are captured as tasks rather than buried in prose |
-| **Terse** | Headline-and-bullet answers with all process narration stripped; detail loads only on request |
+| **Terse** | Headline-and-bullet answers with all process narration stripped; every reply reporting work closes with a `Result` status block; detail loads only on request |
 
 ## Statusline
 
