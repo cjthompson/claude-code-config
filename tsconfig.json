@@ -3,7 +3,12 @@
         "lib": ["esnext"],
         "strict": true,
         "types": ["node"],
-        "noEmit": true
+        "noEmit": true,
+        // Sources run under `node --experimental-strip-types`, which requires
+        // extension-ful relative imports; tsc only tolerates them with noEmit.
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "allowImportingTsExtensions": true
     },
     "include": [
         "packages/**/*.ts"
