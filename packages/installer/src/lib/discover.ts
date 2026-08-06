@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { readdir, stat, readFile, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { fileHash } from "./hash.ts";
 import type { DetectSpec, PackageDescriptor, PackageItem, PackageManifest } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
@@ -353,12 +353,6 @@ async function extractSkillDescription(skillMdPath: string): Promise<string> {
     } catch {
         return "";
     }
-}
-
-/** SHA-256 hash of a file's contents. */
-async function fileHash(filePath: string): Promise<string> {
-    const data = await readFile(filePath);
-    return createHash("sha256").update(data).digest("hex");
 }
 
 /** Check if `destPath` is a symlink whose target lives inside `repoRoot`. */

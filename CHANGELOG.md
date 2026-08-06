@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.58 - 2026-08-06
+
+### Changes
+- **installer**: `enter` now always applies instead of being a no-op when nothing is toggled. With a pending selection it installs, with a pending removal it removes, and with neither it re-applies the packages already installed — a repair/confirm pass. The status line reflects which case applies (`↵ Install selected` / `↵ Apply removals` / `↵ Apply changes` / `↵ Re-apply / confirm`) and the footer hint changed from `enter install` to `enter apply`. This deliberately reverses the earlier gating design (`9ea7acc`, "InstallButton demoted to static status line (↵ Install / Nothing selected)"), where `enter` did nothing unless something was selected.
+- **installer**: `installFiles` hash-compares source against destination before copying, so a re-apply reports `already up to date` rather than a misleading `Updated`, and does not rewrite the file. Verified by unchanged `mtime` across a re-apply. Side benefit: a destination that is a symlink into the repo is no longer clobbered with a real file copy, since the hash follows the link and matches. The `settings.json` merge already behaved this way; the file copy now matches it.
+- **installer**: extracted the private `fileHash` helper from `lib/discover.ts` into `lib/hash.ts` so `lib/install.ts` can share it. No behavior change.
+- **installer**: a run that finds nothing to do now reports "Nothing to do — no items selected." instead of an empty results screen.
+- **installer**: recorded a `reapply-idempotency` manual test scenario and rewrote step 6 of `flat-checklist-navigation`, which asserted the now-removed "↵ Nothing selected" state. Also documented a **pre-existing** bug found while verifying: a files package whose items differ in install state (files present, `settings` key absent) removes and then immediately recopies itself, because `toggleItem` sets `markedForRemoval` without clearing `enabled`. Reproduces with this change reverted; fix belongs in `toggleItem` and is not attempted here.
+
 ## v0.0.57 - 2026-08-03
 
 ### Changes

@@ -1,5 +1,6 @@
 import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fileHash } from "./hash.ts";
 import type { InstallResult, PackageDescriptor, PackageManifest } from "./types.ts";
 
 const CLAUDE_DIR = join(process.env.HOME!, ".claude");
@@ -261,6 +262,19 @@ async function installFiles(
         const dest = join(destDir, file);
         try {
             const existed = await stat(dest).then(() => true, () => false);
+            // Re-apply/confirm runs this loop on every pass, so hash-compare to
+            // report already-exists instead of a misleading "updated". Skipping
+            // the copy also stops a symlink-into-repo dest being clobbered with a
+            // real file (fileHash follows the link, so it matches).
+            if (existed && (await fileHash(src)) === (await fileHash(dest))) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: file,
+                    status: "already-exists",
+                    message: `Already up to date: ${file}`,
+                });
+                continue;
+            }
             await mkdir(dirname(dest), { recursive: true });
             await copyFile(src, dest);
             results.push({

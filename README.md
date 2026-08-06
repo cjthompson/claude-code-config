@@ -31,7 +31,9 @@ npm install
 npm run install-packages
 ```
 
-Uses a flat checklist. Navigate with `↑↓`, toggle with `space`, view details with `i`, install with `enter`. Only `packages/` entries are shown — plugins are installed via the Claude Code marketplace.
+Uses a flat checklist. Navigate with `↑↓`, toggle with `space`, view details with `i`, apply with `enter`. Only `packages/` entries are shown — plugins are installed via the Claude Code marketplace.
+
+`enter` applies whatever is pending — installs, removals, or both. With nothing selected it re-applies the packages already installed, so it doubles as a repair/confirm pass: unchanged files report `already up to date` and are not rewritten.
 
 To install one or more packages by name without the TUI (fully non-interactive):
 

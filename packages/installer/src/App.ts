@@ -46,8 +46,9 @@ export function App({ repoRoot }: AppProps) {
     const flat = useMemo(() => buildFlatItems(packages), [packages]);
 
     const visiblePackages = packages.filter((p) => p.type !== "plugin");
-    const hasSelections = visiblePackages.some((p) =>
-        p.enabled || p.items.some((i) => i.markedForRemoval),
+    const hasInstalls = visiblePackages.some((p) => p.enabled);
+    const hasRemovals = visiblePackages.some((p) =>
+        p.items.some((i) => i.markedForRemoval),
     );
 
     const focusedEntry = flat[cursor];
@@ -113,7 +114,7 @@ export function App({ repoRoot }: AppProps) {
             toggleItem(focusedEntry.pkgIdx, focusedEntry.itemIdx);
         } else if (input === "i" && focusedItem) {
             setInfoVisible(true);
-        } else if (key.return && hasSelections) {
+        } else if (key.return) {
             runInstall(visiblePackages);
         }
     });
@@ -154,9 +155,9 @@ export function App({ repoRoot }: AppProps) {
 
         if (pkgIdx !== lastPkgIdx) {
             lastPkgIdx = pkgIdx;
-            const hasRemovals = pkg.items.some((i) => i.markedForRemoval);
+            const pkgHasRemovals = pkg.items.some((i) => i.markedForRemoval);
             const hasUpgrades = pkg.items.some((i) => i.needsUpgrade);
-            const status = hasRemovals ? "REMOVE" : hasUpgrades ? "UPGRADE" : pkg.enabled ? "ON" : "OFF";
+            const status = pkgHasRemovals ? "REMOVE" : hasUpgrades ? "UPGRADE" : pkg.enabled ? "ON" : "OFF";
             listNodes.push(h(SectionHeader, { key: `hdr-${pkgIdx}`, label: pkg.label, status }));
         }
 
@@ -173,9 +174,12 @@ export function App({ repoRoot }: AppProps) {
         ));
     }
 
-    const installLine = hasSelections
-        ? h(Text, { color: "cyan" }, "↵ Install Selected")
-        : h(Text, { color: "gray", dimColor: true }, "↵ Nothing selected");
+    const installLabel =
+        hasInstalls && hasRemovals ? "↵ Apply changes" :
+        hasRemovals ? "↵ Apply removals" :
+        hasInstalls ? "↵ Install selected" :
+        "↵ Re-apply / confirm";
+    const installLine = h(Text, { color: "cyan" }, installLabel);
 
     return h(Box, { flexDirection: "column", paddingX: 1 },
         h(Box, { justifyContent: "center", marginBottom: 1 },
@@ -186,7 +190,7 @@ export function App({ repoRoot }: AppProps) {
         h(DetailFooter, { description: footerDescription }),
         h(Box, { justifyContent: "center", marginTop: 1 },
             h(Text, { color: "gray" },
-                "↑↓ move  space toggle  i info  enter install  q quit",
+                "↑↓ move  space toggle  i info  enter apply  q quit",
             ),
         ),
     );
