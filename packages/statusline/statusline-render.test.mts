@@ -21,6 +21,9 @@ import {
   joinSep,
   resolveContextWindowSize,
   computeUsedPct,
+  fitSegments,
+  renderPowerline,
+  buildContextTiers,
 } from './statusline-render.mts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -383,6 +386,65 @@ describe('joinSep', () => {
 
   it('includes the background string', () => {
     ok(joinSep('[BG]', 240).includes('[BG]'));
+  });
+});
+
+describe('fitSegments', () => {
+  // Regression test for the "drops down to empty" bug: fitSegments used to
+  // have no floor and would remove every segment, including core ones, at
+  // a narrow enough width.
+  it('never drops core segments even when maxWidth is far too small', () => {
+    const segs = [
+      { section: 22, drop: 0, core: true, content: 'model-content' },
+      { section: 22, drop: 5, content: 'optional-content' },
+    ];
+    const fitted = fitSegments(segs, 1);
+    ok(fitted.some(s => s.core), 'core segment should survive');
+    ok(!fitted.some(s => !s.core), 'non-core segment should be dropped');
+  });
+
+  it('removes non-core segments in descending drop order', () => {
+    const segs = [
+      { section: 22, drop: 3, content: 'AAAAAAAAAA' },
+      { section: 22, drop: 5, content: 'BBBBBBBBBB' },
+      { section: 22, drop: 1, content: 'CCCCCCCCCC' },
+    ];
+    // Width tight enough to force dropping the two highest-drop segments,
+    // leaving only the drop:1 segment.
+    const fitted = fitSegments(segs, 12);
+    strictEqual(fitted.length, 1);
+    strictEqual(fitted[0].content, 'CCCCCCCCCC');
+  });
+
+  it('keeps everything when it already fits', () => {
+    const segs = [
+      { section: 22, drop: 0, core: true, content: 'x' },
+      { section: 22, drop: 5, content: 'y' },
+    ];
+    const fitted = fitSegments(segs, 100);
+    strictEqual(fitted.length, 2);
+  });
+});
+
+describe('buildContextTiers', () => {
+  it('full tier includes bar and used/total suffix', () => {
+    const tiers = buildContextTiers(45, 200000, { input_tokens: 90000 });
+    ok(stripAnsi(tiers[0]).includes('45'));
+    ok(stripAnsi(tiers[0]).includes('90K/200K'));
+  });
+
+  it('middle tier drops the used/total suffix but keeps the bar', () => {
+    const tiers = buildContextTiers(45, 200000, { input_tokens: 90000 });
+    ok(!stripAnsi(tiers[1]).includes('90K/200K'));
+    ok(stripAnsi(tiers[1]).includes('45'));
+  });
+
+  it('shortest tier is icon + percentage only', () => {
+    const tiers = buildContextTiers(45, 200000, { input_tokens: 90000 });
+    const shortest = stripAnsi(tiers[2]);
+    ok(shortest.includes('45'));
+    ok(!shortest.includes('90K'));
+    ok(shortest.length < stripAnsi(tiers[1]).length);
   });
 });
 
@@ -766,5 +828,62 @@ describe('end-to-end rendering', () => {
     const line1 = stripAnsi(result.trimEnd().split('\n')[0]);
     ok(line1.includes('100K/200K'), `Expected '100K/200K' derived from used_percentage, got: ${line1}`);
     ok(!line1.includes('0/200K'), `Should not show '0/200K', got: ${line1}`);
+  });
+
+  it('never drops a block as the terminal widens, and core blocks always survive', () => {
+    // Regression test for the RIGHT_RESERVE cliff (termWidth 79 -> maxWidth 79,
+    // termWidth 80 -> maxWidth 60) and for fitSegments dropping core segments:
+    // widening the terminal must never remove a previously-shown block, and
+    // model/context/branch/pwd must appear at every width tested, however narrow.
+    const session = JSON.stringify({
+      model: { display_name: 'MonoModel' },
+      cost: { total_cost_usd: 1.23, total_duration_ms: 4_000_000, total_lines_added: 12, total_lines_removed: 3 },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 90000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      cwd: '/tmp/monotonic',
+    });
+
+    const widths = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 150, 200];
+    const markers = ['$1.23', '/hr', '+12', 'left'];
+
+    let prevPresent = new Set<string>();
+    for (const w of widths) {
+      const line1 = stripAnsi(run(String(w), session, 'mono-branch').trimEnd().split('\n')[0]);
+
+      ok(line1.includes('MonoModel'), `model missing at width ${w}`);
+      ok(line1.includes('mono-branch'), `branch missing at width ${w}`);
+      ok(line1.includes('monotonic'), `pwd missing at width ${w}`);
+
+      const present = new Set(markers.filter(m => line1.includes(m)));
+      for (const m of prevPresent) {
+        ok(present.has(m), `widening to ${w} dropped '${m}' that was present at a narrower width`);
+      }
+      prevPresent = present;
+    }
+  });
+
+  it('shrinks context usage instead of dropping it as the terminal narrows', () => {
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 90000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const wide = stripAnsi(run('200', session).trimEnd().split('\n')[0]);
+    ok(wide.includes('90K/200K'), `expected full context tier at width 200, got: ${wide}`);
+
+    const narrow = stripAnsi(run('25', session).trimEnd().split('\n')[0]);
+    ok(!narrow.includes('90K/200K'), `expected shrunk context tier at width 25, got: ${narrow}`);
+    ok(narrow.includes('45'), 'percentage should still be present');
+    ok(narrow.includes('TestModel'), 'model should still be present at width 25');
   });
 });

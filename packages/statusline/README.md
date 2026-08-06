@@ -109,7 +109,7 @@ Enabled by default (`1`).
 | `statusline.sh` | Entry point — caching, token management, environment gathering |
 | `statusline-render.mts` | Rendering engine — ANSI/powerline output, all display logic |
 | `statusline-config.json` | Sample config — copied to `~/.claude/statusline-config.json` on install; users edit it for context-window overrides and section toggles |
-| `statusline-render.test.mts` | Test suite — 49 tests using Node's built-in `node:test` runner |
+| `statusline-render.test.mts` | Test suite — 83 tests using Node's built-in `node:test` runner |
 
 ## What It Shows
 
@@ -117,17 +117,19 @@ Enabled by default (`1`).
 
 | Segment | Source | Example | Drop priority |
 |---|---|---|---|
-| Model name | `session.model.display_name` | `Opus 4.6` | 0 (last to drop) |
-| Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (90K/200K)` | 2 |
-| Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | 3 |
-| Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | 4 |
+| Model name | `session.model.display_name` | `Opus 4.6` | core — never dropped |
+| Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (90K/200K)` | core — shrinks instead of dropping (see below) |
+| Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | core — never dropped |
+| Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | core — never dropped |
 | Session cost | `session.cost.total_cost_usd` | `$2.10` | 5 |
 | Session duration | `session.cost.total_duration_ms` | `10m` | 6 |
 | Lines changed | `session.cost.total_lines_{added,removed}` | `+100 -30` | 7 |
 | Time to context limit | tokens remaining / token rate | `~1h1m left` | 9 |
 | Burn rate | cost / duration (shown after 1 min) | `$12.60/hr` | 10 (first to drop) |
 
-Segments are defined in display order, each with a `drop` priority number. The `fitSegments()` function repeatedly removes the highest-priority-number segment until the rendered line fits within `maxWidth`. Display order and drop order are fully decoupled.
+Segments are defined in display order, each with a `drop` priority number. `fitSegments()` repeatedly removes the highest-priority-number segment among the **non-core** segments until the rendered line fits within `maxWidth`. Model, context window, git branch, and working directory are marked `core` and are never removed by this loop — display order and drop order are fully decoupled, but core status overrides drop order entirely. If the core four alone still don't fit a very narrow terminal, the line is left to wrap rather than truncating branch/path further.
+
+**Context window shrinking**: once every droppable segment is gone, if the line still doesn't fit, the context-window segment steps down through three tiers instead of disappearing: full (icon + % + bar + `(used/total)`) → drop the `(used/total)` suffix → drop the bar too, keeping only the icon and percentage.
 
 **Path shortening**: All parent directories are collapsed to their first character. `~/dev/neat-core-js/.worktrees/sso` becomes `~/d/n/.w/sso`. The last segment is always preserved in full.
 
@@ -179,7 +181,7 @@ for _ in 1 2 3 4 5; do
 done
 ```
 
-A right-side reserve of 2 characters is subtracted when `termWidth >= 80` to leave breathing room next to Claude Code's right-aligned column (token count, version info). Below 80 columns, the right column wraps to its own line, so no reserve is needed.
+`maxWidth` is simply `termWidth` — Claude Code no longer renders anything in a right-aligned column next to the statusline, so no reserve is subtracted.
 
 ## Caching
 

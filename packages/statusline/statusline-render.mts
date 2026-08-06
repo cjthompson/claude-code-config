@@ -287,6 +287,7 @@ interface PowerlineSeg {
   section: number;  // background color number (22=green, 24=blue, 237=gray)
   content: string;  // ANSI styled content
   drop: number;     // higher = less important = dropped first
+  core?: boolean;   // never dropped by fitSegments (model/context/branch/pwd)
 }
 
 const SECTION_STYLES: Record<number, { bg: string; sep: number }> = {
@@ -322,15 +323,19 @@ function renderPowerline(segs: PowerlineSeg[]): string {
   return line;
 }
 
-// Fit segments to a width budget by dropping least-important segments first
+// Fit segments to a width budget by dropping least-important segments first.
+// `core` segments (model/context/branch/pwd) are never dropped — only the
+// optional segments are eligible, and the loop stops once none remain
+// rather than falling through to an unguarded splice that would delete
+// the wrong (core) element.
 function fitSegments(segs: PowerlineSeg[], maxWidth: number): PowerlineSeg[] {
   const active = [...segs];
-  while (active.length > 0 && stripAnsi(renderPowerline(active)).length >= maxWidth) {
-    // Find and remove the segment with the highest drop value
+  while (stripAnsi(renderPowerline(active)).length >= maxWidth) {
     let maxDrop = -1, maxIdx = -1;
     for (let i = 0; i < active.length; i++) {
-      if (active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }
+      if (!active[i].core && active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }
     }
+    if (maxIdx === -1) break; // only core segments left — never drop them
     active.splice(maxIdx, 1);
   }
   return active;
@@ -392,6 +397,40 @@ function buildQuotaLine(
 
 export { buildQuotaLine };
 
+// ── Context-usage tiers ─────────────────────────────────────────
+// Context usage is a core (never-dropped) segment, so instead of vanishing
+// under width pressure it shrinks: full → drop the (used/total) suffix →
+// drop the bar too, keeping only the icon + percentage. Mirrors the tier
+// pattern buildQuotaLine already uses for line 2.
+function buildContextTiers(
+  usedPct: number,
+  effectiveWindowSize: number,
+  ctx: Record<string, any> | undefined,
+): string[] {
+  // Clamp for display so a percentage over 100% (e.g. an override that
+  // shrinks the window below the token count) doesn't print as raw "200%"
+  // alongside a fully-filled bar — show a cap of 100% in that case.
+  const displayPct = Math.min(100, Math.max(0, usedPct));
+  // When individual token fields are absent (Claude Code only sends
+  // used_percentage), derive an approximate count from the percentage.
+  const rawTokens = totalContextTokens(ctx);
+  const totalTokens = rawTokens > 0 ? rawTokens
+    : effectiveWindowSize > 0 ? Math.round(usedPct * effectiveWindowSize / 100)
+    : 0;
+  const head = ` ${WHITE}${circleIcon(usedPct)} ${displayPct}${PCT} `;
+  const bar = `${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}`;
+  const tokens = effectiveWindowSize > 0
+    ? ` ${GREEN_DIM}(${formatTokenCount(totalTokens)}/${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
+    : '';
+  return [
+    `${head}${bar}${tokens} `, // full
+    `${head}${bar} `,          // drop the (used/total) suffix
+    `${head}`,                 // drop the bar too — icon + % only
+  ];
+}
+
+export { buildContextTiers };
+
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
   const termWidth = Number(process.argv[2]);
@@ -441,9 +480,7 @@ function main(): void {
   const effectiveWindowSize = ctx ? resolveContextWindowSize(ctx, model?.display_name, config) : 0;
   const usedPct = ctx ? computeUsedPct(ctx, effectiveWindowSize) : null;
 
-  // Claude Code's right column sits inline when wide enough, wraps below when narrow
-  const RIGHT_RESERVE = termWidth >= 80 ? 20 : 0;
-  const maxWidth = termWidth - RIGHT_RESERVE;
+  const maxWidth = termWidth;
   const isWide = termWidth >= 120;
   const barWidth = isWide ? 12 : 8;
 
@@ -457,7 +494,7 @@ function main(): void {
   const line1Segs: PowerlineSeg[] = [];
 
   if (model?.display_name && isSectionEnabled(config, SECTION.MODEL))
-    line1Segs.push({ section: 22, drop: 0, content:
+    line1Segs.push({ section: 22, drop: 0, core: true, content:
       `${combo(255, 22, true)} ${ICON_BOLT} ${model.display_name} ` });
 
   if (cost?.total_cost_usd != null && isSectionEnabled(config, SECTION.USD_COST))
@@ -470,22 +507,12 @@ function main(): void {
       ` ${GREEN_DIM}${ICON_CLOCK} \$${rate.toFixed(2)}/hr${R_GREEN} ` });
   }
 
+  let contextSeg: PowerlineSeg | undefined;
+  let contextTiers: string[] | undefined;
   if (usedPct != null && isSectionEnabled(config, SECTION.CONTEXT_WINDOW)) {
-    // Clamp for display so a percentage over 100% (e.g. an override that
-    // shrinks the window below the token count) doesn't print as raw "200%"
-    // alongside a fully-filled bar — show a cap of 100% in that case.
-    const displayPct = Math.min(100, Math.max(0, usedPct));
-    // When individual token fields are absent (Claude Code only sends
-    // used_percentage), derive an approximate count from the percentage.
-    const rawTokens = totalContextTokens(ctx);
-    const totalTokens = rawTokens > 0 ? rawTokens
-      : effectiveWindowSize > 0 ? Math.round(usedPct * effectiveWindowSize / 100)
-      : 0;
-    const max = effectiveWindowSize > 0
-      ? ` ${GREEN_DIM}(${formatTokenCount(totalTokens)}/${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
-      : '';
-    line1Segs.push({ section: 22, drop: 2, content:
-      ` ${WHITE}${circleIcon(usedPct)} ${displayPct}${PCT} ${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}${max} ` });
+    contextTiers = buildContextTiers(usedPct, effectiveWindowSize, ctx);
+    contextSeg = { section: 22, drop: 2, core: true, content: contextTiers[0] };
+    line1Segs.push(contextSeg);
   }
 
   if (ctx && effectiveWindowSize > 0 && cost?.total_duration_ms > 60_000 && isSectionEnabled(config, SECTION.TIME_TO_FULL)) {
@@ -514,14 +541,24 @@ function main(): void {
       ` ${GREEN_DIM}${formatDuration(Math.floor(cost.total_duration_ms / 1000))}${R_GREEN} ` });
 
   if (shortBranch && isSectionEnabled(config, SECTION.BRANCH))
-    line1Segs.push({ section: 24, drop: 3, content:
+    line1Segs.push({ section: 24, drop: 3, core: true, content:
       `${CYAN_FG} ${ICON_GIT} ${WHITE}${shortBranch} ` });
 
   if (isSectionEnabled(config, SECTION.PWD))
-    line1Segs.push({ section: 237, drop: 4, content:
+    line1Segs.push({ section: 237, drop: 4, core: true, content:
       `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
 
-  const line1 = renderPowerline(fitSegments(line1Segs, maxWidth));
+  const fitted = fitSegments(line1Segs, maxWidth);
+  // Core segments never get dropped above, so once the droppable pool is
+  // exhausted, shrink context usage tier-by-tier as the last width lever.
+  if (contextSeg && contextTiers) {
+    let tier = 0;
+    while (tier < contextTiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
+      tier++;
+      contextSeg.content = contextTiers[tier];
+    }
+  }
+  const line1 = renderPowerline(fitted);
 
   // ════════════════════════════════════════════════════════════════
   // LINE 2: Quota — pre-computed tiers from most to least detailed
