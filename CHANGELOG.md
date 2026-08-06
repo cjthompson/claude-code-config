@@ -8,6 +8,7 @@
 - **installer**: extracted the private `fileHash` helper from `lib/discover.ts` into `lib/hash.ts` so `lib/install.ts` can share it. No behavior change.
 - **installer**: a run that finds nothing to do now reports "Nothing to do — no items selected." instead of an empty results screen.
 - **installer**: recorded a `reapply-idempotency` manual test scenario and rewrote step 6 of `flat-checklist-navigation`, which asserted the now-removed "↵ Nothing selected" state. Also documented a **pre-existing** bug found while verifying: a files package whose items differ in install state (files present, `settings` key absent) removes and then immediately recopies itself, because `toggleItem` sets `markedForRemoval` without clearing `enabled`. Reproduces with this change reverted; fix belongs in `toggleItem` and is not attempted here.
+- **repo**: synced `package-lock.json` to the current version. It recorded `0.0.57` at both the top-level and root-package entries while `package.json` said `0.0.58`, leaving committed npm metadata inconsistent and guaranteeing lockfile churn on the next `npm install`. This drift has now recurred across two consecutive bumps — an independent review caught the `0.0.56`/`0.0.57` instance, and the `0.0.58` bump reintroduced it — so the version-bump step needs to touch all three files, not two.
 
 ## v0.0.57 - 2026-08-03
 
