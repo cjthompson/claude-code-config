@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.60 - 2026-08-06
+
+### Changes
+- **statusline**: fixed a crash in `statusline-render.mts` where a `rate_limits` bucket (`five_hour`/`seven_day`) with usage but no `resets_at` yet caused `new Date(undefined * 1000).toISOString()` to throw `RangeError: Invalid time value`, uncaught. `statusline.sh` swallows the renderer's stderr and exit code, so this surfaced only as the generic, misleading statusline text `Usage: parse error`. The `resets_at` conversion is now guarded to fall back to `undefined` when the field is absent, matching what `buildQuotaLine` already handles. Added a regression test (`statusline-render.test.mts`).
+
 ## v0.0.59 - 2026-08-06
 
 ### Changes

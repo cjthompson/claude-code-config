@@ -404,11 +404,15 @@ function main(): void {
   const data: Record<string, any> = rl ? {
     five_hour: rl.five_hour ? {
       utilization: rl.five_hour.used_percentage,
-      resets_at: new Date(rl.five_hour.resets_at * 1000).toISOString(),
+      resets_at: rl.five_hour.resets_at
+        ? new Date(rl.five_hour.resets_at * 1000).toISOString()
+        : undefined,
     } : undefined,
     seven_day: rl.seven_day ? {
       utilization: rl.seven_day.used_percentage,
-      resets_at: new Date(rl.seven_day.resets_at * 1000).toISOString(),
+      resets_at: rl.seven_day.resets_at
+        ? new Date(rl.seven_day.resets_at * 1000).toISOString()
+        : undefined,
     } : undefined,
   } : {};
   const hasUsage = !!(rl?.five_hour || rl?.seven_day);

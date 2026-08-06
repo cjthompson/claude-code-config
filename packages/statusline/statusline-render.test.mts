@@ -416,6 +416,25 @@ describe('end-to-end rendering', () => {
       '--experimental-strip-types', renderScript, termWidth, session, branch,
     ], { encoding: 'utf8', timeout: 10_000 });
 
+  it('does not throw when a rate_limits bucket has usage but no resets_at', () => {
+    // Regression: `resets_at` can be absent on a bucket that has usage but
+    // hasn't started its reset window yet. `new Date(undefined * 1000)` is
+    // an Invalid Date, and `.toISOString()` on it throws uncaught, which
+    // crashes the renderer (statusline.sh then shows "Usage: parse error").
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      cwd: '/tmp',
+      rate_limits: {
+        five_hour: { used_percentage: 10 },
+        seven_day: { used_percentage: 5 },
+      },
+    });
+
+    const result = run('120', session, 'main');
+    const lines = result.trimEnd().split('\n');
+    strictEqual(lines.length, 2, `Expected 2 lines, got ${lines.length}`);
+  });
+
   it('produces two lines of output with valid input', () => {
     const session = JSON.stringify({
       model: { display_name: 'TestModel' },
