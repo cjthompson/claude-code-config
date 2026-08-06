@@ -24,6 +24,8 @@ import {
   fitSegments,
   renderPowerline,
   buildContextTiers,
+  buildBranchTiers,
+  PROTECTED_PRIORITY,
 } from './statusline-render.mts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -391,26 +393,26 @@ describe('joinSep', () => {
 
 describe('fitSegments', () => {
   // Regression test for the "drops down to empty" bug: fitSegments used to
-  // have no floor and would remove every segment, including core ones, at
-  // a narrow enough width.
-  it('never drops core segments even when maxWidth is far too small', () => {
+  // have no floor and would remove every segment, including protected
+  // ones, at a narrow enough width.
+  it('never drops protected (priority >= PROTECTED_PRIORITY) segments even when maxWidth is far too small', () => {
     const segs = [
-      { section: 22, drop: 0, core: true, content: 'model-content' },
-      { section: 22, drop: 5, content: 'optional-content' },
+      { section: 22, priority: PROTECTED_PRIORITY, content: 'model-content' },
+      { section: 22, priority: 5, content: 'optional-content' },
     ];
     const fitted = fitSegments(segs, 1);
-    ok(fitted.some(s => s.core), 'core segment should survive');
-    ok(!fitted.some(s => !s.core), 'non-core segment should be dropped');
+    ok(fitted.some(s => s.priority >= PROTECTED_PRIORITY), 'protected segment should survive');
+    ok(!fitted.some(s => s.priority < PROTECTED_PRIORITY), 'droppable segment should be dropped');
   });
 
-  it('removes non-core segments in descending drop order', () => {
+  it('removes droppable segments in ascending priority order (lowest priority = dropped first)', () => {
     const segs = [
-      { section: 22, drop: 3, content: 'AAAAAAAAAA' },
-      { section: 22, drop: 5, content: 'BBBBBBBBBB' },
-      { section: 22, drop: 1, content: 'CCCCCCCCCC' },
+      { section: 22, priority: 3, content: 'AAAAAAAAAA' },
+      { section: 22, priority: 1, content: 'BBBBBBBBBB' },
+      { section: 22, priority: 5, content: 'CCCCCCCCCC' },
     ];
-    // Width tight enough to force dropping the two highest-drop segments,
-    // leaving only the drop:1 segment.
+    // Width tight enough to force dropping the two lowest-priority segments,
+    // leaving only the priority:5 segment.
     const fitted = fitSegments(segs, 12);
     strictEqual(fitted.length, 1);
     strictEqual(fitted[0].content, 'CCCCCCCCCC');
@@ -418,8 +420,8 @@ describe('fitSegments', () => {
 
   it('keeps everything when it already fits', () => {
     const segs = [
-      { section: 22, drop: 0, core: true, content: 'x' },
-      { section: 22, drop: 5, content: 'y' },
+      { section: 22, priority: PROTECTED_PRIORITY, content: 'x' },
+      { section: 22, priority: 5, content: 'y' },
     ];
     const fitted = fitSegments(segs, 100);
     strictEqual(fitted.length, 2);
@@ -445,6 +447,25 @@ describe('buildContextTiers', () => {
     ok(shortest.includes('45'));
     ok(!shortest.includes('90K'));
     ok(shortest.length < stripAnsi(tiers[1]).length);
+  });
+});
+
+describe('buildBranchTiers', () => {
+  const longBranch = 'feature/a-genuinely-long-branch-name-for-testing';
+
+  it('produces progressively shorter tiers for a long branch name', () => {
+    const tiers = buildBranchTiers(longBranch);
+    const lengths = tiers.map(t => stripAnsi(t).length);
+    ok(lengths[0] > lengths[1]);
+    ok(lengths[1] > lengths[2]);
+  });
+
+  it('strips known prefixes and preserves short names in every tier', () => {
+    const tiers = buildBranchTiers('fix/short');
+    for (const tier of tiers) {
+      ok(stripAnsi(tier).includes('short'), `expected 'short' in: ${stripAnsi(tier)}`);
+      ok(!stripAnsi(tier).includes('fix/'), `prefix should be stripped in: ${stripAnsi(tier)}`);
+    }
   });
 });
 
@@ -830,11 +851,15 @@ describe('end-to-end rendering', () => {
     ok(!line1.includes('0/200K'), `Should not show '0/200K', got: ${line1}`);
   });
 
-  it('never drops a block as the terminal widens, and core blocks always survive', () => {
+  it('never drops a block as the terminal widens, and protected blocks always survive', () => {
     // Regression test for the RIGHT_RESERVE cliff (termWidth 79 -> maxWidth 79,
-    // termWidth 80 -> maxWidth 60) and for fitSegments dropping core segments:
-    // widening the terminal must never remove a previously-shown block, and
+    // termWidth 80 -> maxWidth 60) and for fitSegments dropping protected
+    // segments: widening the terminal must never remove a previously-shown
+    // block or shrink a previously-longer branch string, and
     // model/context/branch/pwd must appear at every width tested, however narrow.
+    const longBranch = 'feature/a-genuinely-long-branch-name-for-monotonic-testing';
+    const GIT_ICON = ''; // matches ICON_GIT in statusline-render.mts
+
     const session = JSON.stringify({
       model: { display_name: 'MonoModel' },
       cost: { total_cost_usd: 1.23, total_duration_ms: 4_000_000, total_lines_added: 12, total_lines_removed: 3 },
@@ -851,12 +876,18 @@ describe('end-to-end rendering', () => {
     const markers = ['$1.23', '/hr', '+12', 'left'];
 
     let prevPresent = new Set<string>();
+    let prevBranchLen = 0;
     for (const w of widths) {
-      const line1 = stripAnsi(run(String(w), session, 'mono-branch').trimEnd().split('\n')[0]);
+      const line1 = stripAnsi(run(String(w), session, longBranch).trimEnd().split('\n')[0]);
 
       ok(line1.includes('MonoModel'), `model missing at width ${w}`);
-      ok(line1.includes('mono-branch'), `branch missing at width ${w}`);
+      ok(line1.includes(GIT_ICON), `branch missing at width ${w}`);
       ok(line1.includes('monotonic'), `pwd missing at width ${w}`);
+
+      const branchMatch = line1.match(new RegExp(`${GIT_ICON} (.*?) [▶│]`, 'u'));
+      const branchLen = branchMatch ? branchMatch[1].trim().length : 0;
+      ok(branchLen >= prevBranchLen, `widening to ${w} shortened the branch string (was ${prevBranchLen} chars, now ${branchLen})`);
+      prevBranchLen = branchLen;
 
       const present = new Set(markers.filter(m => line1.includes(m)));
       for (const m of prevPresent) {
@@ -885,5 +916,32 @@ describe('end-to-end rendering', () => {
     ok(!narrow.includes('90K/200K'), `expected shrunk context tier at width 25, got: ${narrow}`);
     ok(narrow.includes('45'), 'percentage should still be present');
     ok(narrow.includes('TestModel'), 'model should still be present at width 25');
+  });
+
+  it('shrinks branch through its length ladder only after context is fully shrunk', () => {
+    const longBranch = 'feature/a-genuinely-long-branch-name-for-tier-testing';
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 90000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      cwd: '/tmp',
+    });
+
+    const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
+    ok(wide.includes('a-genuinely-long-branch'), `expected untruncated branch at width 200, got: ${wide}`);
+
+    // Narrow enough that context has already dropped to its shortest tier
+    // (no '90K/200K', no bar) before branch needs to shrink at all.
+    const mid = stripAnsi(run('45', session, longBranch).trimEnd().split('\n')[0]);
+    ok(!mid.includes('90K/200K'), `expected context already shrunk at width 45, got: ${mid}`);
+
+    // Narrower still: branch must now be shrinking too.
+    const narrow = stripAnsi(run('30', session, longBranch).trimEnd().split('\n')[0]);
+    ok(narrow.includes('…'), `expected truncated branch at width 30, got: ${narrow}`);
+    ok(narrow.includes('TestModel'), 'model should still be present at width 30');
   });
 });

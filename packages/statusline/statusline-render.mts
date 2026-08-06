@@ -284,11 +284,16 @@ export {
 // Different section bgs get ▶ transitions.
 
 interface PowerlineSeg {
-  section: number;  // background color number (22=green, 24=blue, 237=gray)
-  content: string;  // ANSI styled content
-  drop: number;     // higher = less important = dropped first
-  core?: boolean;   // never dropped by fitSegments (model/context/branch/pwd)
+  section: number;   // background color number (22=green, 24=blue, 237=gray)
+  content: string;   // ANSI styled content
+  priority: number;  // higher = more important = kept longer. >= PROTECTED_PRIORITY = never dropped.
 }
+
+// Segments at or above this priority (model, context, branch, pwd) are
+// never removed by fitSegments — only shrunk (context/branch tiers) or
+// left to overflow. Real droppable priorities are single digits, so 100
+// leaves a wide, deliberate margin.
+const PROTECTED_PRIORITY = 100;
 
 const SECTION_STYLES: Record<number, { bg: string; sep: number }> = {
   22:  { bg: BG_GREEN, sep: 34 },
@@ -323,20 +328,19 @@ function renderPowerline(segs: PowerlineSeg[]): string {
   return line;
 }
 
-// Fit segments to a width budget by dropping least-important segments first.
-// `core` segments (model/context/branch/pwd) are never dropped — only the
-// optional segments are eligible, and the loop stops once none remain
-// rather than falling through to an unguarded splice that would delete
-// the wrong (core) element.
+// Fit segments to a width budget by dropping the lowest-priority segment
+// first. Stops once only protected (priority >= PROTECTED_PRIORITY)
+// segments remain, rather than falling through to an unguarded splice
+// that would delete the wrong (protected) element.
 function fitSegments(segs: PowerlineSeg[], maxWidth: number): PowerlineSeg[] {
   const active = [...segs];
   while (stripAnsi(renderPowerline(active)).length >= maxWidth) {
-    let maxDrop = -1, maxIdx = -1;
+    let minPriority = Infinity, minIdx = -1;
     for (let i = 0; i < active.length; i++) {
-      if (!active[i].core && active[i].drop > maxDrop) { maxDrop = active[i].drop; maxIdx = i; }
+      if (active[i].priority < minPriority) { minPriority = active[i].priority; minIdx = i; }
     }
-    if (maxIdx === -1) break; // only core segments left — never drop them
-    active.splice(maxIdx, 1);
+    if (minIdx === -1 || minPriority >= PROTECTED_PRIORITY) break;
+    active.splice(minIdx, 1);
   }
   return active;
 }
@@ -357,7 +361,7 @@ function quotaSeg(
   return `${s} `;
 }
 
-export { renderPowerline, fitSegments, quotaSeg };
+export { renderPowerline, fitSegments, quotaSeg, PROTECTED_PRIORITY };
 
 // ── Quota line builder ────────────────────────────────────────
 function buildQuotaLine(
@@ -431,6 +435,21 @@ function buildContextTiers(
 
 export { buildContextTiers };
 
+// ── Branch tiers ─────────────────────────────────────────────
+// Branch is protected (never dropped), so instead of a blunt width
+// threshold picking one of two fixed caps regardless of whether the line
+// actually needs the room, it gets its own shrink ladder — stepped only
+// once context's tiers are exhausted (context first: denser info per
+// column than a truncated name).
+const BRANCH_LENGTH_TIERS = [25, 18, 12];
+
+function buildBranchTiers(branch: string): string[] {
+  return BRANCH_LENGTH_TIERS.map(len =>
+    `${CYAN_FG} ${ICON_GIT} ${WHITE}${shortenBranch(branch, len)} `);
+}
+
+export { buildBranchTiers };
+
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
   const termWidth = Number(process.argv[2]);
@@ -485,25 +504,27 @@ function main(): void {
   const barWidth = isWide ? 12 : 8;
 
   // ════════════════════════════════════════════════════════════════
-  // LINE 1: Segments in display order, each with a drop priority
+  // LINE 1: Segments in display order, each with a priority.
+  // model/context/branch/pwd are PROTECTED_PRIORITY (never dropped).
+  // Droppable priorities (higher = kept longer): usd_cost(5) drops first,
+  // then duration(6), lines_changed(7), time_to_full(9), burn_rate(10) last.
   // ════════════════════════════════════════════════════════════════
 
   const shortPath = shortenPath(cwd);
-  const shortBranch = gitBranch ? shortenBranch(gitBranch, isWide ? 25 : 18) : '';
 
   const line1Segs: PowerlineSeg[] = [];
 
   if (model?.display_name && isSectionEnabled(config, SECTION.MODEL))
-    line1Segs.push({ section: 22, drop: 0, core: true, content:
+    line1Segs.push({ section: 22, priority: PROTECTED_PRIORITY, content:
       `${combo(255, 22, true)} ${ICON_BOLT} ${model.display_name} ` });
 
   if (cost?.total_cost_usd != null && isSectionEnabled(config, SECTION.USD_COST))
-    line1Segs.push({ section: 22, drop: 5, content:
+    line1Segs.push({ section: 22, priority: 5, content:
       ` ${GREEN_FG}${BOLD}${ICON_DOLLAR}${cost.total_cost_usd.toFixed(2)}${R_GREEN} ` });
 
   if (cost?.total_cost_usd != null && cost.total_duration_ms > 60_000 && isSectionEnabled(config, SECTION.BURN_RATE)) {
     const rate = cost.total_cost_usd / (cost.total_duration_ms / 3_600_000);
-    line1Segs.push({ section: 22, drop: 10, content:
+    line1Segs.push({ section: 22, priority: 10, content:
       ` ${GREEN_DIM}${ICON_CLOCK} \$${rate.toFixed(2)}/hr${R_GREEN} ` });
   }
 
@@ -511,7 +532,7 @@ function main(): void {
   let contextTiers: string[] | undefined;
   if (usedPct != null && isSectionEnabled(config, SECTION.CONTEXT_WINDOW)) {
     contextTiers = buildContextTiers(usedPct, effectiveWindowSize, ctx);
-    contextSeg = { section: 22, drop: 2, core: true, content: contextTiers[0] };
+    contextSeg = { section: 22, priority: PROTECTED_PRIORITY, content: contextTiers[0] };
     line1Segs.push(contextSeg);
   }
 
@@ -526,36 +547,48 @@ function main(): void {
       if (rem > 0) {
         const tps = used / (cost.total_duration_ms / 1000);
         if (tps > 0)
-          line1Segs.push({ section: 22, drop: 9, content:
+          line1Segs.push({ section: 22, priority: 9, content:
             ` ${GREEN_DIM}${ICON_HOURGLASS} ~${formatDuration(Math.floor(rem / tps))} left${R_GREEN} ` });
       }
     }
   }
 
   if (cost && (cost.total_lines_added > 0 || cost.total_lines_removed > 0) && isSectionEnabled(config, SECTION.LINES_CHANGED))
-    line1Segs.push({ section: 22, drop: 7, content:
+    line1Segs.push({ section: 22, priority: 7, content:
       ` ${GREEN_DIM}${ICON_PENCIL} ${GREEN_114}${PLUS}${cost.total_lines_added || 0}${R_GREEN} ${RED_FG}${MINUS}${cost.total_lines_removed || 0}${R_GREEN} ` });
 
   if (cost?.total_duration_ms > 0 && isSectionEnabled(config, SECTION.DURATION))
-    line1Segs.push({ section: 22, drop: 6, content:
+    line1Segs.push({ section: 22, priority: 6, content:
       ` ${GREEN_DIM}${formatDuration(Math.floor(cost.total_duration_ms / 1000))}${R_GREEN} ` });
 
-  if (shortBranch && isSectionEnabled(config, SECTION.BRANCH))
-    line1Segs.push({ section: 24, drop: 3, core: true, content:
-      `${CYAN_FG} ${ICON_GIT} ${WHITE}${shortBranch} ` });
+  let branchSeg: PowerlineSeg | undefined;
+  let branchTiers: string[] | undefined;
+  if (gitBranch && isSectionEnabled(config, SECTION.BRANCH)) {
+    branchTiers = buildBranchTiers(gitBranch);
+    branchSeg = { section: 24, priority: PROTECTED_PRIORITY, content: branchTiers[0] };
+    line1Segs.push(branchSeg);
+  }
 
   if (isSectionEnabled(config, SECTION.PWD))
-    line1Segs.push({ section: 237, drop: 4, core: true, content:
+    line1Segs.push({ section: 237, priority: PROTECTED_PRIORITY, content:
       `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
 
   const fitted = fitSegments(line1Segs, maxWidth);
-  // Core segments never get dropped above, so once the droppable pool is
-  // exhausted, shrink context usage tier-by-tier as the last width lever.
+  // Protected segments never get dropped above, so once the droppable pool
+  // is exhausted, shrink context usage first (denser info per column),
+  // then branch, tier-by-tier, as the remaining width levers.
   if (contextSeg && contextTiers) {
     let tier = 0;
     while (tier < contextTiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
       tier++;
       contextSeg.content = contextTiers[tier];
+    }
+  }
+  if (branchSeg && branchTiers) {
+    let tier = 0;
+    while (tier < branchTiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
+      tier++;
+      branchSeg.content = branchTiers[tier];
     }
   }
   const line1 = renderPowerline(fitted);
