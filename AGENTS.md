@@ -6,9 +6,11 @@ After every `git commit` or `git merge` on the `main` always perform the followi
 
 1. **Bump the patch version in `package.json`** — Increment the `version` field by one patch version (e.g., `1.0.0` → `1.0.1`). If no `version` field exists, add one starting at `0.0.1`.
 
-2. **Update `CHANGELOG.md`** — Add an entry for today's date (if one does not already exist) and summarize the changes from the commit. The heading will be the version number from step 1 and the date; for example `## v1.0.1 - 2026-03-09`
+2. **Bump the same version in `package-lock.json`** — Two places: the top-level `version` field and the root package entry under `packages[""]`. A bump that touches `package.json` and not the lockfile leaves committed npm metadata inconsistent and guarantees churn on the next `npm install`. This has been missed on consecutive bumps, so treat it as part of step 1 rather than an afterthought — verify with `grep -n '"version"' package-lock.json | head -2` before committing.
 
-3. Check if the changes affected anything documented in the `README.md`. If so, **Update the `README.md`** to match the changed behavior.
+3. **Update `CHANGELOG.md`** — Add an entry for today's date (if one does not already exist) and summarize the changes from the commit. The heading will be the version number from step 1 and the date; for example `## v1.0.1 - 2026-03-09`
+
+4. Check if the changes affected anything documented in the `README.md`. If so, **Update the `README.md`** to match the changed behavior.
 
 ## Repository-Based Changes
 

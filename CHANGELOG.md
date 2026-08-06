@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.59 - 2026-08-06
+
+### Changes
+- **repo**: the post-commit version-bump rule now names `package-lock.json` as a required step, in both `CLAUDE.md` and `AGENTS.md`. It previously listed only `package.json` and `CHANGELOG.md`, and the lockfile drifted on two consecutive bumps as a result — an independent review caught the `0.0.56`/`0.0.57` gap, then the `0.0.58` bump reintroduced it. The new step names both locations that need editing (top-level `version` and the root entry under `packages[""]`) and gives a one-line `grep` to verify before committing. Renumbered the following steps in both files. This commit follows the amended rule.
+
 ## v0.0.58 - 2026-08-06
 
 ### Changes
