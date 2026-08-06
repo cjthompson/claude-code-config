@@ -29,6 +29,19 @@ GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 # Render statusline
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Bare `node` resolves via mise using the *calling session's* cwd, so a
+# project that pins an older node (e.g. node=20, which lacks
+# --experimental-strip-types) breaks the statusline for any session rooted
+# there. Pin an explicit major version, bypassing that cwd-based lookup —
+# `mise x node@<major>` reuses whatever patch of that major is already
+# installed and only hits the network if none is, so this stays offline as
+# long as node@24 has ever been installed on this machine.
+if command -v mise >/dev/null 2>&1; then
+  NODE_CMD=(mise x node@24 -- node)
+else
+  NODE_CMD=(node)
+fi
+
 # Keep the renderer's stdout/stderr separate so a successful render's
 # on-purpose-discarded warnings (e.g. a bad statusline-config.json) never
 # leak into the statusline text. Only a failure gets logged.
@@ -37,7 +50,7 @@ STDOUT_FILE=$(mktemp) || exit 0
 STDERR_FILE=$(mktemp) || exit 0
 trap 'rm -f "$STDOUT_FILE" "$STDERR_FILE"' EXIT
 
-node --experimental-strip-types "$SCRIPT_DIR/statusline-render.mts" \
+"${NODE_CMD[@]}" --experimental-strip-types "$SCRIPT_DIR/statusline-render.mts" \
   "$TERM_WIDTH" "$input" "$GIT_BRANCH" \
   >"$STDOUT_FILE" 2>"$STDERR_FILE"
 STATUS=$?
@@ -51,5 +64,10 @@ else
     printf '=== %s (exit %s) ===\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATUS"
     cat "$STDERR_FILE"
   } >>"$LOG"
-  echo "statusline: render failed (exit $STATUS) — see $LOG"
+  if grep -q -- '--experimental-strip-types' "$STDERR_FILE" 2>/dev/null; then
+    FOUND_VER=$("${NODE_CMD[@]}" --version 2>/dev/null || echo "unknown")
+    echo "statusline: needs Node >=22.7 for --experimental-strip-types (resolved node: $FOUND_VER) — see $LOG"
+  else
+    echo "statusline: render failed (exit $STATUS) — see $LOG"
+  fi
 fi

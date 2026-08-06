@@ -97,7 +97,10 @@ Enabled by default (`1`).
 ## Requirements
 
 - **macOS** (uses `security` CLI for Keychain access and `stat -f %m` for file timestamps)
-- **Node.js >= 22.7** (`--experimental-strip-types` with automatic ESM detection)
+- **Node.js >= 22.7** (`--experimental-strip-types` with automatic ESM detection).
+  `statusline.sh` pins `node@24` via `mise x` when `mise` is on `PATH`, so
+  the render doesn't inherit whatever node version the *calling project*
+  happens to pin (falls back to bare `node` if `mise` isn't available).
 - **curl** (API calls to fetch quota)
 - **git** (optional, for branch display)
 - A terminal with **256-color support**
