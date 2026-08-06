@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.61 - 2026-08-06
+
+### Changes
+- **statusline**: `statusline.sh` no longer collapses every renderer failure into the fixed, misleading `Usage: parse error` text. It now captures the renderer's stdout/stderr separately, and on a non-zero exit logs the real exit code and stderr to `${XDG_STATE_HOME:-$HOME/.local/state}/claude/statusline-error.log` and shows `statusline: render failed (exit N) — see <log>` instead. A successful render's stdout is unaffected, and warnings the renderer intentionally discards (e.g. a bad `statusline-config.json`) still don't leak into the statusline text. This makes any future renderer failure diagnosable instead of a silent, unlabeled string.
+
 ## v0.0.60 - 2026-08-06
 
 ### Changes

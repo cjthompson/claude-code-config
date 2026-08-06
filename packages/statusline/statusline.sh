@@ -28,6 +28,28 @@ GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
 # Render statusline
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Keep the renderer's stdout/stderr separate so a successful render's
+# on-purpose-discarded warnings (e.g. a bad statusline-config.json) never
+# leak into the statusline text. Only a failure gets logged.
+umask 077 # error log may briefly hold path/argv details; owner-only
+STDOUT_FILE=$(mktemp) || exit 0
+STDERR_FILE=$(mktemp) || exit 0
+trap 'rm -f "$STDOUT_FILE" "$STDERR_FILE"' EXIT
+
 node --experimental-strip-types "$SCRIPT_DIR/statusline-render.mts" \
   "$TERM_WIDTH" "$input" "$GIT_BRANCH" \
-  2>/dev/null || echo "Usage: parse error"
+  >"$STDOUT_FILE" 2>"$STDERR_FILE"
+STATUS=$?
+
+if [ "$STATUS" -eq 0 ]; then
+  cat "$STDOUT_FILE"
+else
+  LOG="${XDG_STATE_HOME:-$HOME/.local/state}/claude/statusline-error.log"
+  mkdir -p "$(dirname "$LOG")"
+  {
+    printf '=== %s (exit %s) ===\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATUS"
+    cat "$STDERR_FILE"
+  } >>"$LOG"
+  echo "statusline: render failed (exit $STATUS) — see $LOG"
+fi
