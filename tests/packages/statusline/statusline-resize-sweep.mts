@@ -69,7 +69,7 @@ const payloadPath = typeof opts.payload === 'string'
   : resolve(__dirname, 'statusline-resize-sweep-fixture.json');
 const payload = readFileSync(payloadPath, 'utf8');
 
-const renderScript = resolve(__dirname, 'statusline-render.mts');
+const renderScript = resolve(__dirname, '../../../packages/statusline/statusline-render.mts');
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 // Header line is exactly `w` characters wide -- a visual ruler you can

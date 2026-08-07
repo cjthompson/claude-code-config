@@ -1,11 +1,11 @@
 /*  Run the tests:
- *    node --experimental-strip-types --test ~/.claude/statusline-render.test.ts
+ *    node --experimental-strip-types --test tests/packages/statusline/statusline-render.test.mts
  */
 import { describe, it } from 'node:test';
 import { strictEqual, ok, match } from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SECTION,
@@ -26,7 +26,7 @@ import {
   buildContextTiers,
   buildBranchTiers,
   PROTECTED_PRIORITY,
-} from './statusline-render.mts';
+} from '../../../packages/statusline/statusline-render.mts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -488,7 +488,11 @@ describe('stripAnsi', () => {
 // ── End-to-end ────────────────────────────────────────────────
 
 describe('end-to-end rendering', () => {
-  const renderScript = `${__dirname}/statusline-render.mts`;
+  // The renderer resolves its config file (statusline-config.json) relative
+  // to its own module location, not the test file's -- rendererDir below
+  // must point there for the config-override tests' temp files to be seen.
+  const renderScript = resolve(__dirname, '../../../packages/statusline/statusline-render.mts');
+  const rendererDir = dirname(renderScript);
 
   // Helper: Unix timestamps for quota resets (future values so reset labels render)
   const fiveHourResets = Math.floor(Date.now() / 1000) + 3600;
@@ -643,7 +647,7 @@ describe('end-to-end rendering', () => {
     });
 
     const configData = JSON.stringify({ modelContextWindows: { 'Claude Sonnet 4.6': 400000 } });
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     writeFileSync(configPath, configData);
 
     try {
@@ -676,7 +680,7 @@ describe('end-to-end rendering', () => {
     });
 
     const configData = JSON.stringify({ modelContextWindows: { 'Claude Sonnet 4.6': 500000 } });
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     writeFileSync(configPath, configData);
 
     try {
@@ -708,7 +712,7 @@ describe('end-to-end rendering', () => {
     });
 
     const configData = JSON.stringify({ modelContextWindows: { 'TestModel': 50000 } });
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     writeFileSync(configPath, configData);
 
     try {
@@ -739,7 +743,7 @@ describe('end-to-end rendering', () => {
       rate_limits: { five_hour: { used_percentage: 10, resets_at: fiveHourResets } },
     });
 
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     try { unlinkSync(configPath); } catch {} // ensure no override
 
     const result = run('200', session);
@@ -765,7 +769,7 @@ describe('end-to-end rendering', () => {
     });
 
     const configData = JSON.stringify({ sections: ['model', 'context_window', 'pwd'] });
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     writeFileSync(configPath, configData);
 
     try {
@@ -789,7 +793,7 @@ describe('end-to-end rendering', () => {
     });
 
     const configData = JSON.stringify({ sections: ['model', 'usd_cost', 'pwd'] });
-    const configPath = `${__dirname}/statusline-config.json`;
+    const configPath = `${rendererDir}/statusline-config.json`;
     writeFileSync(configPath, configData);
 
     try {

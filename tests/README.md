@@ -19,11 +19,14 @@ dispatching a Claude subagent.
 4. Tests pass when GREEN results address all gaps from the baseline
 
 ### 2. Automated Unit Tests
-Used for packages. Tests are TypeScript/JavaScript files run via Node.js `node:test`.
+Used for packages. Tests are TypeScript/JavaScript files run via Node.js `node:test`, living
+in `tests/packages/<name>/` rather than the package directory itself — so a package's test
+source can never end up in the installed/published output, independent of (and in addition
+to) whatever install-time file allowlist that package's own `manifest.json` uses.
 
 **Run statusline tests:**
 ```bash
-node --experimental-strip-types --test packages/statusline/statusline-render.test.mts
+node --experimental-strip-types --test tests/packages/statusline/statusline-render.test.mts
 ```
 
 No other packages have automated tests yet.
@@ -58,6 +61,6 @@ No other packages have automated tests yet.
 4. Update the plugin's `index.md` here in `tests/`
 
 **For a package:**
-1. Add a `.test.mts` file in the package directory
-2. Use `node:test` and `node:assert` following `packages/statusline/statusline-render.test.mts` as a reference
+1. Add a `.test.mts` file in `tests/packages/<name>/` (not the package directory itself)
+2. Use `node:test` and `node:assert` following `tests/packages/statusline/statusline-render.test.mts` as a reference — note it imports the module under test via a relative path back into `packages/<name>/`, since the two directories are siblings under the repo root, not nested
 3. Update the package's `index.md` here in `tests/`
