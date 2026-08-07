@@ -110,6 +110,8 @@ Enabled by default (`1`).
 | `statusline-render.mts` | Rendering engine — ANSI/powerline output, all display logic |
 | `statusline-config.json` | Sample config — copied to `~/.claude/statusline-config.json` on install; users edit it for context-window overrides and section toggles |
 | `statusline-render.test.mts` | Test suite — 86 tests using Node's built-in `node:test` runner |
+| `statusline-resize-sweep.mts` | Manual dev tool — renders every width across a range with a fixed payload, for eyeballing drop/shrink behavior (see below) |
+| `statusline-resize-sweep-fixture.json` | Editable session payload used by the sweep tool |
 
 ## What It Shows
 
@@ -210,10 +212,30 @@ rm /tmp/claude-statusline-usage-cache
 ## Running Tests
 
 ```bash
-node --experimental-strip-types --test ~/.claude/statusline-render.test.ts
+node --experimental-strip-types --test packages/statusline/statusline-render.test.mts
 ```
 
-All pure functions in the renderer (`formatDuration`, `shortenPath`, `shortenBranch`, `progressBar`, `quotaSeg`, etc.) are exported and unit-tested. Three end-to-end tests verify the full rendering pipeline by spawning the renderer as a subprocess with mock data.
+All pure functions in the renderer (`formatDuration`, `shortenPath`, `shortenBranch`, `fitSegments`, `buildContextTiers`, `buildBranchTiers`, `progressBar`, `quotaSeg`, etc.) are exported and unit-tested. A set of end-to-end tests verify the full rendering pipeline — including monotonicity (widening the terminal never drops a block) and shrink order (context tiers exhaust before branch starts shrinking) — by spawning the renderer as a subprocess with mock data.
+
+## Manual Resize Testing
+
+`statusline-resize-sweep.mts` renders the statusline at every width across a range with one fixed session payload, so you can eyeball exactly how segments drop and shrink as you tweak `fitSegments`/tiers. It's a dev tool, not an automated test — pair it with `statusline-render.test.mts` for regression coverage.
+
+```bash
+# Default: width 120 -> 20, current git branch, bundled fixture
+node --experimental-strip-types packages/statusline/statusline-resize-sweep.mts
+
+# Compact transition view (only widths where line 1 actually changes)
+node --experimental-strip-types packages/statusline/statusline-resize-sweep.mts --summary
+
+# Also save a plain (ANSI-stripped) copy for diffing against a previous run
+node --experimental-strip-types packages/statusline/statusline-resize-sweep.mts --summary --out /tmp/sweep.txt
+
+# Custom range, branch, or payload
+node --experimental-strip-types packages/statusline/statusline-resize-sweep.mts --from 200 --to 10 --branch chore/some-branch --payload ./my-fixture.json
+```
+
+Edit `statusline-resize-sweep-fixture.json` to change the session data used (cost, token counts, rate limits, etc.) without touching the script.
 
 ## Architecture
 
