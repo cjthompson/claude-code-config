@@ -17,14 +17,18 @@ Then browse and install individual plugins from the `/plugin` UI.
 | Plugin | Description |
 |--------|-------------|
 | **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, dispatch to subagents, auto-generate changelogs |
+| **lean-agents** | Reduced-toolset sub-agent profiles (`lean-executor`, `standard-executor`, `main`, `full-executor`) that lower System-tools token overhead vs. spawning the default agent; pairs with `project-tasks`, which dispatches by name |
+| **output-styles** | Custom output styles (`Concise`, `Terse`) selectable via `/output-style` |
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
+| **textual** | Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes |
 | **command-watchdog** | Idle-hang detection for Bash commands (rspec, fresheyes.sh) — kills silently-stuck runs after a configurable timeout |
+| **python-development** | Idiomatic Python guidance: modern syntax, type hints, project structure, and pytest patterns |
 
 ## Installer
 
-For packages that aren't available as plugins (statusline, claude-optin), use the interactive TUI installer:
+For packages that aren't available as plugins (statusline, claude-optin, git-utils), use the interactive TUI installer (implemented in `packages/installer/`):
 
 ```bash
 npm install
