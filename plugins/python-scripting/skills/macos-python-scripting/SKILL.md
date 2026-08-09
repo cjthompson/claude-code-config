@@ -28,5 +28,19 @@ Produce utilities that run without Homebrew, uv, pip, or a virtual environment.
   /usr/bin/python3 -E -s -S path/to/script.py <test arguments>
   ```
 
+  `unittest` is included with Apple Python 3.9. With `python -m unittest`,
+  positional test targets are dotted module names, not filesystem paths. To run
+  tests selected by directory and filename pattern, use discovery:
+
+  ```bash
+  /usr/bin/python3 -m unittest discover \
+    -s <test-start-directory> \
+    -p '<test-file-pattern>' -v
+  ```
+
+  Replace the placeholders with the directory to search and its test-file
+  pattern. For an importable test module, pass its dotted module name instead
+  of its file path.
+
 If `/usr/bin/python3` is unavailable, report that Apple Command Line Tools are
 required. Do not install or modify the interpreter.
