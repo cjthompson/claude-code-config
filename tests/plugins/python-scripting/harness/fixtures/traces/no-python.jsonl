@@ -1,0 +1,2 @@
+{"type":"item.completed","item":{"id":"read-notes","type":"function_call","name":"read_resource","arguments":"{\"path\":\"notes.txt\"}"}}
+{"type":"assistant","text":"python would be useful later, but no command is run."}

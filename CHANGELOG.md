@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.62 - 2026-08-09
+
+### Changes
+- **plugins/python-scripting**: documented portable Apple Python 3.9 `unittest` guidance: use dotted module names with `python -m unittest`, or use `unittest discover` with an explicit start directory and filename pattern when selecting tests by path. Added standalone structural regression coverage for the generic discovery command.
+
 ## v0.0.61 - 2026-08-06
 
 ### Changes

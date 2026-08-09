@@ -1,0 +1,14 @@
+{
+  "run_id": "run-003",
+  "schema_version": 1,
+  "tests": [
+    {
+      "attempts": [{"attempt": 1, "outcome": "skipped"}],
+      "nodeid": "tests/a.py::test one"
+    },
+    {
+      "attempts": [{"attempt": 1, "outcome": "passed"}],
+      "nodeid": "tests/c.py::test skipped"
+    }
+  ]
+}

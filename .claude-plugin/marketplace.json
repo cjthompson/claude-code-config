@@ -75,7 +75,7 @@
         {
             "name": "python-scripting",
             "source": "./plugins/python-scripting",
-            "description": "Low-context guidance for type-safe Python scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+            "description": "Low-context guidance for safe one-off Python helpers, typed scripts, lightweight quality checks, and zero-dependency macOS utilities.",
             "version": "1.0.0",
             "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
             "category": "development"

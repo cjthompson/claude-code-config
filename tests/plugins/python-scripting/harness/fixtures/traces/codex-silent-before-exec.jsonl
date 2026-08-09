@@ -1,0 +1,2 @@
+{"type":"thread.started","thread_id":"thread-1"}
+{"type":"item.completed","item":{"id":"run-helper","type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python3 helper.py\"}"}}

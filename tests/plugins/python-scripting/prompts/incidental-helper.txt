@@ -1,0 +1,24 @@
+Work only in the current directory.
+
+Review owners.json and all files matching artifacts/run-*.json. Each test has
+one or more numbered attempts. For each test in each run, use the outcome from
+the greatest attempt number as that run's effective outcome. A test absent
+from a run contributes no outcome.
+
+Identify every flaky test, where flaky means it has at least one effective
+passed and one effective failed outcome. For each flaky test report its node
+ID, its owner or UNOWNED when no mapping exists, and its effective passed,
+failed, and skipped counts. Calculate failure percentage as
+failed / (passed + failed) * 100, excluding skips, and display it to one decimal
+place using half-up rounding.
+
+Sort by the exact unrounded failure ratio descending, then by node ID ascending.
+Do not modify the input files. Return exactly one Markdown table followed by
+the same records as JSON between these literal markers:
+
+BEGIN_RESULT_JSON
+END_RESULT_JSON
+
+Each JSON record must contain nodeid, owner, passed, failed, skipped, and
+failure_percentage. Represent failure_percentage as a one-decimal string.
+Briefly state how you verified the result.

@@ -8,13 +8,13 @@
     "skills": "./skills/",
     "interface": {
         "displayName": "Python Scripting",
-        "shortDescription": "Write and check small type-safe Python scripts.",
-        "longDescription": "Concise Python coding and typing guidance, lightweight Ruff and ty workflows, and portable macOS utilities for Apple's Python 3.9.",
+        "shortDescription": "Write safer one-off and standalone Python scripts.",
+        "longDescription": "Concise guidance for incidental Python helpers, practical typing, lightweight Ruff and ty workflows, and portable macOS utilities for Apple's Python 3.9.",
         "developerName": "cjthompson",
         "category": "Development",
         "capabilities": ["Code", "Typing", "Quality"],
         "defaultPrompt": [
-            "Write a type-safe Python script",
+            "Write a safe one-off Python helper",
             "Check this script with Ruff and ty",
             "Write a zero-dependency macOS Python utility"
         ]

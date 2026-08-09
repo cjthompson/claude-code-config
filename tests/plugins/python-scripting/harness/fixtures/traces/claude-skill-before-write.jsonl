@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill-simple","name":"Skill","input":{"skill":"python-scripting:python-simple-scripts"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"skill-simple","is_error":false,"content":"loaded"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"write-helper","name":"Write","input":{"file_path":"helper.py","content":"print('ready')\n"}}]}}

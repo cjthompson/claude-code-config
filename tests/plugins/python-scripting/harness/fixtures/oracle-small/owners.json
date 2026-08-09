@@ -1,0 +1,4 @@
+{
+  "tests/a.py::test one": "alpha",
+  "tests/c.py::test skipped": "ignored"
+}

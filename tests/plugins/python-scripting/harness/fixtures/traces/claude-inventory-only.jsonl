@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","skills":[{"name":"python-scripting:python-simple-scripts","description":"available skill"}]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"write-helper","name":"Write","input":{"file_path":"helper.py","content":"print('ready')\n"}}]}}

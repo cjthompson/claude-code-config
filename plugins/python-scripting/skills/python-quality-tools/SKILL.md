@@ -1,17 +1,17 @@
 ---
 name: python-quality-tools
-description: Use when formatting, linting, or type-checking Python files without creating or redesigning a Python project, especially for standalone scripts or repositories with an established toolchain.
+description: Use when formatting, linting, or type-checking standalone Python files that are not governed by a repository toolchain. Do not use for pyproject.toml or repository-level tooling work.
 ---
 
 # Python Quality Tools
 
-Check the requested files without changing the project's tool strategy.
+Check standalone Python files without turning them into a project.
 
-1. Inspect `pyproject.toml`, lockfiles, task runners, and CI to find the exact
-   configured commands. Use them silently; do not recommend migration. If the
-   requested check has no configured tool, report that gap instead of adding a
-   tool or pretending another command covers it.
-2. If no project tools exist and the target is a standalone file, use:
+1. First determine whether repository configuration, CI, or contributor
+   commands govern the target file. If so, invoke
+   `python-development:python-project-tooling` when it is available. Do not
+   substitute standalone defaults for an established toolchain.
+2. For standalone Python files with no governing toolchain, use:
 
    ```bash
    uvx ruff format path/to/script.py
@@ -24,6 +24,6 @@ Check the requested files without changing the project's tool strategy.
 4. Do not create `pyproject.toml`, a package layout, a lockfile, or a virtual
    environment for this workflow.
 
-If configuration, dependency management, migration, builds, or publishing are
-requested and `python-development:python-project-tooling` is available, invoke
-that skill. Otherwise keep the task file-scoped.
+If `python-development:python-project-tooling` is unavailable for a
+repository-governed file, report the unavailable handoff. Do not substitute
+the standalone commands or change the repository's tools from this skill.

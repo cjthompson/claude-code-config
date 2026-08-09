@@ -1,0 +1,642 @@
+[
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_06.py::test_case_06",
+    "owner": "team-6",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_12.py::test_case_12",
+    "owner": "team-5",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_18.py::test_case_18",
+    "owner": "team-4",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_24.py::test_case_24",
+    "owner": "team-3",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_30.py::test_case_30",
+    "owner": "team-2",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_57.py::test_case_57",
+    "owner": "team-1",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_63.py::test_case_63",
+    "owner": "team-0",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_69.py::test_case_69",
+    "owner": "team-6",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "55.0",
+    "nodeid": "tests/case_75.py::test_case_75",
+    "owner": "team-5",
+    "passed": 9,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/[weird].py::test \"quoted\"",
+    "owner": "team-3",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/a.py::test one",
+    "owner": "UNOWNED",
+    "passed": 9,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/b.py::test_$quote",
+    "owner": "team-1",
+    "passed": 9,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_09.py::test_case_09",
+    "owner": "team-2",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_36.py::test_case_36",
+    "owner": "team-1",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_42.py::test_case_42",
+    "owner": "team-0",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_48.py::test_case_48",
+    "owner": "team-6",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_54.py::test_case_54",
+    "owner": "team-5",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "52.6",
+    "nodeid": "tests/case_60.py::test_case_60",
+    "owner": "team-4",
+    "passed": 9,
+    "skipped": 11
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_19.py::test_case_19",
+    "owner": "team-5",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_25.py::test_case_25",
+    "owner": "team-4",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_31.py::test_case_31",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_37.py::test_case_37",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_43.py::test_case_43",
+    "owner": "team-1",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_49.py::test_case_49",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_51.py::test_case_51",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_70.py::test_case_70",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 11,
+    "failure_percentage": "52.4",
+    "nodeid": "tests/case_76.py::test_case_76",
+    "owner": "team-6",
+    "passed": 10,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_04.py::test_case_04",
+    "owner": "team-4",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_05.py::test_case_05",
+    "owner": "team-5",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_10.py::test_case_10",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_11.py::test_case_11",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_15.py::test_case_15",
+    "owner": "team-1",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_16.py::test_case_16",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_17.py::test_case_17",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_21.py::test_case_21",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_22.py::test_case_22",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_27.py::test_case_27",
+    "owner": "team-6",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_28.py::test_case_28",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_33.py::test_case_33",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_38.py::test_case_38",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_39.py::test_case_39",
+    "owner": "team-4",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_44.py::test_case_44",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_45.py::test_case_45",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_50.py::test_case_50",
+    "owner": "team-1",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_55.py::test_case_55",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_56.py::test_case_56",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_61.py::test_case_61",
+    "owner": "team-5",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_62.py::test_case_62",
+    "owner": "team-6",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_66.py::test_case_66",
+    "owner": "UNOWNED",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_67.py::test_case_67",
+    "owner": "team-4",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_68.py::test_case_68",
+    "owner": "team-5",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_72.py::test_case_72",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_73.py::test_case_73",
+    "owner": "team-3",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_78.py::test_case_78",
+    "owner": "team-1",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "50.0",
+    "nodeid": "tests/case_79.py::test_case_79",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_07.py::test_case_07",
+    "owner": "team-0",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_13.py::test_case_13",
+    "owner": "team-6",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_32.py::test_case_32",
+    "owner": "team-4",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_34.py::test_case_34",
+    "owner": "team-6",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_40.py::test_case_40",
+    "owner": "team-5",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_46.py::test_case_46",
+    "owner": "team-4",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_52.py::test_case_52",
+    "owner": "team-3",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_58.py::test_case_58",
+    "owner": "team-2",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 10,
+    "failure_percentage": "47.6",
+    "nodeid": "tests/case_64.py::test_case_64",
+    "owner": "team-1",
+    "passed": 11,
+    "skipped": 9
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_23.py::test_case_23",
+    "owner": "team-2",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_29.py::test_case_29",
+    "owner": "team-1",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_35.py::test_case_35",
+    "owner": "team-0",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_41.py::test_case_41",
+    "owner": "team-6",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_47.py::test_case_47",
+    "owner": "team-5",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "47.4",
+    "nodeid": "tests/case_74.py::test_case_74",
+    "owner": "team-4",
+    "passed": 10,
+    "skipped": 11
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_08.py::test_case_08",
+    "owner": "team-1",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_14.py::test_case_14",
+    "owner": "team-0",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_20.py::test_case_20",
+    "owner": "team-6",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_26.py::test_case_26",
+    "owner": "team-5",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_53.py::test_case_53",
+    "owner": "team-4",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_59.py::test_case_59",
+    "owner": "team-3",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_65.py::test_case_65",
+    "owner": "team-2",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_71.py::test_case_71",
+    "owner": "team-1",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/case_77.py::test_case_77",
+    "owner": "UNOWNED",
+    "passed": 11,
+    "skipped": 10
+  },
+  {
+    "failed": 9,
+    "failure_percentage": "45.0",
+    "nodeid": "tests/stränge.py::test_雪",
+    "owner": "owner \"quoted\" / 雪",
+    "passed": 11,
+    "skipped": 10
+  }
+]

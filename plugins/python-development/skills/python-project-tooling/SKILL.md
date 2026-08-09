@@ -1,6 +1,6 @@
 ---
 name: python-project-tooling
-description: Configure and maintain Python projects, dependencies, packaging, environments, linting, formatting, type checking, testing, builds, and publishing. Use for pyproject.toml or repository-level Python tooling work, not for a one-off script.
+description: Configure and maintain Python projects, dependencies, packaging, environments, linting, formatting, type checking, testing, builds, and publishing. Use for pyproject.toml, an existing repository toolchain, or repository-level Python tooling work, not for a standalone script.
 ---
 
 # Python Project Tooling
@@ -8,6 +8,13 @@ description: Configure and maintain Python projects, dependencies, packaging, en
 ## Respect established projects
 
 Inspect `pyproject.toml`, lockfiles, CI, contributor docs, and existing commands. Continue using configured tools silently. Do not introduce uv, Ruff, ty, pytest, or a new build backend merely to replace working equivalents unless the user requests a migration.
+
+For a request to format, lint, or type-check explicitly named files, use the
+repository's configured commands and scope them to those files when the tool
+supports it. If the requested check has no configured tool, report that gap
+instead of adding a tool or pretending another command covers it. Review any
+automatic changes, then re-run the relevant checks without fix flags for clean
+evidence.
 
 ## New or deliberately modernized projects
 

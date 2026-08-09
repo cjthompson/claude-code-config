@@ -1,0 +1,2 @@
+{"type":"item.completed","item":{"id":"read-skill","type":"function_call","name":"read_resource","arguments":"{\"path\":\"/stage/python-simple-scripts/SKILL.md\"}","output":"loaded"}}
+{"type":"item.completed","item":{"id":"run-json","type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"python3 -m json.tool data.json\"}"}}
