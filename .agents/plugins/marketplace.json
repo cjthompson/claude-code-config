@@ -1,0 +1,32 @@
+{
+    "name": "cjthompson",
+    "interface": {
+        "displayName": "cjthompson"
+    },
+    "plugins": [
+        {
+            "name": "python-scripting",
+            "source": {
+                "source": "local",
+                "path": "./plugins/python-scripting"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        },
+        {
+            "name": "python-development",
+            "source": {
+                "source": "local",
+                "path": "./plugins/python-development"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
+        }
+    ]
+}

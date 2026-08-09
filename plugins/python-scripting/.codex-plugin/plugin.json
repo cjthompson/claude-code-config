@@ -1,0 +1,22 @@
+{
+    "name": "python-scripting",
+    "version": "1.0.0",
+    "description": "Low-context guidance for type-safe Python scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Python Scripting",
+        "shortDescription": "Write and check small type-safe Python scripts.",
+        "longDescription": "Concise Python coding and typing guidance, lightweight Ruff and ty workflows, and portable macOS utilities for Apple's Python 3.9.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code", "Typing", "Quality"],
+        "defaultPrompt": [
+            "Write a type-safe Python script",
+            "Check this script with Ruff and ty",
+            "Write a zero-dependency macOS Python utility"
+        ]
+    }
+}

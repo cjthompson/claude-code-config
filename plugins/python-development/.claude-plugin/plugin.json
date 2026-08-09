@@ -1,0 +1,7 @@
+{
+    "name": "python-development",
+    "description": "Deep Python production guidance for testing, project tooling, concurrency, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "keywords": ["python", "pytest", "uv", "typing", "asyncio", "packaging"],
+    "license": "MIT"
+}

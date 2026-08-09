@@ -1,0 +1,14 @@
+{
+    "name": "python-development",
+    "displayName": "Python Development",
+    "version": "1.0.0",
+    "description": "Deep Python production guidance for testing, project tooling, concurrency, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["python", "pytest", "uv", "typing", "asyncio", "packaging"],
+    "category": "developer-tools",
+    "skills": "./skills/"
+}

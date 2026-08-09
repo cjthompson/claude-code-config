@@ -1,0 +1,7 @@
+{
+    "name": "python-scripting",
+    "description": "Low-context guidance for type-safe Python scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+    "author": { "name": "cjthompson" },
+    "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
+    "license": "MIT"
+}

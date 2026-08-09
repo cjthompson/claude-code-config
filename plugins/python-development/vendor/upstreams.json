@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "sources": {
+    "python/typing": {
+      "ref": "fa0a78a67b2844561c0281f3b9e5eb9464e12750",
+      "commit": "fa0a78a67b2844561c0281f3b9e5eb9464e12750",
+      "path": "docs/spec",
+      "license": "PSF-2.0"
+    },
+    "honnibal/claude-skills": {
+      "ref": "882fe898acec52ddc39d074e12c7497ee96ed963",
+      "commit": "882fe898acec52ddc39d074e12c7497ee96ed963",
+      "path": "tighten-types.md.txt",
+      "license": "MIT"
+    }
+  },
+  "files": {
+    "licenses/honnibal-claude-skills-MIT.txt": "b4d44f558cb5030b5feac49997cb2dd085f46e3e2517cd09f8aed59a36628f29",
+    "licenses/python-typing-PSF.txt": "c7afb65e755707b9fb90487389a176d3ed3d0031d5131afde45c23715ff5e891",
+    "tighten-types/tighten-types.md.txt": "2aee7489440ba315cdd93518e7fb26910fe48b3b2323c6fdcd3d9ee549fbf7bf",
+    "typing-spec/aliases.rst": "39ea21353f2948c8151b39f60d479c4ba10a971de1993fac727463912108f867",
+    "typing-spec/annotations.rst": "86a93284729771e8ee37aa1525abab84106d4e31916be3ecddccb1ef7145a5e7",
+    "typing-spec/callables.rst": "9c6b89edebc2325c92b7e4df10e04fb24029b91b50efc3e24acc12e0253e9aef",
+    "typing-spec/class-compat.rst": "05c92bb460abeb6cc1fc6e67b8c9de3ff7e052bc31c0be9027ba7d9e3675a603",
+    "typing-spec/concepts.rst": "dfdc210de715d6f571fd224560788ec6c3768143c608e56efb224eb16693a0cf",
+    "typing-spec/constructors.rst": "e18c24a2f2135a64befbd28fef57412706cdb069ae288319f37872351a0a1eaa",
+    "typing-spec/dataclasses.rst": "513273359d4b34c9187ec841d68e796f759437b8b432de61cae8896585acc9cf",
+    "typing-spec/directives.rst": "d133f3dbf9f2190cfedd4df69d061713d5ed342638bdc54b7e64359e4aefff57",
+    "typing-spec/distributing.rst": "919065badd7fe86376bbfcff0eb115a3bf1c871834411da8dc1947779d0860b6",
+    "typing-spec/enums.rst": "45e15ce0085752beb0a3cd5e1ff359ef039877a612cffa1e98c6585a5357a9d6",
+    "typing-spec/exceptions.rst": "f4a93dafb3a90a6e5fcf9f583070ffa6eb6bfc68d86f33870e2649150b0f7e1d",
+    "typing-spec/generics.rst": "1b3725c5469aa3fa9b22a34932f02a50700fde48236d2452ba5392b923a3f4d2",
+    "typing-spec/glossary.rst": "37ef7e1efed2c49b0852699d7fc8c5892fb5bba62783554109fc8bf7b345bf9d",
+    "typing-spec/historical.rst": "ab222fe2fb9fb05f731b859d26295379f20ea9de6992d104bee33903f0464f7c",
+    "typing-spec/index.rst": "5c8611b8824e12006e6f482bb6674c01c68f783f6abd08521e8ca771baf5e96f",
+    "typing-spec/literal.rst": "e2b6d6787a6d0ea4795565d2b1e1aa0c985c90c1752787d9422ec5e1d17d50f3",
+    "typing-spec/meta.rst": "19fe172329dc779e13aa13e4691f6a08e1c633ef4e8a7ab901197000e2b7c688",
+    "typing-spec/namedtuples.rst": "71a564be678467b036f85fdac556ab736922087b3ea22aa0746cbbcf16ffb514",
+    "typing-spec/narrowing.rst": "8b0a633ded37395ea32495fe18b201bb45fceaa3b81feeb474c974b1761a5a57",
+    "typing-spec/overload.rst": "0fc56ebdf926fd9652378174c82016fe1116d3641e67612564414e752728c695",
+    "typing-spec/protocol.rst": "2f1baa6f26111143f1b69307484ed0ed280916126e8bf8a6c2914cfb9e4dddb8",
+    "typing-spec/qualifiers.rst": "5aa8184c7ecdbd397b418e9ce065a681db9ef5f31077d079065d294b1ef858e2",
+    "typing-spec/special-types.rst": "d29b5e9afd296434aca032508b73c4de24ccbbca6a833dd63c1a23fc3d64314e",
+    "typing-spec/tuples.rst": "c0e0c34adf4f7607bfe1ff3995bf8d142eec79b9e6a2e341b43848c8f37443e8",
+    "typing-spec/type-forms.rst": "6bc1687cb99421bfe41009e4a7fb9716586e8fc9ebdc414a65b1a0b7549cdf29",
+    "typing-spec/type-system.rst": "fb372ce3b04170d3a9adf8a050e260c949c2e8147297a0c5c1195cb36275a41c",
+    "typing-spec/typeddict.rst": "813f066c2f55e1019aca3a4267929ccb55b3f598cc2e0155000b07aae0d679ae"
+  }
+}

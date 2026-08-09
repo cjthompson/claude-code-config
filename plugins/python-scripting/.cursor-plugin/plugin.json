@@ -1,0 +1,14 @@
+{
+    "name": "python-scripting",
+    "displayName": "Python Scripting",
+    "version": "1.0.0",
+    "description": "Low-context guidance for type-safe Python scripts and lightweight quality checks.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
+    "category": "developer-tools",
+    "skills": "./skills/"
+}

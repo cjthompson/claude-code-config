@@ -1,0 +1,22 @@
+{
+    "name": "python-development",
+    "version": "1.0.0",
+    "description": "Deep Python production guidance for testing, project tooling, concurrency, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["python", "pytest", "uv", "typing", "asyncio", "packaging"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Python Development",
+        "shortDescription": "Deep Python project and type-system workflows.",
+        "longDescription": "Production Python standards, pytest strategy, uv-based project tooling, structured concurrency, typing specification reference, and systematic annotation tightening.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code", "Testing", "Typing", "Packaging"],
+        "defaultPrompt": [
+            "Review this Python package for production quality",
+            "Design the pytest strategy for this project",
+            "Tighten types in the changed Python files"
+        ]
+    }
+}

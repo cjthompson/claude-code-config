@@ -12,6 +12,8 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
+The Python plugins also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install either Python plugin by name. Cursor manifests are included alongside them.
+
 ### Available plugins
 
 | Plugin | Description |
@@ -24,7 +26,8 @@ Then browse and install individual plugins from the `/plugin` UI.
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
 | **textual** | Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes |
 | **command-watchdog** | Idle-hang detection for Bash commands (rspec, fresheyes.sh) — kills silently-stuck runs after a configurable timeout |
-| **python-development** | Idiomatic Python guidance: modern syntax, type hints, project structure, and pytest patterns |
+| **python-scripting** | Low-context Python coding and typing, lightweight quality tools, and standard-library macOS automation |
+| **python-development** | Deep Python standards, testing, project tooling, concurrency, the full typing specification, and focused type tightening |
 
 ## Installer
 
@@ -70,6 +73,14 @@ End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agen
 ### rust-coding
 
 Guides Claude in writing idiomatic Rust code with proper data modeling, traits, `impl` organization, macros, and build-speed best practices. Automatically triggers when working on `.rs` files or projects with a `Cargo.toml`.
+
+### python-scripting
+
+Concise guidance for everyday and standalone Python scripts. It covers version-aware coding, practical type safety, file-scoped Ruff and ty checks, and macOS utilities that run with `/usr/bin/python3` using only Python 3.9-compatible standard-library imports. Stable macOS command-line utilities may be invoked through `subprocess` when Python has no suitable API.
+
+### python-development
+
+Deeper project-level guidance for production Python design, pytest strategy, repository tooling, asyncio and concurrency, and systematic annotation tightening. It vendors a commit-pinned copy of the complete Python typing specification and Honnibal's `tighten-types` workflow; run `node plugins/python-development/scripts/sync-typing-references.mjs --check` to verify the offline snapshot.
 
 ## Hooks
 
