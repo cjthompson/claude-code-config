@@ -371,9 +371,15 @@ function quotaSeg(
 export { renderPowerline, fitSegments, quotaSeg, PROTECTED_PRIORITY };
 
 // ── Quota line builder ────────────────────────────────────────
+// Bar width is tried widest-first, across the *entire* detail-tier ladder,
+// before falling back to a narrower bar -- so it only shrinks when the
+// line genuinely doesn't fit, not at a fixed termWidth threshold
+// regardless of whether anything actually overflows (the same class of
+// bug RIGHT_RESERVE was for line 1).
+const QUOTA_BAR_WIDTH_CANDIDATES = [12, 8];
+
 function buildQuotaLine(
   data: Record<string, any>,
-  barWidth: number,
   maxWidth: number,
 ): string {
   const fiveHrFullReset = data.five_hour?.resets_at
@@ -385,25 +391,29 @@ function buildQuotaLine(
     : '';
   const sep2 = joinSep(BG_DARK, 240);
 
-  const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, `${FIVE}h`, CYAN_FG, batteryIcon, { bar: bar ? barWidth : undefined, reset });
-  const s = (bar: boolean, reset: string) => quotaSeg(data.seven_day, `${SEVEN}d`, BLUE_FG, thermoIcon, { bar: bar ? barWidth : undefined, reset });
-
   const wrapL2 = (parts: (string | null)[]) => {
     const valid = parts.filter(Boolean) as string[];
     return valid.length === 0 ? '' : `${BG_DARK}${valid.join(sep2)}${plEnd(233)}`;
   };
 
-  const tiers = [
-    wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),
-    wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),
-    wrapL2([f(true, fiveHrTime),      s(true, '')]),
-    wrapL2([f(true, fiveHrTime),      s(false, '')]),
-    wrapL2([f(false, fiveHrTime),     s(false, '')]),
-    wrapL2([f(false, fiveHrTime)]),
-    wrapL2([f(false, '')]),
-  ];
+  for (const barWidth of QUOTA_BAR_WIDTH_CANDIDATES) {
+    const f = (bar: boolean, reset: string) => quotaSeg(data.five_hour, `${FIVE}h`, CYAN_FG, batteryIcon, { bar: bar ? barWidth : undefined, reset });
+    const s = (bar: boolean, reset: string) => quotaSeg(data.seven_day, `${SEVEN}d`, BLUE_FG, thermoIcon, { bar: bar ? barWidth : undefined, reset });
 
-  return tiers.find(tier => tier && stripAnsi(tier).length < maxWidth) ?? '';
+    const tiers = [
+      wrapL2([f(true, fiveHrFullReset), s(true, sevenDayFull)]),
+      wrapL2([f(true, fiveHrTime),      s(true, sevenDayFull)]),
+      wrapL2([f(true, fiveHrTime),      s(true, '')]),
+      wrapL2([f(true, fiveHrTime),      s(false, '')]),
+      wrapL2([f(false, fiveHrTime),     s(false, '')]),
+      wrapL2([f(false, fiveHrTime)]),
+      wrapL2([f(false, '')]),
+    ];
+
+    const fit = tiers.find(tier => tier && stripAnsi(tier).length < maxWidth);
+    if (fit) return fit;
+  }
+  return '';
 }
 
 export { buildQuotaLine };
@@ -539,8 +549,6 @@ function main(): void {
   const usedPct = ctx ? computeUsedPct(ctx, effectiveWindowSize) : null;
 
   const maxWidth = termWidth;
-  const isWide = termWidth >= 120;
-  const barWidth = isWide ? 12 : 8;
 
   // ════════════════════════════════════════════════════════════════
   // LINE 1: Segments in display order, each with a priority.
@@ -644,7 +652,7 @@ function main(): void {
   // ════════════════════════════════════════════════════════════════
 
   const line2 = (hasUsage && isSectionEnabled(config, SECTION.LINE2))
-    ? buildQuotaLine(data, barWidth, maxWidth)
+    ? buildQuotaLine(data, maxWidth)
     : '';
 
   // ════════════════════════════════════════════════════════════════

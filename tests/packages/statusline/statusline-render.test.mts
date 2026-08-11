@@ -592,6 +592,24 @@ describe('end-to-end rendering', () => {
     strictEqual(lines.length, 2, `Expected 2 lines, got ${lines.length}`);
   });
 
+  it('does not shrink line 2 bar width at a fixed termWidth threshold independent of fit', () => {
+    // Regression: barWidth used to be chosen once via `isWide = termWidth
+    // >= 120` before any tier was evaluated, so widths 120 and 119
+    // rendered with different bar widths (12 vs 8 cells) even though line
+    // 2's content was nowhere near overflowing at either width -- the
+    // same class of bug RIGHT_RESERVE was for line 1.
+    const session = JSON.stringify({
+      rate_limits: {
+        five_hour: { used_percentage: 33 },
+        seven_day: { used_percentage: 16 },
+      },
+    });
+
+    const at120 = stripAnsi(run('120', session).trimEnd().split('\n')[1] ?? '');
+    const at119 = stripAnsi(run('119', session).trimEnd().split('\n')[1] ?? '');
+    strictEqual(at120, at119, 'line 2 should render identically at widths 120 and 119 when nothing needs to shrink');
+  });
+
   it('produces two lines of output with valid input', () => {
     const session = JSON.stringify({
       model: { display_name: 'TestModel' },

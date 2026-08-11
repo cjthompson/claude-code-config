@@ -143,29 +143,27 @@ If, after all of that, the line still doesn't fit a very narrow terminal, it's l
 
 | Segment | Source | Example |
 |---|---|---|
-| 5-hour utilization | `data.five_hour.utilization` | `5h 33% ████░░░░░░░░` |
-| 5-hour reset | `data.five_hour.resets_at` | `1h57m (2:00PM)` |
-| 7-day utilization | `data.seven_day.utilization` | `7d 16% ██░░░░░░░░░░` |
-| 7-day reset | `data.seven_day.resets_at` | `Fri 10:00AM` |
-| Cache age | file mtime of usage cache | `(3m old)` |
+| 5-hour utilization | `rate_limits.five_hour.used_percentage` | `5h 33% ████░░░░░░░░` |
+| 5-hour reset | `rate_limits.five_hour.resets_at` | `1h57m (2:00PM)` |
+| 7-day utilization | `rate_limits.seven_day.used_percentage` | `7d 16% ██░░░░░░░░░░` |
+| 7-day reset | `rate_limits.seven_day.resets_at` | `Fri 10:00AM` |
 
 Progress bars change color by utilization: green < 40%, yellow < 60%, orange < 80%, red >= 80%.
 
 ### Line 2 — Progressive Width Tiers
 
-Line 2 uses pre-computed tiers from most to least detailed. The first tier that fits is used:
+Bar width is tried widest-first (12 cells, then 8) across the *entire* detail-tier ladder below before falling back to the narrower width — so bars only shrink when the line genuinely doesn't fit, not at a fixed `termWidth` threshold regardless of whether anything actually overflows (this used to be gated by `isWide = termWidth >= 120` picked once, before any tier was evaluated — the same class of bug `RIGHT_RESERVE` was for line 1, just for bar width instead of margin). The first (bar width, tier) combination that fits is used:
 
 | Tier | Content |
 |---|---|
-| 0 (full) | `5h 33% ████░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░ Fri 10:00AM │ (3m old)` |
-| 1 | Drop cache age |
-| 2 | 5h reset: time only (`2:00PM`) |
-| 3 | Drop 7d reset time |
-| 4 | Drop 7d progress bar |
-| 5 | Drop 5h progress bar |
-| 6 | Drop 7d window entirely |
-| 7 | Drop 5h reset time |
-| 8 | Line 2 hidden entirely |
+| 0 (full) | `5h 33% ████░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░ Fri 10:00AM` |
+| 1 | 5h reset: time only (`2:00PM`) |
+| 2 | Drop 7d reset text |
+| 3 | Drop 7d progress bar |
+| 4 | Drop 5h progress bar too |
+| 5 | Drop 7d window entirely |
+| 6 | Drop 5h reset time too — icon + percentage only |
+| — | Line 2 hidden entirely if nothing fits, even at 8-cell bars |
 
 ## Terminal Width Detection
 
