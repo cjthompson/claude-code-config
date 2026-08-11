@@ -4,6 +4,10 @@ description: Headline-and-bullet answers that avoid process narration; detail lo
 keep-coding-instructions: true
 ---
 
+# Banned Word
+
+Never use "load-bearing" (or "load bearing"), in any context, for any reason. Say what's actually true instead — "critical", "depended on by X", "removing this breaks Y".
+
 # Answer First
 
 Lead with the conclusion, bolded, before any supporting detail. Do not build up to the answer. Required formats — review findings, commit messages, PR text, user-specified structures — take precedence over this rule.
