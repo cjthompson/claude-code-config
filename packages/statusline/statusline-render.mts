@@ -239,8 +239,9 @@ function formatTokenCount(n: number): string {
 
 // Shorten path: ~/dev/neat-core-js/.worktrees/sso → ~/d/n/.w/sso
 // Always shortens parent dirs: ~/dev/neat-core-js → ~/d/neat-core-js
-// Keeps only the last segment intact; shortens all parent dirs to first char (or .X for dotdirs)
-function shortenPath(p: string): string {
+// Keeps the last segment intact by default; pass maxLastLen to also
+// ellipsis-truncate it once nothing else is left to shrink.
+function shortenPath(p: string, maxLastLen: number = Infinity): string {
   const home = process.env.HOME ?? '';
   if (home && p.startsWith(home)) p = `~${p.slice(home.length)}`;
 
@@ -248,6 +249,12 @@ function shortenPath(p: string): string {
   for (let i = 0; i < parts.length - 1; i++) {
     if (parts[i] === '~' || parts[i] === '') continue;
     parts[i] = parts[i].startsWith('.') ? parts[i].slice(0, 2) : parts[i][0];
+  }
+
+  const lastIdx = parts.length - 1;
+  const last = parts[lastIdx];
+  if (last.length > maxLastLen) {
+    parts[lastIdx] = maxLastLen > 1 ? `${last.slice(0, maxLastLen - 1)}…` : last.slice(0, maxLastLen);
   }
   return parts.join('/');
 }
@@ -404,8 +411,9 @@ export { buildQuotaLine };
 // ── Context-usage tiers ─────────────────────────────────────────
 // Context usage is a core (never-dropped) segment, so instead of vanishing
 // under width pressure it shrinks: full → drop the (used/total) suffix →
-// drop the bar too, keeping only the icon + percentage. Mirrors the tier
-// pattern buildQuotaLine already uses for line 2.
+// drop the bar too (icon + percentage only) → drop the percentage too
+// (icon only — conveys "about how full", not an exact number). Mirrors
+// the tier pattern buildQuotaLine already uses for line 2.
 function buildContextTiers(
   usedPct: number,
   effectiveWindowSize: number,
@@ -421,7 +429,8 @@ function buildContextTiers(
   const totalTokens = rawTokens > 0 ? rawTokens
     : effectiveWindowSize > 0 ? Math.round(usedPct * effectiveWindowSize / 100)
     : 0;
-  const head = ` ${WHITE}${circleIcon(usedPct)} ${displayPct}${PCT} `;
+  const icon = `${WHITE}${circleIcon(usedPct)}`;
+  const head = ` ${icon} ${displayPct}${PCT} `;
   const bar = `${R_GREEN}${progressBar(usedPct, BG_GREEN, 8)}`;
   const tokens = effectiveWindowSize > 0
     ? ` ${GREEN_DIM}(${formatTokenCount(totalTokens)}/${formatTokenCount(effectiveWindowSize)})${R_GREEN}`
@@ -430,6 +439,7 @@ function buildContextTiers(
     `${head}${bar}${tokens} `, // full
     `${head}${bar} `,          // drop the (used/total) suffix
     `${head}`,                 // drop the bar too — icon + % only
+    ` ${icon} `,                // drop the percentage too — icon only
   ];
 }
 
@@ -438,9 +448,7 @@ export { buildContextTiers };
 // ── Branch tiers ─────────────────────────────────────────────
 // Branch is protected (never dropped), so instead of a blunt width
 // threshold picking one of two fixed caps regardless of whether the line
-// actually needs the room, it gets its own shrink ladder — stepped only
-// once context's tiers are exhausted (context first: denser info per
-// column than a truncated name).
+// actually needs the room, it gets its own shrink ladder.
 const BRANCH_LENGTH_TIERS = [25, 18, 12];
 
 function buildBranchTiers(branch: string): string[] {
@@ -449,6 +457,37 @@ function buildBranchTiers(branch: string): string[] {
 }
 
 export { buildBranchTiers };
+
+// ── Model tiers ───────────────────────────────────────────────
+// Model is protected (never dropped). Its one shrink step abbreviates the
+// full display name down to a single letter from the normalized family
+// name (handles "Claude " prefixes and "(1M context)" suffixes the same
+// way resolveContextWindowSize's lookup does) -- e.g. "Claude Sonnet 4.6"
+// -> "S", "Opus 4.6" -> "O", "Haiku 3.5" -> "H".
+function buildModelTiers(displayName: string): string[] {
+  const letter = (normalizeModelName(displayName)[0] ?? '?').toUpperCase();
+  return [
+    `${combo(255, 22, true)} ${ICON_BOLT} ${displayName} `,
+    `${combo(255, 22, true)} ${ICON_BOLT} ${letter} `,
+  ];
+}
+
+export { buildModelTiers };
+
+// ── Path tiers ────────────────────────────────────────────────
+// Path is protected (never dropped). Parent directories are always
+// abbreviated to one character regardless of width (shortenPath's default
+// behavior); the last segment stays full until every other lever --
+// model, context, branch -- has already given up everything it can, at
+// which point it starts ellipsis-truncating too, as the final squeeze.
+const PATH_LAST_SEGMENT_LENGTH_TIERS = [Infinity, 12, 8];
+
+function buildPathTiers(cwd: string): string[] {
+  return PATH_LAST_SEGMENT_LENGTH_TIERS.map(len =>
+    `${fg(148)} ${ICON_FOLDER} ${shortenPath(cwd, len)} `);
+}
+
+export { buildPathTiers };
 
 // ── Main rendering ────────────────────────────────────────────
 function main(): void {
@@ -510,13 +549,15 @@ function main(): void {
   // then duration(6), lines_changed(7), time_to_full(9), burn_rate(10) last.
   // ════════════════════════════════════════════════════════════════
 
-  const shortPath = shortenPath(cwd);
-
   const line1Segs: PowerlineSeg[] = [];
 
-  if (model?.display_name && isSectionEnabled(config, SECTION.MODEL))
-    line1Segs.push({ section: 22, priority: PROTECTED_PRIORITY, content:
-      `${combo(255, 22, true)} ${ICON_BOLT} ${model.display_name} ` });
+  let modelSeg: PowerlineSeg | undefined;
+  let modelTiers: string[] | undefined;
+  if (model?.display_name && isSectionEnabled(config, SECTION.MODEL)) {
+    modelTiers = buildModelTiers(model.display_name);
+    modelSeg = { section: 22, priority: PROTECTED_PRIORITY, content: modelTiers[0] };
+    line1Segs.push(modelSeg);
+  }
 
   if (cost?.total_cost_usd != null && isSectionEnabled(config, SECTION.USD_COST))
     line1Segs.push({ section: 22, priority: 5, content:
@@ -569,28 +610,33 @@ function main(): void {
     line1Segs.push(branchSeg);
   }
 
-  if (isSectionEnabled(config, SECTION.PWD))
-    line1Segs.push({ section: 237, priority: PROTECTED_PRIORITY, content:
-      `${fg(148)} ${ICON_FOLDER} ${shortPath} ` });
+  let pathSeg: PowerlineSeg | undefined;
+  let pathTiers: string[] | undefined;
+  if (isSectionEnabled(config, SECTION.PWD)) {
+    pathTiers = buildPathTiers(cwd);
+    pathSeg = { section: 237, priority: PROTECTED_PRIORITY, content: pathTiers[0] };
+    line1Segs.push(pathSeg);
+  }
 
   const fitted = fitSegments(line1Segs, maxWidth);
   // Protected segments never get dropped above, so once the droppable pool
-  // is exhausted, shrink context usage first (denser info per column),
-  // then branch, tier-by-tier, as the remaining width levers.
-  if (contextSeg && contextTiers) {
+  // is exhausted, shrink the remaining levers in priority order: model
+  // first (abbreviate to one letter), then context (denser info per
+  // column than a truncated name), then branch, then path last — the
+  // final segment of the working directory only starts truncating once
+  // every other lever above it is already fully exhausted.
+  const stepTiers = (seg: PowerlineSeg | undefined, tiers: string[] | undefined) => {
+    if (!seg || !tiers) return;
     let tier = 0;
-    while (tier < contextTiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
+    while (tier < tiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
       tier++;
-      contextSeg.content = contextTiers[tier];
+      seg.content = tiers[tier];
     }
-  }
-  if (branchSeg && branchTiers) {
-    let tier = 0;
-    while (tier < branchTiers.length - 1 && stripAnsi(renderPowerline(fitted)).length >= maxWidth) {
-      tier++;
-      branchSeg.content = branchTiers[tier];
-    }
-  }
+  };
+  stepTiers(modelSeg, modelTiers);
+  stepTiers(contextSeg, contextTiers);
+  stepTiers(branchSeg, branchTiers);
+  stepTiers(pathSeg, pathTiers);
   const line1 = renderPowerline(fitted);
 
   // ════════════════════════════════════════════════════════════════

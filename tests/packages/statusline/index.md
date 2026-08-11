@@ -38,8 +38,10 @@ Requires Node.js 22+ for `--experimental-strip-types`.
 | `joinSep` | Joins segments with separator characters |
 | `computeUsedPct` | Computes percentage of context window used |
 | `fitSegments` | Priority-based drop/keep decisions, including the `PROTECTED_PRIORITY` floor |
-| `buildContextTiers` | Context-usage shrink ladder (full → drop token count → icon+% only) |
+| `buildContextTiers` | Context-usage shrink ladder (full → drop token count → icon+% only → icon only) |
 | `buildBranchTiers` | Branch-name shrink ladder (25 → 18 → 12 chars) |
+| `buildModelTiers` | Model-name shrink (full display name → first letter of normalized family) |
+| `buildPathTiers` | Working-directory shrink ladder for the last path segment (untouched → 12 → 8 chars) |
 | Shell integration | Renders line1/line2 output via `statusline.sh`, including width monotonicity and shrink-order (context before branch) regression tests |
 
 ## Manual Resize Testing

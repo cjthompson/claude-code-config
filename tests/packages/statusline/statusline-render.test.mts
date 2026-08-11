@@ -25,6 +25,8 @@ import {
   renderPowerline,
   buildContextTiers,
   buildBranchTiers,
+  buildModelTiers,
+  buildPathTiers,
   PROTECTED_PRIORITY,
 } from '../../../packages/statusline/statusline-render.mts';
 
@@ -312,6 +314,20 @@ describe('shortenPath', () => {
       ok(result.startsWith('~/'));
     }
   });
+
+  it('leaves the last segment untouched when maxLastLen is omitted', () => {
+    strictEqual(shortenPath('/a/a-genuinely-long-final-directory-name'), '/a/a-genuinely-long-final-directory-name');
+  });
+
+  it('ellipsis-truncates the last segment when it exceeds maxLastLen', () => {
+    const result = shortenPath('/a/a-genuinely-long-final-directory-name', 12);
+    ok(result.endsWith('…'), `expected ellipsis, got: ${result}`);
+    ok(stripAnsi(result.split('/').pop()!).length === 12);
+  });
+
+  it('does not truncate a last segment already shorter than maxLastLen', () => {
+    strictEqual(shortenPath('/a/short', 12), '/a/short');
+  });
 });
 
 // ── progressBar ───────────────────────────────────────────────
@@ -441,12 +457,19 @@ describe('buildContextTiers', () => {
     ok(stripAnsi(tiers[1]).includes('45'));
   });
 
-  it('shortest tier is icon + percentage only', () => {
+  it('third tier drops the bar too, keeping icon + percentage only', () => {
     const tiers = buildContextTiers(45, 200000, { input_tokens: 90000 });
-    const shortest = stripAnsi(tiers[2]);
-    ok(shortest.includes('45'));
-    ok(!shortest.includes('90K'));
-    ok(shortest.length < stripAnsi(tiers[1]).length);
+    const tier = stripAnsi(tiers[2]);
+    ok(tier.includes('45'));
+    ok(!tier.includes('90K'));
+    ok(tier.length < stripAnsi(tiers[1]).length);
+  });
+
+  it('shortest (fourth) tier drops the percentage too, leaving only the icon', () => {
+    const tiers = buildContextTiers(45, 200000, { input_tokens: 90000 });
+    const shortest = stripAnsi(tiers[3]);
+    ok(!shortest.includes('45'), `expected no percentage digits, got: ${shortest}`);
+    ok(shortest.length < stripAnsi(tiers[2]).length);
   });
 });
 
@@ -465,6 +488,53 @@ describe('buildBranchTiers', () => {
     for (const tier of tiers) {
       ok(stripAnsi(tier).includes('short'), `expected 'short' in: ${stripAnsi(tier)}`);
       ok(!stripAnsi(tier).includes('fix/'), `prefix should be stripped in: ${stripAnsi(tier)}`);
+    }
+  });
+});
+
+describe('buildModelTiers', () => {
+  it('full tier shows the complete display name', () => {
+    const tiers = buildModelTiers('Opus 4.6');
+    ok(stripAnsi(tiers[0]).includes('Opus 4.6'));
+  });
+
+  it('shrinks to the first letter of the normalized family name', () => {
+    strictEqual(stripAnsi(buildModelTiers('Opus 4.6')[1]).trim().slice(-1), 'O');
+    strictEqual(stripAnsi(buildModelTiers('Claude Sonnet 4.6')[1]).trim().slice(-1), 'S');
+    strictEqual(stripAnsi(buildModelTiers('Haiku 3.5')[1]).trim().slice(-1), 'H');
+  });
+
+  it('strips "Claude " and "(...context)" decoration before taking the letter', () => {
+    strictEqual(stripAnsi(buildModelTiers('Claude Sonnet 4.6 (1M context)')[1]).trim().slice(-1), 'S');
+  });
+});
+
+describe('buildPathTiers', () => {
+  const longDir = '/a/a-genuinely-long-final-directory-name';
+
+  it('first tier leaves the last segment untouched', () => {
+    const tiers = buildPathTiers(longDir);
+    ok(stripAnsi(tiers[0]).includes('a-genuinely-long-final-directory-name'));
+  });
+
+  it('produces progressively shorter tiers for a long final segment', () => {
+    const tiers = buildPathTiers(longDir);
+    const lengths = tiers.map(t => stripAnsi(t).length);
+    ok(lengths[0] > lengths[1], `tier 0 (${lengths[0]}) should be longer than tier 1 (${lengths[1]})`);
+    ok(lengths[1] > lengths[2], `tier 1 (${lengths[1]}) should be longer than tier 2 (${lengths[2]})`);
+  });
+
+  it('every tier still abbreviates parent directories', () => {
+    const tiers = buildPathTiers(longDir);
+    for (const tier of tiers) {
+      ok(stripAnsi(tier).includes('/a/'), `expected abbreviated parent in: ${stripAnsi(tier)}`);
+    }
+  });
+
+  it('leaves a short final segment untouched across all tiers', () => {
+    const tiers = buildPathTiers('/a/short');
+    for (const tier of tiers) {
+      ok(stripAnsi(tier).includes('/a/short'), `expected untruncated 'short' in: ${stripAnsi(tier)}`);
     }
   });
 });
@@ -859,10 +929,14 @@ describe('end-to-end rendering', () => {
     // Regression test for the RIGHT_RESERVE cliff (termWidth 79 -> maxWidth 79,
     // termWidth 80 -> maxWidth 60) and for fitSegments dropping protected
     // segments: widening the terminal must never remove a previously-shown
-    // block or shrink a previously-longer branch string, and
-    // model/context/branch/pwd must appear at every width tested, however narrow.
+    // block, or shrink a previously-longer model/branch/path string, and
+    // model/context/branch/pwd must appear (in some tier) at every width
+    // tested, however narrow.
     const longBranch = 'feature/a-genuinely-long-branch-name-for-monotonic-testing';
-    const GIT_ICON = ''; // matches ICON_GIT in statusline-render.mts
+    // Matching literals from statusline-render.mts (private-use Nerd Font glyphs).
+    const ICON_BOLT = '';
+    const ICON_GIT = '';
+    const ICON_FOLDER = '';
 
     const session = JSON.stringify({
       model: { display_name: 'MonoModel' },
@@ -873,25 +947,39 @@ describe('end-to-end rendering', () => {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
       },
-      cwd: '/tmp/monotonic',
+      cwd: '/tmp/a-genuinely-long-monotonic-directory-name',
     });
 
     const widths = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 150, 200];
     const markers = ['$1.23', '/hr', '+12', 'left'];
 
+    // Extracts the text between an icon and the next segment/transition
+    // separator, for tracking a protected segment's rendered length.
+    const extractLen = (line1: string, icon: string) => {
+      const m = line1.match(new RegExp(`${icon} (.*?) [▶│]`, 'u'));
+      return m ? m[1].trim().length : 0;
+    };
+
     let prevPresent = new Set<string>();
-    let prevBranchLen = 0;
+    let prevModelLen = 0, prevBranchLen = 0, prevPathLen = 0;
     for (const w of widths) {
       const line1 = stripAnsi(run(String(w), session, longBranch).trimEnd().split('\n')[0]);
 
-      ok(line1.includes('MonoModel'), `model missing at width ${w}`);
-      ok(line1.includes(GIT_ICON), `branch missing at width ${w}`);
-      ok(line1.includes('monotonic'), `pwd missing at width ${w}`);
+      ok(line1.includes(ICON_BOLT), `model missing at width ${w}`);
+      ok(line1.includes(ICON_GIT), `branch missing at width ${w}`);
+      ok(line1.includes(ICON_FOLDER), `pwd missing at width ${w}`);
 
-      const branchMatch = line1.match(new RegExp(`${GIT_ICON} (.*?) [▶│]`, 'u'));
-      const branchLen = branchMatch ? branchMatch[1].trim().length : 0;
+      const modelLen = extractLen(line1, ICON_BOLT);
+      ok(modelLen >= prevModelLen, `widening to ${w} shortened the model string (was ${prevModelLen} chars, now ${modelLen})`);
+      prevModelLen = modelLen;
+
+      const branchLen = extractLen(line1, ICON_GIT);
       ok(branchLen >= prevBranchLen, `widening to ${w} shortened the branch string (was ${prevBranchLen} chars, now ${branchLen})`);
       prevBranchLen = branchLen;
+
+      const pathLen = extractLen(line1, ICON_FOLDER);
+      ok(pathLen >= prevPathLen, `widening to ${w} shortened the path string (was ${prevPathLen} chars, now ${pathLen})`);
+      prevPathLen = pathLen;
 
       const present = new Set(markers.filter(m => line1.includes(m)));
       for (const m of prevPresent) {
@@ -899,7 +987,7 @@ describe('end-to-end rendering', () => {
       }
       prevPresent = present;
     }
-  });
+  })
 
   it('shrinks context usage instead of dropping it as the terminal narrows', () => {
     const session = JSON.stringify({
@@ -918,8 +1006,11 @@ describe('end-to-end rendering', () => {
 
     const narrow = stripAnsi(run('25', session).trimEnd().split('\n')[0]);
     ok(!narrow.includes('90K/200K'), `expected shrunk context tier at width 25, got: ${narrow}`);
-    ok(narrow.includes('45'), 'percentage should still be present');
-    ok(narrow.includes('TestModel'), 'model should still be present at width 25');
+    ok(narrow.includes('45'), 'percentage should still be present at width 25 (bar dropped, not yet the icon-only tier)');
+
+    // Narrower still: the fourth tier drops the percentage too, leaving only the icon.
+    const narrowest = stripAnsi(run('15', session).trimEnd().split('\n')[0]);
+    ok(!narrowest.includes('45'), `expected icon-only context tier at width 15, got: ${narrowest}`);
   });
 
   it('shrinks branch through its length ladder only after context is fully shrunk', () => {
@@ -946,6 +1037,33 @@ describe('end-to-end rendering', () => {
     // Narrower still: branch must now be shrinking too.
     const narrow = stripAnsi(run('30', session, longBranch).trimEnd().split('\n')[0]);
     ok(narrow.includes('…'), `expected truncated branch at width 30, got: ${narrow}`);
-    ok(narrow.includes('TestModel'), 'model should still be present at width 30');
+  });
+
+  it('shrinks path last, only after model, context, and branch are all fully shrunk', () => {
+    const longBranch = 'feature/short'; // short enough to never need to shrink itself
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 90000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      cwd: '/Users/someone/dev/a-genuinely-long-final-directory-name',
+    });
+
+    const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
+    ok(wide.includes('a-genuinely-long-final-directory-name'), `expected untruncated path at width 200, got: ${wide}`);
+
+    // Narrow enough that model and context have both already given up
+    // everything they can (branch here is short and never needs to shrink),
+    // before path needs to shrink at all.
+    const mid = stripAnsi(run('72', session, longBranch).trimEnd().split('\n')[0]);
+    ok(!mid.includes('45'), `expected context already at its icon-only tier at width 72, got: ${mid}`);
+    ok(mid.includes('a-genuinely-long-final-directory-name'), `expected path still untruncated at width 72, got: ${mid}`);
+
+    // Narrower still: path must now be shrinking too.
+    const narrow = stripAnsi(run('65', session, longBranch).trimEnd().split('\n')[0]);
+    ok(narrow.includes('…'), `expected truncated path at width 65, got: ${narrow}`);
   });
 });

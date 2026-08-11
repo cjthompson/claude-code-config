@@ -118,23 +118,26 @@ Tests and dev tooling for this package live under `tests/packages/statusline/` a
 
 | Segment | Source | Example | Priority |
 |---|---|---|---|
-| Model name | `session.model.display_name` | `Opus 4.6` | protected — never dropped, never shrinks |
+| Model name | `session.model.display_name` | `Opus 4.6` | protected — shrinks instead of dropping (see below) |
 | Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (90K/200K)` | protected — shrinks instead of dropping (see below) |
 | Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | protected — shrinks instead of dropping (see below) |
-| Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | protected — never dropped; parent-dir abbreviation is unconditional, not width-driven |
+| Working directory | `session.cwd` (parents shortened) | `~/d/my-project` | protected — shrinks instead of dropping (see below) |
 | Session cost | `session.cost.total_cost_usd` | `$2.10` | 5 (first to drop) |
 | Session duration | `session.cost.total_duration_ms` | `10m` | 6 |
 | Lines changed | `session.cost.total_lines_{added,removed}` | `+100 -30` | 7 |
 | Time to context limit | tokens remaining / token rate | `~1h1m left` | 9 |
 | Burn rate | cost / duration (shown after 1 min) | `$12.60/hr` | 10 (last to drop) |
 
-Segments are defined in display order, each with a `priority` number — higher means more important, kept longer. `fitSegments()` repeatedly removes the **lowest**-priority segment until the rendered line fits within `maxWidth`, stopping once only segments at or above `PROTECTED_PRIORITY` (100) remain. Model, context window, git branch, and working directory sit at that protected priority and are never removed by this loop — display order and priority are fully decoupled. If the protected four alone still don't fit a very narrow terminal, the line is left to wrap.
+Segments are defined in display order, each with a `priority` number — higher means more important, kept longer. `fitSegments()` repeatedly removes the **lowest**-priority segment until the rendered line fits within `maxWidth`, stopping once only segments at or above `PROTECTED_PRIORITY` (100) remain. Model, context window, git branch, and working directory sit at that protected priority and are never *removed* by this loop — display order and priority are fully decoupled.
 
-**Context window shrinking**: once every droppable segment is gone, if the line still doesn't fit, the context-window segment steps down through three tiers instead of disappearing: full (icon + % + bar + `(used/total)`) → drop the `(used/total)` suffix → drop the bar too, keeping only the icon and percentage.
+Once every droppable segment is gone and the line still doesn't fit, the four protected segments shrink through their own tiers, **in this order — each one's ladder fully exhausted before the next one starts shrinking at all:**
 
-**Branch shrinking**: also protected, also tiered — full name (up to 25 chars) → 18 chars → 12 chars, each with common prefixes (`chore/`, `feature/`, `feat/`, `fix/`, `bugfix/`, `hotfix/`, `release/`) stripped and long names trimmed with an ellipsis (e.g. `improve-playwrigh…`). Branch only starts shrinking once context has stepped through *all three* of its own tiers — context is denser information per column, so it gives up detail first.
+1. **Model** — one step: full display name → first letter of the normalized family name (handles `Claude ` prefixes and `(1M context)` suffixes the same way the context-window-override lookup does), e.g. `Claude Sonnet 4.6` → `S`, `Opus 4.6` → `O`, `Haiku 3.5` → `H`.
+2. **Context window** — four tiers: full (icon + % + bar + `(used/total)`) → drop the `(used/total)` suffix → drop the bar too (icon + % only) → drop the percentage too (icon only — conveys "about how full", not an exact number).
+3. **Branch** — three length tiers (25 → 18 → 12 chars), with common prefixes (`chore/`, `feature/`, `feat/`, `fix/`, `bugfix/`, `hotfix/`, `release/`) stripped and long names trimmed with an ellipsis (e.g. `improve-playwrigh…`).
+4. **Path** — parent directories are always collapsed to their first character (unconditional, at every width — `~/dev/neat-core-js/.worktrees/sso` becomes `~/d/n/.w/sso`), but the *last* segment stays full until this point; only once model, context, and branch have all already given up everything they can does the last segment start ellipsis-truncating too (12 → 8 chars) — the final squeeze.
 
-**Path shortening**: All parent directories are collapsed to their first character. `~/dev/neat-core-js/.worktrees/sso` becomes `~/d/n/.w/sso`. The last segment is always preserved in full. Unlike branch, this abbreviation is unconditional — it happens at every width, not only when the line needs the room.
+If, after all of that, the line still doesn't fit a very narrow terminal, it's left to wrap.
 
 ### Line 2 — API Quota
 
