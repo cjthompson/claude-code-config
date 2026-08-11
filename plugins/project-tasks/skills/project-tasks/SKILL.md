@@ -494,7 +494,7 @@ When the scout completes, dispatch the executor as another **background** subage
 
 ```
 Subagent tool parameters:
-  subagent_type: "lean-executor"
+  subagent_type: "lean-agents:lean-executor"
   model: "haiku"
   run_in_background: true
   description: "Execute: #{SEQ} {short_title}"
@@ -667,7 +667,7 @@ When user says "check task #NNN":
 $TASK_DB get --project "..." --seq N
 ```
 
-2. Dispatch a **read-only subagent** using an available subagent or delegation tool with `subagent_type: "lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
+2. Dispatch a **read-only subagent** using an available subagent or delegation tool with `subagent_type: "lean-agents:lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
