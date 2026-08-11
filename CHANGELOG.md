@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.64 - 2026-08-11
+
+### Changes
+- **output-styles**: added a banned-word rule to the top of both `concise` and `terse` styles, forbidding "load-bearing" (or "load bearing") in any reply.
+
 ## v0.0.63 - 2026-08-11
 
 ### Changes
