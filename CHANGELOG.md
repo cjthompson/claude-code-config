@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.0.65 - 2026-08-11
+
+### Fixes
+- **lean-agents**: scoped every cross-reference between the plugin's own four agents (`main`, `lean-executor`, `standard-executor`, `full-executor`) to `lean-agents:<name>` — a bare name fails to resolve as `subagent_type` and forces a retry. Built-in agents (`general-purpose`, `Explore`, `Plan`) stay unscoped.
+- **lean-agents**: rewrote `main.md`'s Plan Mode Handoff to name the actual failure mode — a plan-mode workflow reminder instructing `ExitPlanMode` directly — instead of only the generic "when the plan is finished" trigger.
+- **project-tasks**: scoped the two `lean-executor` subagent dispatch sites to `lean-agents:lean-executor`, the real production call site the bare-name bug affected.
+
 ## v0.0.64 - 2026-08-11
 
 ### Changes
