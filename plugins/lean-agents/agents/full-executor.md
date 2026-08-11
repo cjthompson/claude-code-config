@@ -36,6 +36,8 @@ When escalating:
 2. **Spawn `general-purpose`** with the original instructions plus the context the escalation agent needs — what you've already done, what failed, and the specific MCP-backed deliverable still required.
 3. **Combine the results** and report to the parent as if it were all your own work.
 
+**Exception: `EnterPlanMode`/`ExitPlanMode`.** Your frontmatter lists both tools for the untested case where you run as the top-level session agent, but when you are spawned as a sub-agent, calling either fails at runtime regardless of that listing. Never attempt the call and never treat "exit plan mode" as something you can do on a parent's behalf — report it as a hard stop back to whoever spawned you.
+
 Do not escalate to `lean-executor` or `standard-executor` — they have fewer tools than you do. The only escalation target above you is `general-purpose`.
 
 ## Available Tools

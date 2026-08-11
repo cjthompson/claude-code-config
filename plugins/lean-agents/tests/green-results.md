@@ -71,3 +71,26 @@ Fixed by adding to both `standard-executor.md` and `lean-executor.md`:
 spawns for search. That behavior never appeared in 15 baseline answers, including under the old
 contradictory text. The honest framing is a consistency fix plus a search-hygiene improvement —
 not a measured token saving.
+
+## Scenarios 9 & 10 re-run (ExitPlanMode conflict fix — GREEN, 2026-08-11)
+
+Date: 2026-08-11 · Subagent model: haiku · Tools: none (reasoning only)
+
+Rules under test: the rewritten `## Plan Mode Handoff` section in `main.md`, which now names
+the actual failure mechanism (a plan-mode workflow reminder instructing `ExitPlanMode`
+directly) instead of only the generic trigger "when a plan is finished."
+
+Motivation for re-running: this exact conflict was reproduced live in the planning session
+that produced this fix — the harness's own plan-mode reminder told the agent to call
+`ExitPlanMode`, which the agent (playing `main`) does not have.
+
+- **Scenario 9** (plan finished, still in plan mode, *and* a workflow reminder explicitly
+  instructing "call ExitPlanMode"): agent's last action is the plain statement; explicitly
+  refuses to spawn `full-executor` for it, citing the harness block; explicitly reconciles the
+  conflicting reminder as superseded by its own system prompt. **PASS.**
+- **Scenario 10** (plan mode ends mid-turn, user's message is new/superseding instructions,
+  not approval): agent does not resume the stale plan; treats tool-unlock and user-approval as
+  separate signals; revises the plan and re-presents it. **PASS.**
+
+**Verdict: PASS on both.** The rewritten section closes the gap the original a53729d fix left
+open — naming the conflicting instruction, not just the generic "plan is finished" trigger.
