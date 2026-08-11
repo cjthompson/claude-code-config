@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """claude-optins — TUI to manage per-repo Claude Code opt-ins.
 
-Run from inside a repo. Manages two things that add to a session's startup
-context, in two tabs switched with TAB:
+Run from inside a repo. Manages three things that add to a session's
+startup context, in three tabs switched with TAB:
 
   • Plugins — every installed plugin (with its skills and agents), its
     effective enabled state, and where that comes from.
@@ -11,14 +11,19 @@ context, in two tabs switched with TAB:
     servers in ~/.claude.json. Toggling moves a name between the
     enabledMcpjsonServers / disabledMcpjsonServers lists; a disabled
     server stays defined but isn't started, so it costs no context.
+  • Skills — every discovered skill (personal, project, and active-plugin),
+    its effective on/name-only/user-invocable-only/off state, and its
+    resident token cost. Plugin-backed skills are always on and read-only.
 
 Keys:
-  tab           switch Plugins / MCP Servers tab
-  j/k, arrows   move          space/enter  cycle: inherit -> on -> off
+  tab           switch Plugins / MCP Servers / Skills tab
+  j/k, arrows   move          space/enter  cycle (Plugins/MCP: on<->off;
+                                            Skills: on -> name-only -> off)
   l/right       expand        h/left       collapse
   a             expand/collapse all        g/G  top/bottom
   s             cycle sort: default / name / enabled / source / skills+agents / tokens
   D             delete plugin (removes cache dir, prompts; Plugins tab only)
+  O/U/C         Skills tab only: explicit on / user-invocable-only / clear override
   q             quit (changes are saved on every toggle)
 
 Toggles are written to <repo>/.claude/settings.local.json (gitignored,
@@ -33,6 +38,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import time
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
@@ -53,22 +59,159 @@ def load_json(path):
 
 # ---------- discovery ----------
 
+def _frontmatter_scalar(value):
+    value = value.strip()
+    return (value[1:-1] if len(value) >= 2 and value[0] == value[-1]
+            and value[0] in "'\"" else value)
+
+
 def parse_frontmatter(path):
-    """Return (name, description) from a markdown file's YAML frontmatter."""
+    """Return metadata from a markdown file's opening YAML frontmatter."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read(8192)
     except OSError:
-        return None, None
-    m = re.match(r"^---\n(.*?)\n---", text, re.S)
-    name = desc = None
-    if m:
-        for line in m.group(1).splitlines():
-            if line.startswith("name:"):
-                name = line[5:].strip().strip("'\"")
-            elif line.startswith("description:"):
-                desc = line[12:].strip().strip("'\"")
-    return name, desc
+        return {}
+    m = re.match(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", text, re.S)
+    if not m:
+        return {}
+
+    keys = {
+        "name": "name",
+        "description": "description",
+        "when_to_use": "when_to_use",
+        "disable-model-invocation": "disable_model_invocation",
+    }
+    meta = {"disable_model_invocation": False}
+    lines = m.group(1).splitlines()
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^([\w-]+):\s*(.*)$", lines[index])
+        if not match or match.group(1) not in keys:
+            index += 1
+            continue
+        key, value = match.group(1), match.group(2)
+        if value in (">", "|"):
+            style = value
+            index += 1
+            values = []
+            while index < len(lines) and (not lines[index] or lines[index][0].isspace()):
+                values.append(lines[index].strip())
+                index += 1
+            value = (" ".join(line for line in values if line)
+                     if style == ">" else "\n".join(values).rstrip("\n"))
+        else:
+            value = _frontmatter_scalar(value)
+            index += 1
+        if key == "disable-model-invocation":
+            meta["disable_model_invocation"] = _frontmatter_scalar(value) == "true"
+        else:
+            meta[keys[key]] = value
+    return meta
+
+
+def _skill_record(address, name, source, skill_path, metadata, plugin_key=None):
+    """Build the renderer-independent representation of one discovered skill."""
+    return {
+        "kind": "skill",
+        "key": address,
+        "address": address,
+        "name": name,
+        "source": source,
+        "metadata": metadata,
+        "paths": [skill_path],
+        "collision_paths": [],
+        "plugin_key": plugin_key,
+    }
+
+
+def _merge_skill(found, record):
+    """Keep the first discovered record while retaining equivalent paths."""
+    current = found.get(record["address"])
+    if current is None:
+        record["collision_paths"] = list(record["paths"])
+        found[record["address"]] = record
+    else:
+        current["collision_paths"].extend(record["paths"])
+
+
+def _skill_directories(skills_dir):
+    """Yield skill directory names and their SKILL.md paths in name order."""
+    if not os.path.isdir(skills_dir):
+        return []
+    records = []
+    for directory in sorted(os.listdir(skills_dir)):
+        skill_path = os.path.join(skills_dir, directory, "SKILL.md")
+        if os.path.isfile(skill_path):
+            records.append((directory, skill_path))
+    return records
+
+
+def discover_skills(start_dir, repo_root, home, settings, claude_dir=None,
+                    cache_dir=None, installed_plugins_path=None):
+    """Discover personal, in-scope project, and enabled plugin skills.
+
+    Earlier sources win address collisions: personal skills, then project
+    skills from repository root through the current directory, then plugins.
+    """
+    claude_dir = claude_dir or os.path.join(home, ".claude")
+    cache_dir = cache_dir or os.path.join(claude_dir, "plugins", "cache")
+    installed_plugins_path = installed_plugins_path or os.path.join(
+        claude_dir, "plugins", "installed_plugins.json")
+    found = {}
+
+    for directory, skill_path in _skill_directories(os.path.join(claude_dir, "skills")):
+        metadata = parse_frontmatter(skill_path)
+        _merge_skill(found, _skill_record(directory, metadata.get("name", directory),
+                                          "personal", skill_path, metadata))
+
+    repo_root = os.path.realpath(repo_root)
+    start_dir = os.path.realpath(start_dir)
+    project_dirs = []
+    current = start_dir
+    while True:
+        project_dirs.append(current)
+        if current == repo_root:
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            project_dirs = []
+            break
+        current = parent
+    for directory_path in reversed(project_dirs):
+        relative = os.path.relpath(directory_path, repo_root)
+        prefix = "" if relative == "." else relative.replace(os.sep, "/") + ":"
+        for directory, skill_path in _skill_directories(
+                os.path.join(directory_path, ".claude", "skills")):
+            metadata = parse_frontmatter(skill_path)
+            _merge_skill(found, _skill_record(prefix + directory,
+                                              metadata.get("name", directory), "project",
+                                              skill_path, metadata))
+
+    registry = load_json(installed_plugins_path).get("plugins", {})
+    if os.path.isdir(cache_dir):
+        for marketplace in sorted(os.listdir(cache_dir)):
+            marketplace_dir = os.path.join(cache_dir, marketplace)
+            if not os.path.isdir(marketplace_dir):
+                continue
+            for plugin in sorted(os.listdir(marketplace_dir)):
+                plugin_dir = os.path.join(marketplace_dir, plugin)
+                key = f"{plugin}@{marketplace}"
+                if not os.path.isdir(plugin_dir) or key not in registry or \
+                   not settings.effective(key, installed=True)[0]:
+                    continue
+                version = latest_version(plugin_dir)
+                if not version:
+                    continue
+                skills_dir = os.path.join(plugin_dir, version, "skills")
+                for directory, skill_path in _skill_directories(skills_dir):
+                    metadata = parse_frontmatter(skill_path)
+                    name = metadata.get("name", directory)
+                    _merge_skill(found, _skill_record(f"{plugin}:{name}", name,
+                                                      "plugin", skill_path, metadata,
+                                                      plugin_key=key))
+
+    return sorted(found.values(), key=lambda skill: skill["address"].lower())
 
 
 def latest_version(plugin_dir):
@@ -123,22 +266,26 @@ def discover_plugins():
                 for s in sorted(os.listdir(sdir)):
                     sm = os.path.join(sdir, s, "SKILL.md")
                     if os.path.isfile(sm):
-                        _, desc = parse_frontmatter(sm)
+                        meta = parse_frontmatter(sm)
+                        desc = meta.get("description", "")
                         skills.append((s, desc or ""))
                         est_chars += len(s) + len(desc or "")
             cdir = os.path.join(root, "commands")
             if os.path.isdir(cdir):
                 for c in sorted(os.listdir(cdir)):
                     if c.endswith(".md"):
-                        _, desc = parse_frontmatter(os.path.join(cdir, c))
+                        meta = parse_frontmatter(os.path.join(cdir, c))
+                        desc = meta.get("description", "")
                         skills.append((c[:-3], desc or ""))
                         est_chars += len(c) + len(desc or "")
             adir = os.path.join(root, "agents")
             if os.path.isdir(adir):
                 for a in sorted(os.listdir(adir)):
                     if a.endswith((".md", ".json")):
-                        nm, desc = (parse_frontmatter(os.path.join(adir, a))
-                                    if a.endswith(".md") else (None, None))
+                        meta = (parse_frontmatter(os.path.join(adir, a))
+                                if a.endswith(".md") else {})
+                        nm = meta.get("name")
+                        desc = meta.get("description", "")
                         agents.append((nm or a.rsplit(".", 1)[0], desc or ""))
                         est_chars += len(a) + len(desc or "")
 
@@ -255,6 +402,9 @@ def add_orphans(servers, referenced_names):
 
 # ---------- settings ----------
 
+SKILL_STATES = ("on", "name-only", "user-invocable-only", "off")
+
+
 def _resolve_mcp_map(doc):
     """Collapse a settings doc's two MCP name-lists into name -> enabled.
     A name in disabledMcpjsonServers resolves to False even if also listed
@@ -292,22 +442,27 @@ class Settings:
         local_path = os.path.join(repo_root, ".claude", "settings.local.json")
         self.user_doc = load_json(user_path)
         self.user = self.user_doc.setdefault("enabledPlugins", {})
+        self.user_skills = self.user_doc.setdefault("skillOverrides", {})
         if global_mode:
             project_doc = {}
             self.project = {}
+            self.project_skills = {}
             self.local_doc = {}
             self.local = {}
+            self.local_skills = {}
         else:
             project_doc = load_json(os.path.join(repo_root, ".claude", "settings.json"))
             self.project = project_doc.get("enabledPlugins", {})
+            self.project_skills = project_doc.get("skillOverrides", {})
             self.local_doc = load_json(local_path)
             self.local = self.local_doc.setdefault("enabledPlugins", {})
+            self.local_skills = self.local_doc.setdefault("skillOverrides", {})
         if global_mode:
-            self.write_path, self.write_doc, self.target = \
-                user_path, self.user_doc, self.user
+            self.write_path, self.write_doc, self.target, self.skill_target = \
+                user_path, self.user_doc, self.user, self.user_skills
         else:
-            self.write_path, self.write_doc, self.target = \
-                local_path, self.local_doc, self.local
+            self.write_path, self.write_doc, self.target, self.skill_target = \
+                local_path, self.local_doc, self.local, self.local_skills
 
         # MCP enable/disable state per layer, resolved from the two
         # name-lists in each settings doc.
@@ -339,6 +494,56 @@ class Settings:
             self.target[key] = False
         else:
             del self.target[key]
+        self.save()
+
+    def effective_skill(self, address):
+        """Return (state, source), resolving qualified names before plain ones."""
+        for candidate in (address, address.rsplit(":", 1)[-1]):
+            for layer, source in ((self.local_skills, "local"),
+                                  (self.project_skills, "project"),
+                                  (self.user_skills, "user")):
+                if candidate in layer:
+                    return layer[candidate], source
+        return "on", "default"
+
+    def set_skill(self, address, state):
+        """Set an explicit skill override in the write-target layer."""
+        if state not in SKILL_STATES:
+            raise ValueError(f"invalid skill state: {state}")
+        self.skill_target[address] = state
+        self.save()
+
+    def cycle_skill(self, address):
+        """on -> name-only -> user-invocable-only -> off -> on."""
+        state = self.skill_target.get(address, "on")
+        if state not in SKILL_STATES:
+            raise ValueError(f"invalid skill state: {state}")
+        next_state = SKILL_STATES[(SKILL_STATES.index(state) + 1) % len(SKILL_STATES)]
+        if next_state == "on":
+            self.skill_target.pop(address, None)
+        else:
+            self.skill_target[address] = next_state
+        self.save()
+
+    def cycle_skill_visible(self, address):
+        """Space-key cycle: on -> name-only -> off -> on. Skips
+        user-invocable-only, which is reachable only via explicit set_skill
+        (the 'U' key) — but if that's the current state, continues forward
+        to 'off' rather than jumping back to 'name-only'."""
+        state = self.skill_target.get(address, "on")
+        idx = SKILL_STATES.index(state) if state in SKILL_STATES else 0
+        next_state = SKILL_STATES[(idx + 1) % len(SKILL_STATES)]
+        if next_state == "user-invocable-only":
+            next_state = SKILL_STATES[(idx + 2) % len(SKILL_STATES)]
+        if next_state == "on":
+            self.skill_target.pop(address, None)
+        else:
+            self.skill_target[address] = next_state
+        self.save()
+
+    def clear_skill(self, address):
+        """Clear an explicit skill override in the write-target layer."""
+        self.skill_target.pop(address, None)
         self.save()
 
     def effective_mcp(self, name):
@@ -375,7 +580,7 @@ class Settings:
         os.makedirs(os.path.dirname(self.write_path), exist_ok=True)
         doc = dict(self.write_doc)
         for empty_key in ("enabledPlugins", "enabledMcpjsonServers",
-                          "disabledMcpjsonServers"):
+                          "disabledMcpjsonServers", "skillOverrides"):
             if not doc.get(empty_key):
                 doc.pop(empty_key, None)
         with open(self.write_path, "w", encoding="utf-8") as f:
@@ -385,9 +590,59 @@ class Settings:
 
 # ---------- TUI ----------
 
-def build_rows(display, expanded):
+def _token_estimate(text):
+    return (len(text) + 3) // 4 if text else 0
+
+
+def skill_display(skill, settings):
+    requested, source = settings.effective_skill(skill["address"])
+    plugin = skill.get("source") == "plugin"
+    locked = bool(skill["metadata"].get("disable_model_invocation"))
+    state = "on" if plugin else "user-invocable-only" if locked else requested
+    text = "" if state in ("off", "user-invocable-only") else skill["name"]
+    if state == "on":
+        text += skill["metadata"].get("description", "")
+        text += skill["metadata"].get("when_to_use", "")
+    return {"state": state, "source": source, "author_locked": locked,
+            "inert_override": source != "default" and state != requested,
+            "resident_tokens": _token_estimate(text)}
+
+
+def build_skill_entries(skills, settings):
+    """Merge discover_skills() records with skill_display() facts into
+    renderer-ready entries. Facts use prefixed keys (override_source,
+    effective_state) so they don't clobber the record's own 'source'
+    field, which means discovery origin (personal/project/plugin), not
+    override scope."""
+    entries = []
+    for skill in skills:
+        facts = skill_display(skill, settings)
+        entry = dict(skill)
+        entry["effective_state"] = facts["state"]
+        entry["override_source"] = facts["source"]
+        entry["author_locked"] = facts["author_locked"]
+        entry["inert_override"] = facts["inert_override"]
+        entry["resident_tokens"] = facts["resident_tokens"]
+        entries.append(entry)
+    return entries
+
+
+def skill_tab_summary(entries):
+    """Header facts for the Skills tab: how many are effectively on, and
+    the total resident token cost of the current effective listing."""
+    on = sum(1 for e in entries if e["effective_state"] == "on")
+    tokens = sum(e["resident_tokens"] for e in entries)
+    return {"total": len(entries), "on": on, "tokens": tokens}
+
+
+def build_rows(display, expanded, detail_wrap_width=78):
     """Rows are (kind, entry_index, text). entry_index points into the
-    active tab's display list (all plugins, or all MCP servers)."""
+    active tab's display list (all plugins, or all MCP servers).
+
+    detail_wrap_width bounds how wide a single skill-lock-reason line may
+    be before it's soft-wrapped into multiple rows — the caller derives it
+    from the live terminal width; the default just keeps this usable when
+    called without one (e.g. from tests)."""
     rows = []
     for i, e in enumerate(display):
         rows.append((e["kind"], i, None))
@@ -395,22 +650,73 @@ def build_rows(display, expanded):
             continue
         if e["kind"] == "plugin":
             for s, desc in e["skills"]:
-                rows.append(("skill", i, f"{s}  {desc}"))
+                rows.append(("plugin-skill", i, f"{s}  {desc}"))
             for a, desc in e["agents"]:
-                rows.append(("agent", i, f"{a}  {desc}"))
+                rows.append(("plugin-agent", i, f"{a}  {desc}"))
             for path, desc in e["other_items"]:
-                rows.append(("other", i, f"{path}  {desc}".rstrip()))
+                rows.append(("plugin-other", i, f"{path}  {desc}".rstrip()))
             if not e["skills"] and not e["agents"] and not e["other_items"]:
                 rows.append(("empty", i, "(no skills, agents, or other files)"))
-        else:   # mcp
+        elif e["kind"] == "mcp":
             for label, val in e["detail_items"]:
                 rows.append(("mcp-detail", i, f"{label}  {val}"))
             if not e["detail_items"]:
                 rows.append(("empty", i, "(no connection details)"))
+        else:   # skill
+            detail_rows = []
+            reason = None
+            if e.get("source") == "plugin":
+                reason = (f"locked by plugin — always on while {e.get('plugin_key')} "
+                          "is enabled; toggle the plugin in the Plugins tab instead")
+            elif e.get("author_locked"):
+                reason = ("locked by author — this skill's SKILL.md sets "
+                          "disable-model-invocation: true, capping it at user-invocable-only")
+            if reason:
+                for line in textwrap.wrap(reason, max(20, detail_wrap_width)):
+                    detail_rows.append(("skill-lock-reason", i, line))
+            extra_paths = e["collision_paths"][1:] if len(e["collision_paths"]) > 1 else []
+            for path in extra_paths:
+                detail_rows.append(("skill-detail", i, path))
+            if not detail_rows:
+                detail_rows.append(("empty", i, "(single source; no collisions)"))
+            rows.extend(detail_rows)
     return rows
 
 
-def run(stdscr, plugins, servers, settings):
+# Skills-tab legend content: each item is a list of (text, color-kind)
+# segments that must not be split across lines. wrap_legend() packs them
+# to a live width; run() maps color-kind -> actual curses attr.
+LEGEND_ITEMS = [
+    [("✓", "green"), (" on  ", "dim")],
+    [("~", "cyan"), (" name-only  ", "dim")],
+    [("u", "yellow"), (" user-only  ", "dim")],
+    [("✗", "red"), (" off  ", "dim")],
+    [("🔒", "yellow"), (" locked (plugin/author)  ", "dim")],
+    [("yellow", "yellow"), (" layer = where you'd write  ", "dim")],
+    [("author/plugin", "plain"), (" = origin  ", "dim")],
+    [("!", "plain"), (" = override ignored  ", "dim")],
+    [("xN", "plain"), (" = N sources  ", "dim")],
+    [("~N tok", "plain"), (" = resident cost", "dim")],
+]
+
+
+def wrap_legend(items, width):
+    """Pack legend items into lines no wider than `width`, without
+    splitting an item's segments across two lines."""
+    lines, current, current_len = [], [], 0
+    for item in items:
+        item_len = sum(len(text) for text, _ in item)
+        if current and current_len + item_len > width:
+            lines.append(current)
+            current, current_len = [], 0
+        current.extend(item)
+        current_len += item_len
+    if current:
+        lines.append(current)
+    return lines
+
+
+def run(stdscr, plugins, servers, skills, settings):
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_GREEN, -1)
@@ -425,16 +731,42 @@ def run(stdscr, plugins, servers, settings):
         ORANGE = curses.color_pair(6)
     except Exception:
         ORANGE = curses.color_pair(3)  # fallback to yellow
-    NOTIFY_SAVED = GREEN | curses.A_BOLD
-    NOTIFY_DELETED = ORANGE | curses.A_BOLD
+    # A_REVERSE matches the footer bar's own reverse-video fill — without
+    # it the badge renders on the terminal's plain (often black) default
+    # background instead of blending into the reversed footer, showing up
+    # as a stray dark box against the light bar.
+    NOTIFY_SAVED = GREEN | curses.A_BOLD | curses.A_REVERSE
+    NOTIFY_DELETED = ORANGE | curses.A_BOLD | curses.A_REVERSE
+
+    # Skills-tab legend bar: a genuinely dark navy background so bright
+    # white/green/cyan/yellow/red foreground text has real luminance
+    # contrast against it. Plain ANSI blue (color 4) renders medium-bright
+    # on many terminal themes — pale text on it washes out — so this uses
+    # 256-color navy (17) and falls back to the footer's proven
+    # reverse-video technique (guaranteed contrast on any theme) if
+    # extended colors aren't available.
+    try:
+        curses.init_pair(7, curses.COLOR_WHITE, 17)
+        curses.init_pair(8, curses.COLOR_GREEN, 17)
+        curses.init_pair(9, curses.COLOR_CYAN, 17)
+        curses.init_pair(10, curses.COLOR_YELLOW, 17)
+        curses.init_pair(11, curses.COLOR_RED, 17)
+        LEGEND_BG, LEGEND_GREEN, LEGEND_CYAN, LEGEND_YELLOW, LEGEND_RED = (
+            curses.color_pair(i) for i in range(7, 12))
+    except Exception:
+        LEGEND_BG = curses.A_REVERSE
+        LEGEND_GREEN = GREEN | curses.A_REVERSE
+        LEGEND_CYAN = CYAN | curses.A_REVERSE
+        LEGEND_YELLOW = YELLOW | curses.A_REVERSE
+        LEGEND_RED = RED | curses.A_REVERSE
 
     SORT_MODES = ["default", "name", "enabled", "source", "skills+agents", "tokens"]
     SRC_ORDER = {"local": 0, "project": 1, "user": 2, "default": 3,
                  "uninstalled": 4, "orphan": 4, "deleted": 5}
 
     expanded, cursor, top = set(), 0, 0
-    tab = 0           # 0 = Plugins, 1 = MCP Servers
-    TAB_NAMES = ["Plugins", "MCP Servers"]
+    tab = 0           # 0 = Plugins, 1 = MCP Servers, 2 = Skills
+    TAB_NAMES = ["Plugins", "MCP Servers", "Skills"]
     deleted = set()   # keys removed this session; gone from cache but kept in list
     confirming = None  # key being confirmed for deletion, or None
     notify_msg, notify_color, notify_at = "", None, 0.0
@@ -476,12 +808,35 @@ def run(stdscr, plugins, servers, settings):
                              s["name"].lower()))
         else:
             srv = servers
-        display = list(plug) if tab == 0 else list(srv)
+        # Skills are recomputed every frame (not sorted in a pre-pass like
+        # plugins/servers above) so toggles are reflected immediately.
+        skill_entries = build_skill_entries(skills, settings)
+        if sort_mode == "name":
+            skl = sorted(skill_entries, key=lambda e: e["address"].lower())
+        elif sort_mode == "enabled":
+            skl = sorted(skill_entries,
+                         key=lambda e: (0 if e["effective_state"] == "on" else 1,
+                                        e["address"].lower()))
+        elif sort_mode == "source":
+            skl = sorted(skill_entries,
+                         key=lambda e: (SRC_ORDER.get(e["override_source"], 3),
+                                        e["address"].lower()))
+        elif sort_mode == "tokens":
+            skl = sorted(skill_entries, key=lambda e: -e["resident_tokens"])
+        else:
+            skl = skill_entries
+        display = [plug, srv, skl][tab]
 
-        rows = build_rows(display, expanded)
-        cursor = max(0, min(cursor, len(rows) - 1))
         h, w = stdscr.getmaxyx()
-        body_h = h - 5   # title + info + tab bar + footer + spacer
+        # Skills tab reserves as many bottom rows as its legend needs to
+        # soft-wrap at the live width; other tabs keep the original single
+        # blank spacer row.
+        legend_lines = wrap_legend(LEGEND_ITEMS, max(10, w - 2)) if tab == 2 else []
+        reserved_bottom = max(1, len(legend_lines))
+        detail_wrap_width = max(20, w - 14)
+        rows = build_rows(display, expanded, detail_wrap_width=detail_wrap_width)
+        cursor = max(0, min(cursor, len(rows) - 1))
+        body_h = max(1, h - 4 - reserved_bottom)   # title + info + tab bar + footer
         if cursor < top:
             top = cursor
         if cursor >= top + body_h:
@@ -490,14 +845,19 @@ def run(stdscr, plugins, servers, settings):
         enabled_tok = sum(p["est_tokens"] for p in plugins
                           if settings.effective(p["key"], p["installed"])[0])
         on_count, off_count = settings.counts(plugins)
+        skill_summary = skill_tab_summary(skill_entries)
         scope = "GLOBAL defaults" if settings.global_mode else settings.repo_root
-        stdscr.erase()
+        stdscr.clear()
         stdscr.addnstr(0, 0, f" claude-optins — {scope}", w - 1, curses.A_BOLD)
         info_segs = [
             (" ", True), (str(len(plugins)), False), (" plugins (", True),
             (str(on_count), False), (" on/", True), (str(off_count), False),
             (" off)  ", True),
-            (str(len(servers)), False), (" mcp · enabled plugin cost ≈", True),
+            (str(len(servers)), False), (" mcp · ", True),
+            (str(skill_summary["total"]), False), (" skills (", True),
+            (str(skill_summary["on"]), False), (" on, ~", True),
+            (f"{skill_summary['tokens']}", False), (" tok)  ", True),
+            ("enabled plugin cost ≈", True),
             (f"{enabled_tok} tok", False),
             (" · sort: ", True), (sort_mode, False),
             (" · writes ", True),
@@ -629,12 +989,103 @@ def run(stdscr, plugins, servers, settings):
                 else:
                     name_width = max(1, w - 12)
                     stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+            elif kind == "skill":
+                sk = display[pi]
+                state = sk["effective_state"]
+                locked = sk["source"] == "plugin" or sk["author_locked"]
+                if locked:
+                    mark, color = "🔒", YELLOW
+                else:
+                    mark, color = {
+                        "on": ("✓", GREEN),
+                        "name-only": ("~", CYAN),
+                        "user-invocable-only": ("u", YELLOW),
+                        "off": ("✗", RED),
+                    }[state]
+                src = sk["override_source"]
+                src_tag = {"local": "local   ", "project": "project ",
+                           "user": "user    "}.get(src, "default ")
+                arrow = "▾" if sk["key"] in expanded else "▸"
+                name_str = f"{arrow} {sk['address']}"
+                origin_tag = "plugin" if sk["source"] == "plugin" else "author"
+                warn_str = "!" if sk["inert_override"] else " "
+                collision_n = len(sk["collision_paths"])
+                collision_str = f"x{collision_n}" if collision_n > 1 else "  "
+                info_segs = [
+                    ("[ ", True), (origin_tag, False), (" ", True),
+                    (warn_str, False), (" ", True),
+                    (collision_str, False), (" ~", True),
+                    (f"{sk['resident_tokens']:>3}", False), (" tok ]", True),
+                ]
+                info_str = "".join(seg for seg, _ in info_segs)
+                name_color = (DIM_WHITE | curses.A_DIM if sk["source"] == "plugin"
+                              else color)
+                # 🔒 is double-width, but ncursesw advances the column
+                # correctly on its own — verified empirically (a plain
+                # awk-based byte offset check falsely flagged a 1-column
+                # drift; re-measuring with Unicode-aware indexing showed
+                # perfect alignment with plain fixed columns, same as
+                # the plugin/mcp branches below).
+                stdscr.addnstr(y, 0, " ", 1, attr)
+                stdscr.addnstr(y, 1, mark, 1, color | attr | curses.A_BOLD)
+                editable = "user" if settings.global_mode else "local"
+                stdscr.addnstr(y, 2, f" {src_tag}", 9,
+                               (YELLOW if src == editable else curses.A_DIM) | attr)
+                info_col = w - len(info_str) - 1
+                if info_col > 11:
+                    name_width = max(1, info_col - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    ix = info_col
+                    for seg, is_label in info_segs:
+                        if ix >= w - 1:
+                            break
+                        n = min(len(seg), w - 1 - ix)
+                        stdscr.addnstr(y, ix, seg, n,
+                                       (curses.A_DIM if is_label else 0) | attr)
+                        ix += len(seg)
+                else:
+                    name_width = max(1, w - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+            elif kind == "skill-lock-reason":
+                # Flowing prose, already soft-wrapped by build_rows — a light
+                # "· " prefix, not the label:value tag padding used below.
+                stdscr.addnstr(y, 11, f"· {text}", w - 12,
+                               attr | curses.A_DIM)
             else:
-                tag = {"skill": "skill", "agent": "agent", "other": "other",
-                       "empty": "", "mcp-detail": "·"}[kind]
-                color = CYAN if kind == "agent" else YELLOW if kind == "other" else 0
+                tag = {"plugin-skill": "skill", "plugin-agent": "agent",
+                       "plugin-other": "other", "empty": "",
+                       "mcp-detail": "·", "skill-detail": "·"}[kind]
+                color = (CYAN if kind == "plugin-agent" else
+                         YELLOW if kind == "plugin-other" else 0)
                 stdscr.addnstr(y, 11, f"· {tag:<5} {text}", w - 12,
                                color | attr | curses.A_DIM)
+
+        if legend_lines and not confirming:
+            # Solid blue background bar, not gray dim-on-default, so it
+            # reads as its own strip against both the body above and the
+            # reverse-video footer below. Mark glyphs use their own color
+            # (on that background) so the legend teaches color and shape
+            # together; plain labels use the background's own pair (still
+            # readable, no extra dimming needed against a filled color).
+            legend_attr = {
+                "green": LEGEND_GREEN | curses.A_BOLD,
+                "cyan": LEGEND_CYAN | curses.A_BOLD,
+                "yellow": LEGEND_YELLOW | curses.A_BOLD,
+                "red": LEGEND_RED | curses.A_BOLD,
+                "dim": LEGEND_BG,
+                "plain": LEGEND_BG | curses.A_BOLD,
+            }
+            legend_top = h - 1 - len(legend_lines)
+            for li, line in enumerate(legend_lines):
+                y = legend_top + li
+                stdscr.addnstr(y, 0, " " * (w - 1), w - 1, LEGEND_BG)
+                x = 0
+                for seg, kind in line:
+                    if x >= w - 1:
+                        break
+                    n = min(len(seg), w - 1 - x)
+                    stdscr.addnstr(y, x, seg, n, legend_attr[kind])
+                    x += len(seg)
 
         if confirming:
             p_conf = plugins[next(i for i, p in enumerate(plugins)
@@ -656,6 +1107,10 @@ def run(stdscr, plugins, servers, settings):
             ]
             if tab == 0:   # delete is plugin-only
                 footer_segs += [("D", True), (":delete  ", False)]
+            if tab == 2:   # explicit skill states are Skills-tab-only
+                footer_segs += [("O", True), (":on  ", False),
+                                ("U", True), (":user-only  ", False),
+                                ("C", True), (":clear  ", False)]
             footer_segs += [("q", True), (":quit ", False)]
         # Fill the row with reversed background first, then render segments on top.
         stdscr.addnstr(h - 1, 0, " " * (w - 1), w - 1, curses.A_REVERSE)
@@ -717,6 +1172,21 @@ def run(stdscr, plugins, servers, settings):
             elif entry["kind"] == "mcp":
                 settings.cycle_mcp(entry["name"])
                 notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+            elif entry["kind"] == "skill" and entry["source"] != "plugin":
+                settings.cycle_skill_visible(entry["address"])
+                notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+        elif ch == ord("O") and entry and entry["kind"] == "skill" \
+                and entry["source"] != "plugin":
+            settings.set_skill(entry["address"], "on")
+            notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+        elif ch == ord("U") and entry and entry["kind"] == "skill" \
+                and entry["source"] != "plugin":
+            settings.set_skill(entry["address"], "user-invocable-only")
+            notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+        elif ch == ord("C") and entry and entry["kind"] == "skill" \
+                and entry["source"] != "plugin":
+            settings.clear_skill(entry["address"])
+            notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
         elif ch in (ord("l"), curses.KEY_RIGHT) and key:
             expanded.add(key)
         elif ch in (ord("h"), curses.KEY_LEFT) and key:
@@ -724,7 +1194,7 @@ def run(stdscr, plugins, servers, settings):
                 expanded.discard(key)
                 # jump cursor back to the entry's own row
                 cursor = next(i for i, r in enumerate(build_rows(display, expanded))
-                              if r[0] in ("plugin", "mcp") and r[1] == pi)
+                              if r[0] in ("plugin", "mcp", "skill") and r[1] == pi)
         elif ch == ord("a"):
             expanded = set() if expanded else {e["key"] for e in display}
         elif ch == ord("s"):
@@ -739,8 +1209,8 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(
         prog="claude-optins",
-        description="Manage Claude Code plugin and MCP-server opt-ins per "
-                    "repo (default) or user-wide defaults (--global).")
+        description="Manage Claude Code plugin, MCP-server, and skill "
+                    "opt-ins per repo (default) or user-wide defaults (--global).")
     ap.add_argument("-g", "--global", "--user", dest="global_mode",
                     action="store_true",
                     help="edit user-level defaults in ~/.claude/settings.json "
@@ -755,9 +1225,12 @@ def main():
         | set(settings.user_mcp)
     servers = add_orphans(servers, referenced)
 
-    if not plugins and not servers:
-        sys.exit(f"No plugins found in {CACHE_DIR} and no MCP servers found")
-    curses.wrapper(run, plugins, servers, settings)
+    skills = discover_skills(os.getcwd(), settings.repo_root,
+                             os.path.expanduser("~"), settings)
+
+    if not plugins and not servers and not skills:
+        sys.exit("No plugins, MCP servers, or skills found")
+    curses.wrapper(run, plugins, servers, skills, settings)
     print(f"Opt-ins saved to {settings.write_path}")
     print("Run /reload-plugins in a live session (or start a new one) to apply.")
 

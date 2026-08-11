@@ -1,15 +1,16 @@
 # claude-optin
 
-A terminal UI for managing which Claude Code plugins **and MCP servers** are active, reducing the token cost of each session's initial context window.
+A terminal UI for managing which Claude Code plugins, MCP servers, **and individual skills** are active, reducing the token cost of each session's initial context window.
 
 ## Why it exists
 
-Every enabled plugin injects its skills and agent definitions into Claude's context at session start, and every active MCP server loads its tool schemas. With many of each installed, this adds up quickly. `claude-optin` lets you keep a large catalog available but disable what you don't need in a given repo — or set user-wide defaults — so Claude starts with only what's relevant.
+Every enabled plugin injects its skills and agent definitions into Claude's context at session start, every active MCP server loads its tool schemas, and every discovered skill (personal, project, or plugin-supplied) can carry its own resident cost depending on how visible it is. With many of each installed, this adds up quickly. `claude-optin` lets you keep a large catalog available but disable what you don't need in a given repo — or set user-wide defaults — so Claude starts with only what's relevant.
 
-It manages both in two tabs, switched with `Tab`:
+It manages all three in three tabs, switched with `Tab`:
 
 - **Plugins** — discovered from the plugin cache.
 - **MCP servers** — discovered from every `.mcp.json` found walking the current directory up to your home directory, plus user-scope servers in `~/.claude.json`. A server you disable stays *defined* but isn't started, so it contributes no startup context. Names listed in your settings that have no matching definition are shown flagged as **orphans** so you can clean them up.
+- **Skills** — every discovered skill: personal (`~/.claude/skills/`), project (`.claude/skills/`, including directory-scoped subfolders), and active-plugin skills. Each shows its effective visibility state and resident token cost. Plugin-backed skills are always on and read-only here — manage those from the Plugins tab instead.
 
 ## Installation
 
@@ -34,15 +35,18 @@ claude-optin --global     # manage your user-wide defaults
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Switch between the Plugins and MCP Servers tabs |
+| `Tab` | Switch between the Plugins, MCP Servers, and Skills tabs |
 | `j`/`k`, arrows | Move up/down |
-| `space`/`enter` | Cycle state: inherit → on → off |
-| `l`/right | Expand a plugin (skills/agents) or server (connection details) |
+| `space`/`enter` | Cycle state: Plugins/MCP inherit → on → off; Skills on → name-only → off (skips user-invocable-only) |
+| `l`/right | Expand a plugin (skills/agents), server (connection details), or skill (collision paths) |
 | `h`/left | Collapse |
 | `a` | Expand/collapse all |
 | `g`/`G` | Jump to top/bottom |
 | `s` | Cycle sort: default / name / enabled / source / skills+agents / tokens |
 | `D` | Delete plugin (removes cache, prompts for confirmation) — Plugins tab only |
+| `O` | Set explicit **on** — Skills tab only |
+| `U` | Set explicit **user-invocable-only** — Skills tab only |
+| `C` | Clear the override at the current write scope — Skills tab only |
 | `q` | Quit (changes are saved on every toggle) |
 
 The header shows the total estimated token cost of all currently-enabled plugins so you can see the impact of your changes. (MCP servers load their tool schemas at connect time, so their cost can't be estimated statically and is shown as `?`.)
@@ -64,6 +68,19 @@ Layers are resolved in order: **local → project → user → default** (instal
 ### MCP servers
 
 MCP servers use the same three states and the same layer resolution, but the underlying storage differs. State is stored as two name-lists in each settings file — `enabledMcpjsonServers` and `disabledMcpjsonServers` — and toggling moves a server's name between them (or removes it for *inherit*). Unlike plugins, an MCP server defaults to **off**: a `.mcp.json` server isn't loaded until it's explicitly enabled, so the safe default keeps it out of context.
+
+### Skills
+
+Skills use four states instead of three, stored under `skillOverrides` in the same settings files:
+
+| State | Meaning |
+|-------|---------|
+| **on** | Fully visible: name, description, and `when_to_use` are resident |
+| **name-only** | Only the skill's name is resident — cheaper, but Claude can't decide to invoke it from its description alone |
+| **user-invocable-only** | Nothing resident; only invocable if you ask for it by name yourself |
+| **off** | Not available at all |
+
+Resolution checks the qualified address (e.g. `apps/web:deploy`) before the plain name, across the same local → project → user → default layers as plugins and MCP servers. An **active plugin-backed skill is always effectively `on`** and any override on it is inert — plugins are the unit of control for their own skills; toggle the plugin itself instead. A skill authored with `disable-model-invocation: true` in its frontmatter is locked to **user-invocable-only** the same way — an author lock always wins over a settings override, which is shown as inert rather than effective.
 
 ### Project-level (per-repo)
 

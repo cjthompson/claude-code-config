@@ -127,6 +127,6 @@ Workspace-level git status and sync tools. Located in `packages/git-utils/`. Ins
 
 ## claude-optin
 
-A curses TUI to manage per-repo Claude Code plugin opt-ins. Lists every installed plugin (with its skills and agents), shows the effective enabled state and where it comes from (user / project / local settings), and lets you toggle a local override. Located in `packages/claude-optin/`. Install via the TUI installer or `npm run install-package claude-optin` (installs to `~/.local/bin/`), then run `claude-optin` from inside a repo (assuming `~/.local/bin` is on your `PATH`).
+A curses TUI to manage per-repo Claude Code opt-ins across three tabs: Plugins (with their skills and agents), MCP servers (discovered from `.mcp.json` files and `~/.claude.json`), and individual Skills (personal, project, and active-plugin, each with its own `on`/`name-only`/`user-invocable-only`/`off` state). Shows the effective state and where it comes from (user / project / local settings) and lets you toggle a local override. Located in `packages/claude-optin/`. Install via the TUI installer or `npm run install-package claude-optin` (installs to `~/.local/bin/`), then run `claude-optin` from inside a repo (assuming `~/.local/bin` is on your `PATH`).
 
 Toggles are written to `<repo>/.claude/settings.local.json` (gitignored, personal); with `--global`/`-g`/`--user` they edit the user-level defaults in `~/.claude/settings.json` instead.

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.0.66 - 2026-08-11
+
+### Changes
+- **claude-optin**: added a third "Skills" tab alongside Plugins and MCP Servers, backed by a new pure model (`discover_skills`, `skill_display`, `Settings` skill-override APIs) that resolves each skill's effective `on`/`name-only`/`user-invocable-only`/`off` state across local/project/user layers. Lists every discovered skill (personal, project, and active-plugin) with its source, resident token cost, and collision details.
+- **claude-optin**: `Space` cycles a skill `on` → `name-only` → `off` (skipping `user-invocable-only`); `O`/`U`/`C` set explicit on / user-invocable-only / clear the override — all Skills-tab only.
+- **claude-optin**: locked skills (plugin-backed, or author-locked via `disable-model-invocation: true`) show the same `🔒` icon Claude Code's own `/skills` command uses; expanding one explains why in place of collision paths, and the explanation soft-wraps to the live terminal width.
+- **claude-optin**: added a color-coded legend (dark navy background for real contrast) above the footer, Skills-tab only, soft-wrapping to however many lines the terminal width needs.
+- **claude-optin**: fixed two pre-existing rendering bugs surfaced by this work: a stale-glyph redraw artifact on expand/collapse transitions for double-width marks (`erase()` → `clear()`), and save/delete notification badges rendering on a plain background instead of matching the footer's reverse-video style.
+- **claude-optin**: namespaced the Plugins tab's expanded child-row kinds (`skill`/`agent`/`other` → `plugin-skill`/`plugin-agent`/`plugin-other`), fixing a pre-existing bug where pressing Space on a plugin's expanded skill sub-row toggled the parent plugin instead of doing nothing.
+
 ## v0.0.65 - 2026-08-11
 
 ### Fixes
