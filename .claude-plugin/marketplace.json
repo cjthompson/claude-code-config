@@ -5,14 +5,14 @@
     },
     "metadata": {
         "description": "Skills for task management, multi-agent orchestration, sub-agent profiles, output styles, hooks, and language-specific coding guidance.",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     "plugins": [
         {
             "name": "project-tasks",
             "source": "./plugins/project-tasks",
             "description": "Capture tasks inline with task:/fix:/todo: prefixes, store in SQLite, dispatch to subagents, and auto-generate changelogs.",
-            "version": "1.0.1",
+            "version": "1.0.2",
             "keywords": ["tasks", "changelog", "sqlite", "subagents"],
             "category": "development"
         },
@@ -20,7 +20,7 @@
             "name": "lean-agents",
             "source": "./plugins/lean-agents",
             "description": "Reduced-toolset sub-agent profiles (lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with project-tasks, which dispatches to these agents by name.",
-            "version": "1.0.1",
+            "version": "1.0.2",
             "keywords": ["subagents", "token-overhead", "context-window", "routing", "escalation"],
             "category": "development"
         },
@@ -28,7 +28,7 @@
             "name": "output-styles",
             "source": "./plugins/output-styles",
             "description": "Various output-styles",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["output", "output-styles", "terse", "concise"],
             "category": "development"
         },
@@ -36,7 +36,7 @@
             "name": "orchestration-strategy",
             "source": "./plugins/orchestration-strategy",
             "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["orchestration", "parallel", "agents", "worktree"],
             "category": "development"
         },
@@ -44,7 +44,7 @@
             "name": "agent-team-development",
             "source": "./plugins/agent-team-development",
             "description": "End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agent communication and worktree isolation.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
             "category": "development"
         },
@@ -52,7 +52,7 @@
             "name": "rust-coding",
             "source": "./plugins/rust-coding",
             "description": "Guide Claude in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["rust", "coding", "idioms", "traits"],
             "category": "development"
         },
@@ -60,7 +60,7 @@
             "name": "textual",
             "source": "./plugins/textual",
             "description": "Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["textual", "tui", "python", "css", "widgets"],
             "category": "development"
         },
@@ -68,7 +68,7 @@
             "name": "command-watchdog",
             "source": "./plugins/command-watchdog",
             "description": "Idle-hang watchdog for Bash commands matching configurable patterns (rspec, fresheyes.sh) — kills them when output and CPU both go flat, with rtk fallback for everything else.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["hooks", "bash", "watchdog", "idle-detection"],
             "category": "development"
         },
@@ -76,7 +76,7 @@
             "name": "python-scripting",
             "source": "./plugins/python-scripting",
             "description": "Low-context guidance for safe one-off Python helpers, typed scripts, lightweight quality checks, and zero-dependency macOS utilities.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
             "category": "development"
         },
@@ -84,7 +84,7 @@
             "name": "python-development",
             "source": "./plugins/python-development",
             "description": "Deep Python production guidance for testing, project tooling, concurrency, and type-system work.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["python", "pytest", "uv", "typing", "asyncio", "packaging"],
             "category": "development"
         },
@@ -92,7 +92,7 @@
             "name": "typescript-development",
             "source": "./plugins/typescript-development",
             "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
             "category": "development"
         }

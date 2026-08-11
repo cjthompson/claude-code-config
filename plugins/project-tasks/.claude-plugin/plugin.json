@@ -6,5 +6,5 @@
     },
     "keywords": ["tasks", "changelog", "sqlite", "subagents"],
     "license": "MIT",
-    "version": "1.0.1"
+    "version": "1.0.2"
 }
