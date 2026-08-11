@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p packages/installer/tsconfig.json"
   },
   "devDependencies": {
-    "@types/node": "^22",
+    "@types/node": "^24.13.3",
     "typescript": "^7.0.2"
   }
 }
