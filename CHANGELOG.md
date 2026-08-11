@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.63 - 2026-08-11
+
+### Changes
+- **statusline**: reworked terminal-width handling end to end. Removed the stale `RIGHT_RESERVE` right-margin reserve (Claude Code no longer renders anything in a right-aligned column) and its line-2 counterpart, a fixed `barWidth` threshold that shrank quota bars at `termWidth >= 120` regardless of whether the line actually needed the room — both were non-monotonic cliffs where widening the terminal by one column could drop more content. `fitSegments` now has a `priority` field (higher = kept longer) with a `PROTECTED_PRIORITY` floor instead of a `core` flag, and never drops model/context/branch/pwd down to nothing. Those four protected segments now shrink through their own tiers instead of vanishing or staying static: model (full name → first letter, e.g. `Sonnet 4.6` → `S`), context usage (four tiers: full → drop token count → drop bar → icon only), branch (three length tiers, replacing a blunt two-value cap), and the working directory's last path segment (new ellipsis truncation, shrinking only after everything above it is exhausted). Added `tests/packages/statusline/statusline-resize-sweep.mts`, a manual dev tool for rendering every width across a range to eyeball this behavior, and moved all statusline test source into `tests/packages/statusline/` so it can't ship as part of the installed package.
+
 ## v0.0.62 - 2026-08-09
 
 ### Changes
