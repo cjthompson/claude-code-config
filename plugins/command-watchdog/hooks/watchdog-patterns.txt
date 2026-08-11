@@ -20,4 +20,4 @@
 
 \A(?:\./)?(?:bin/rspec|bundle\s+exec\s+rspec|rspec)\b   90
 
-fresheyes\.sh\b   300
+\.sh\b   300

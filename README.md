@@ -25,7 +25,7 @@ The Python and TypeScript development plugins also include Codex manifests and a
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
 | **textual** | Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes |
-| **command-watchdog** | Idle-hang detection for Bash commands (rspec, fresheyes.sh) — kills silently-stuck runs after a configurable timeout |
+| **command-watchdog** | Idle-hang detection for Bash commands (rspec, any `.sh` script) — kills silently-stuck runs after a configurable timeout |
 | **python-scripting** | One-off Python helpers, practical typing, standalone-file quality checks, and standard-library macOS automation |
 | **python-development** | Deep Python standards, testing, repository tooling and quality checks, concurrency, the full typing specification, and focused type tightening |
 | **typescript-development** | Deep TypeScript standards, testing, project tooling, modules and packaging, focused official references, and low-churn type tightening |
@@ -93,7 +93,7 @@ Custom Claude Code hooks, located in `plugins/<name>/hooks/`. Like skills, each 
 
 ### command-watchdog
 
-A `PreToolUse` hook on the `Bash` tool. Any command matching a regex in `hooks/watchdog-patterns.txt` (ships with `rspec` and `fresheyes.sh` by default) runs under an idle-hang watchdog instead of directly: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so.
+A `PreToolUse` hook on the `Bash` tool. Any command matching a regex in `hooks/watchdog-patterns.txt` (ships with `rspec` and any `.sh` script by default) runs under an idle-hang watchdog instead of directly: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so.
 
 Commands that don't match any pattern are delegated to `rtk hook claude` if `rtk` is installed, otherwise passed through unmodified.
 
