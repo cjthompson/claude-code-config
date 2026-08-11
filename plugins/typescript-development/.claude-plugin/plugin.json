@@ -1,0 +1,7 @@
+{
+    "name": "typescript-development",
+    "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+    "license": "MIT"
+}

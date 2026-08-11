@@ -87,6 +87,14 @@
             "version": "1.0.0",
             "keywords": ["python", "pytest", "uv", "typing", "asyncio", "packaging"],
             "category": "development"
+        },
+        {
+            "name": "typescript-development",
+            "source": "./plugins/typescript-development",
+            "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
+            "version": "1.0.0",
+            "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+            "category": "development"
         }
     ]
 }

@@ -1,0 +1,22 @@
+{
+    "name": "typescript-development",
+    "version": "1.0.0",
+    "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "TypeScript Development",
+        "shortDescription": "Deep TypeScript project and type-system workflows.",
+        "longDescription": "Production TypeScript standards, testing strategy, repository-first tooling, module and package compatibility, focused official references, and low-churn type tightening.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code", "Testing", "Type System", "Tooling", "Packaging"],
+        "defaultPrompt": [
+            "Review this TypeScript package for production quality",
+            "Diagnose this TypeScript module and package configuration",
+            "Tighten types in the changed TypeScript files"
+        ]
+    }
+}

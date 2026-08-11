@@ -12,7 +12,7 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
-The Python plugins also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install either Python plugin by name. Cursor manifests are included alongside them.
+The Python and TypeScript development plugins also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install a listed language plugin by name. Cursor manifests are included alongside them.
 
 ### Available plugins
 
@@ -28,6 +28,7 @@ The Python plugins also include Codex manifests and are listed in the repo-local
 | **command-watchdog** | Idle-hang detection for Bash commands (rspec, fresheyes.sh) — kills silently-stuck runs after a configurable timeout |
 | **python-scripting** | One-off Python helpers, practical typing, standalone-file quality checks, and standard-library macOS automation |
 | **python-development** | Deep Python standards, testing, repository tooling and quality checks, concurrency, the full typing specification, and focused type tightening |
+| **typescript-development** | Deep TypeScript standards, testing, project tooling, modules and packaging, focused official references, and low-churn type tightening |
 
 ## Installer
 
@@ -81,6 +82,10 @@ Concise guidance for one-off helpers and standalone Python scripts. It loads bef
 ### python-development
 
 Deeper project-level guidance for production Python design, pytest strategy, existing and new repository toolchains, repository-scoped formatting, linting and type checking, asyncio and concurrency, and systematic annotation tightening. It vendors a commit-pinned copy of the complete Python typing specification and Honnibal's `tighten-types` workflow; run `node plugins/python-development/scripts/sync-typing-references.mjs --check` to verify the offline snapshot.
+
+### typescript-development
+
+Framework-neutral, project-level guidance for production TypeScript design, runtime-boundary validation, runtime and compile-time testing, repository-first tool configuration, ESM/CJS and package compatibility, difficult type-system questions, and focused annotation tightening. It vendors a commit-pinned, curated subset of Microsoft's official Handbook, modules, declaration-file, and TSConfig documentation; run `node plugins/typescript-development/scripts/sync-typescript-references.mjs --check` to verify the offline snapshot.
 
 ## Hooks
 

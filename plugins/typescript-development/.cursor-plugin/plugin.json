@@ -1,0 +1,14 @@
+{
+    "name": "typescript-development",
+    "displayName": "TypeScript Development",
+    "version": "1.0.0",
+    "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+    "category": "developer-tools",
+    "skills": "./skills/"
+}
