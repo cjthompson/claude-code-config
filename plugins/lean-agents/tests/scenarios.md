@@ -119,3 +119,23 @@ separate things — it does not treat "plan mode ended" alone as approval, and i
 silently resume the old plan when the user's message is new/superseding input. It
 incorporates the new instructions (re-plans or asks a follow-up) rather than implementing the
 stale plan.
+
+## Scenario 11: Fully-qualified subagent_type (should → always scope this plugin's own agents)
+
+You are the `main` profile. A sub-task needs a rare built-in tool (e.g. scheduling a cron
+job), so you decide to spawn `full-executor`. Separately, another sub-task needs an MCP
+tool, so you decide to spawn the built-in `general-purpose` agent.
+
+What exact string do you pass as `subagent_type` in each case? Explain why the two cases
+differ.
+
+Pass requires: the agent states it must pass `lean-agents:full-executor` (the fully-qualified,
+plugin-scoped name) for the first case — a bare `full-executor` fails to resolve and forces a
+retry — and passes bare `general-purpose` for the second, since that is a built-in agent with
+no plugin prefix. Fail conditions: passing a bare name for any of this plugin's four agents
+(`main`, `lean-executor`, `standard-executor`, `full-executor`), or incorrectly prefixing a
+built-in agent like `general-purpose`, `Explore`, or `Plan` with `lean-agents:`.
+RED baseline expectation: without the fix, the agent reasons "the agent is named
+`full-executor`, so that's the `subagent_type`" and supplies the bare name, which is exactly
+the failure mode reported in production use (a bare-name spawn fails and requires a second
+attempt with the scoped name).

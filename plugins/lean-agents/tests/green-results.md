@@ -72,6 +72,29 @@ spawns for search. That behavior never appeared in 15 baseline answers, includin
 contradictory text. The honest framing is a consistency fix plus a search-hygiene improvement —
 not a measured token saving.
 
+## Scenario 11 (fully-qualified subagent_type — GREEN, 2026-08-11)
+
+Date: 2026-08-11 · Subagent model: haiku · Tools: none (reasoning only)
+
+Rules under test: the updated `CLAUDE.md` scoping rule (`lean-agents:<name>` for this
+plugin's own four agents; leave `general-purpose`/`Explore`/`Plan` unscoped).
+
+- **Case 1 (rare built-in tool → escalate to full-executor):** answered
+  `subagent_type: "lean-agents:full-executor"` — correct.
+- **Case 2 (MCP tool → escalate to general-purpose):** answered
+  `subagent_type: "general-purpose"` — correct, left unscoped.
+- **Reasoning given:** cited the rule directly — "the rule explicitly states 'leave built-in
+  agents... unscoped'... `full-executor` is a plugin-managed agent that must be addressed by
+  scope; `general-purpose` is a built-in agent that must not be scoped."
+
+RED baseline (documented, not re-run): the reported production failure was the model
+supplying the bare name `full-executor` and needing a retry once the harness rejected it —
+i.e. reasoning "the agent is named `full-executor`, so that's the `subagent_type`." The GREEN
+answer above does not reproduce that failure and correctly distinguishes the plugin-scoped
+case from the built-in case.
+
+**Verdict: PASS.**
+
 ## Scenarios 9 & 10 re-run (ExitPlanMode conflict fix — GREEN, 2026-08-11)
 
 Date: 2026-08-11 · Subagent model: haiku · Tools: none (reasoning only)
