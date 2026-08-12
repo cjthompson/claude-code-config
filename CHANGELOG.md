@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.0.67 - 2026-08-12
+
+### Changes
+- **mise**: `mise.toml` now pins `node = "lts"` instead of a hardcoded major, so the dev environment auto-tracks Node's current LTS release (e.g. the Oct 2026 Node 26 LTS transition) without a manual bump.
+- **statusline**: kept `statusline.sh`'s `node@24` pin explicit rather than switching it to `@lts` too — it runs on every render, and resolving `lts` needs a periodic network check that would reintroduce the offline-reliability bug fixed by pinning an explicit major. Documented the divergence from `mise.toml` in both the script and its README; the pin needs a manual bump at the next LTS rollover.
+- **package.json**: added `"engines": { "node": ">=22.7.0" }` to the root package and `packages/installer` — the documented functional floor for `--experimental-strip-types`, not the moving LTS target.
+
 ## v0.0.66 - 2026-08-11
 
 ### Changes

@@ -100,9 +100,14 @@ Enabled by default (`1`).
 
 - **macOS** (uses `security` CLI for Keychain access and `stat -f %m` for file timestamps)
 - **Node.js >= 22.7** (`--experimental-strip-types` with automatic ESM detection).
-  `statusline.sh` pins `node@24` via `mise x` when `mise` is on `PATH`, so
-  the render doesn't inherit whatever node version the *calling project*
-  happens to pin (falls back to bare `node` if `mise` isn't available).
+  `statusline.sh` pins an explicit `node@24` via `mise x` when `mise` is on
+  `PATH`, so the render doesn't inherit whatever node version the
+  *calling project* happens to pin (falls back to bare `node` if `mise`
+  isn't available). This is a deliberate exception to the repo's own
+  `mise.toml`, which tracks `node = "lts"` — the statusline runs on every
+  render, so it avoids `node@lts`'s periodic network-refresh check and
+  instead pins a fixed major that must be bumped by hand at each LTS
+  transition (see the comment above `NODE_CMD` in `statusline.sh`).
 - **curl** (API calls to fetch quota)
 - **git** (optional, for branch display)
 - A terminal with **256-color support**
