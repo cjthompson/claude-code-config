@@ -1,6 +1,9 @@
 {
   "name": "@cjthompson/claude-code-config",
-  "version": "0.0.69",
+  "version": "0.0.70",
+  "engines": {
+    "node": ">=22.7.0"
+  },
   "workspaces": [
     "packages/installer"
   ],

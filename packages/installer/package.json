@@ -2,6 +2,9 @@
     "name": "@cjthompson/claude-code-config-installer",
     "private": true,
     "type": "module",
+    "engines": {
+        "node": ">=22.7.0"
+    },
     "scripts": {
         "start": "node --experimental-strip-types src/index.ts",
         "reinstall": "node --experimental-strip-types src/reinstall.ts",

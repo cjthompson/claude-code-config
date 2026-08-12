@@ -36,6 +36,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `mise x node@<major>` reuses whatever patch of that major is already
 # installed and only hits the network if none is, so this stays offline as
 # long as node@24 has ever been installed on this machine.
+#
+# Intentionally NOT `node@lts`: resolving "lts" requires mise to know which
+# major is current LTS, refreshed from the network every ~1h for `exec`
+# (mise's fetch_remote_versions_cache). This script runs on every render of
+# every session, so that periodic refresh would reintroduce the exact bug
+# this pin fixed. mise.toml tracks `lts` for normal dev use; bump the "24"
+# below by hand when Node LTS rolls over (e.g. Node 26 in Oct 2026).
 if command -v mise >/dev/null 2>&1; then
   NODE_CMD=(mise x node@24 -- node)
 else

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.70 - 2026-08-26
+
+### Changes
+- **repo**: track Node 26 for development through `mise.toml` and declare Node `>=22.7.0` as the supported engine floor for the root package and installer.
+- **statusline**: retain the explicit `node@24` runtime pin and document why it intentionally does not follow the development tool's moving Node version.
+
 ## v0.0.69 - 2026-08-26
 
 ### Tasks
