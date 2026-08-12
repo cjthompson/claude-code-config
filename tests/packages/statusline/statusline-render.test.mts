@@ -27,6 +27,7 @@ import {
   buildBranchTiers,
   buildModelTiers,
   buildPathTiers,
+  buildTimeTiers,
   PROTECTED_PRIORITY,
 } from '../../../packages/statusline/statusline-render.mts';
 
@@ -506,6 +507,46 @@ describe('buildModelTiers', () => {
 
   it('strips "Claude " and "(...context)" decoration before taking the letter', () => {
     strictEqual(stripAnsi(buildModelTiers('Claude Sonnet 4.6 (1M context)')[1]).trim().slice(-1), 'S');
+  });
+});
+
+describe('buildTimeTiers', () => {
+  it('tier 0 is M/D h:mm AM/PM (date + natural-hour 12h time)', () => {
+    const d = new Date(2026, 7, 12, 15, 5); // Aug 12 2026, 3:05 PM (local)
+    const tier0 = stripAnsi(buildTimeTiers(d)[0]);
+    match(tier0.trim(), /^8\/12 3:05 PM$/);
+  });
+
+  it('tier 1 drops the date, keeping natural-hour 12h time', () => {
+    const d = new Date(2026, 7, 12, 15, 5);
+    const tier1 = stripAnsi(buildTimeTiers(d)[1]);
+    match(tier1.trim(), /^3:05 PM$/);
+  });
+
+  it('tier 2 is 24-hour zero-padded time with no AM/PM', () => {
+    const d = new Date(2026, 7, 12, 15, 5);
+    const tier2 = stripAnsi(buildTimeTiers(d)[2]);
+    match(tier2.trim(), /^15:05$/);
+  });
+
+  it('tier 3 is empty', () => {
+    const d = new Date(2026, 7, 12, 15, 5);
+    strictEqual(buildTimeTiers(d)[3], '');
+  });
+
+  it('zero-pads minutes but not month/day/12h-hour', () => {
+    const d = new Date(2026, 0, 1, 9, 3); // Jan 1, 9:03 AM
+    const tier0 = stripAnsi(buildTimeTiers(d)[0]);
+    match(tier0.trim(), /^1\/1 9:03 AM$/);
+  });
+
+  it('handles the 12 AM / 12 PM boundary correctly', () => {
+    const midnight = stripAnsi(buildTimeTiers(new Date(2026, 0, 1, 0, 0))[1]);
+    match(midnight.trim(), /^12:00 AM$/);
+    const noon = stripAnsi(buildTimeTiers(new Date(2026, 0, 1, 12, 0))[1]);
+    match(noon.trim(), /^12:00 PM$/);
+    const midnight24 = stripAnsi(buildTimeTiers(new Date(2026, 0, 1, 0, 0))[2]);
+    match(midnight24.trim(), /^00:00$/);
   });
 });
 
@@ -1019,16 +1060,26 @@ describe('end-to-end rendering', () => {
       cwd: '/tmp',
     });
 
-    const wide = stripAnsi(run('200', session).trimEnd().split('\n')[0]);
-    ok(wide.includes('90K/200K'), `expected full context tier at width 200, got: ${wide}`);
+    // Isolate from the (unconditional, session-independent) time segment so
+    // its width doesn't shift the context-tier thresholds this test asserts.
+    const configData = JSON.stringify({ sections: ['model', 'context_window', 'pwd'] });
+    const configPath = `${rendererDir}/statusline-config.json`;
+    writeFileSync(configPath, configData);
 
-    const narrow = stripAnsi(run('25', session).trimEnd().split('\n')[0]);
-    ok(!narrow.includes('90K/200K'), `expected shrunk context tier at width 25, got: ${narrow}`);
-    ok(narrow.includes('45'), 'percentage should still be present at width 25 (bar dropped, not yet the icon-only tier)');
+    try {
+      const wide = stripAnsi(run('200', session).trimEnd().split('\n')[0]);
+      ok(wide.includes('90K/200K'), `expected full context tier at width 200, got: ${wide}`);
 
-    // Narrower still: the fourth tier drops the percentage too, leaving only the icon.
-    const narrowest = stripAnsi(run('15', session).trimEnd().split('\n')[0]);
-    ok(!narrowest.includes('45'), `expected icon-only context tier at width 15, got: ${narrowest}`);
+      const narrow = stripAnsi(run('25', session).trimEnd().split('\n')[0]);
+      ok(!narrow.includes('90K/200K'), `expected shrunk context tier at width 25, got: ${narrow}`);
+      ok(narrow.includes('45'), 'percentage should still be present at width 25 (bar dropped, not yet the icon-only tier)');
+
+      // Narrower still: the fourth tier drops the percentage too, leaving only the icon.
+      const narrowest = stripAnsi(run('15', session).trimEnd().split('\n')[0]);
+      ok(!narrowest.includes('45'), `expected icon-only context tier at width 15, got: ${narrowest}`);
+    } finally {
+      unlinkSync(configPath);
+    }
   });
 
   it('shrinks branch through its length ladder only after context is fully shrunk', () => {
@@ -1044,17 +1095,27 @@ describe('end-to-end rendering', () => {
       cwd: '/tmp',
     });
 
-    const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
-    ok(wide.includes('a-genuinely-long-branch'), `expected untruncated branch at width 200, got: ${wide}`);
+    // Isolate from the (unconditional, session-independent) time segment so
+    // its width doesn't shift the width thresholds this test asserts.
+    const configData = JSON.stringify({ sections: ['model', 'context_window', 'branch', 'pwd'] });
+    const configPath = `${rendererDir}/statusline-config.json`;
+    writeFileSync(configPath, configData);
 
-    // Narrow enough that context has already dropped to its shortest tier
-    // (no '90K/200K', no bar) before branch needs to shrink at all.
-    const mid = stripAnsi(run('45', session, longBranch).trimEnd().split('\n')[0]);
-    ok(!mid.includes('90K/200K'), `expected context already shrunk at width 45, got: ${mid}`);
+    try {
+      const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
+      ok(wide.includes('a-genuinely-long-branch'), `expected untruncated branch at width 200, got: ${wide}`);
 
-    // Narrower still: branch must now be shrinking too.
-    const narrow = stripAnsi(run('30', session, longBranch).trimEnd().split('\n')[0]);
-    ok(narrow.includes('…'), `expected truncated branch at width 30, got: ${narrow}`);
+      // Narrow enough that context has already dropped to its shortest tier
+      // (no '90K/200K', no bar) before branch needs to shrink at all.
+      const mid = stripAnsi(run('45', session, longBranch).trimEnd().split('\n')[0]);
+      ok(!mid.includes('90K/200K'), `expected context already shrunk at width 45, got: ${mid}`);
+
+      // Narrower still: branch must now be shrinking too.
+      const narrow = stripAnsi(run('30', session, longBranch).trimEnd().split('\n')[0]);
+      ok(narrow.includes('…'), `expected truncated branch at width 30, got: ${narrow}`);
+    } finally {
+      unlinkSync(configPath);
+    }
   });
 
   it('shrinks path last, only after model, context, and branch are all fully shrunk', () => {
@@ -1070,18 +1131,65 @@ describe('end-to-end rendering', () => {
       cwd: '/Users/someone/dev/a-genuinely-long-final-directory-name',
     });
 
-    const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
-    ok(wide.includes('a-genuinely-long-final-directory-name'), `expected untruncated path at width 200, got: ${wide}`);
+    // Isolate from the (unconditional, session-independent) time segment so
+    // its width doesn't shift the width thresholds this test asserts.
+    const configData = JSON.stringify({ sections: ['model', 'context_window', 'branch', 'pwd'] });
+    const configPath = `${rendererDir}/statusline-config.json`;
+    writeFileSync(configPath, configData);
 
-    // Narrow enough that model and context have both already given up
-    // everything they can (branch here is short and never needs to shrink),
-    // before path needs to shrink at all.
-    const mid = stripAnsi(run('72', session, longBranch).trimEnd().split('\n')[0]);
-    ok(!mid.includes('45'), `expected context already at its icon-only tier at width 72, got: ${mid}`);
-    ok(mid.includes('a-genuinely-long-final-directory-name'), `expected path still untruncated at width 72, got: ${mid}`);
+    try {
+      const wide = stripAnsi(run('200', session, longBranch).trimEnd().split('\n')[0]);
+      ok(wide.includes('a-genuinely-long-final-directory-name'), `expected untruncated path at width 200, got: ${wide}`);
 
-    // Narrower still: path must now be shrinking too.
-    const narrow = stripAnsi(run('65', session, longBranch).trimEnd().split('\n')[0]);
-    ok(narrow.includes('…'), `expected truncated path at width 65, got: ${narrow}`);
+      // Narrow enough that model and context have both already given up
+      // everything they can (branch here is short and never needs to shrink),
+      // before path needs to shrink at all.
+      const mid = stripAnsi(run('72', session, longBranch).trimEnd().split('\n')[0]);
+      ok(!mid.includes('45'), `expected context already at its icon-only tier at width 72, got: ${mid}`);
+      ok(mid.includes('a-genuinely-long-final-directory-name'), `expected path still untruncated at width 72, got: ${mid}`);
+
+      // Narrower still: path must now be shrinking too.
+      const narrow = stripAnsi(run('65', session, longBranch).trimEnd().split('\n')[0]);
+      ok(narrow.includes('…'), `expected truncated path at width 65, got: ${narrow}`);
+    } finally {
+      unlinkSync(configPath);
+    }
+  });
+
+  it('shrinks time through its tiers and drops it entirely before path starts truncating', () => {
+    // No branch in this session, so the shrink cascade exercised is
+    // model -> context -> time -> path (branch is a no-op when absent).
+    const session = JSON.stringify({
+      model: { display_name: 'TestModel' },
+      context_window: {
+        context_window_size: 200000,
+        input_tokens: 90000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      cwd: '/Users/someone/dev/a-genuinely-long-final-directory-name',
+    });
+
+    const dateTimeAmPm = /\d{1,2}\/\d{1,2} \d{1,2}:\d{2} (AM|PM)/;
+    const timeAmPm = /(?<!\d)\d{1,2}:\d{2} (AM|PM)/;
+    const time24h = /(?<!\d)\d{2}:\d{2}(?!\s*(AM|PM))/;
+
+    const wide = stripAnsi(run('200', session).trimEnd().split('\n')[0]);
+    ok(dateTimeAmPm.test(wide), `expected full "M/D h:mm AM/PM" time tier at width 200, got: ${wide}`);
+
+    const shrink = stripAnsi(run('75', session).trimEnd().split('\n')[0]);
+    ok(!dateTimeAmPm.test(shrink), `expected date dropped from time at width 75, got: ${shrink}`);
+    ok(timeAmPm.test(shrink), `expected "h:mm AM/PM" time tier at width 75, got: ${shrink}`);
+
+    const h24 = stripAnsi(run('70', session).trimEnd().split('\n')[0]);
+    ok(!timeAmPm.test(h24), `expected AM/PM dropped from time at width 70, got: ${h24}`);
+    ok(time24h.test(h24), `expected 24-hour "HH:mm" time tier at width 70, got: ${h24}`);
+
+    // Narrow enough that time has been dropped entirely, but path is still
+    // untruncated -- confirms time gives up its space before path does.
+    const gone = stripAnsi(run('65', session).trimEnd().split('\n')[0]);
+    ok(!timeAmPm.test(gone) && !time24h.test(gone), `expected time fully dropped at width 65, got: ${gone}`);
+    ok(gone.includes('a-genuinely-long-final-directory-name'), `expected path still untruncated at width 65, got: ${gone}`);
+    ok(!gone.includes('▶▶'), `expected no dangling empty-segment artifact at width 65, got: ${gone}`);
   });
 });

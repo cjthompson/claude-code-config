@@ -23,6 +23,7 @@ const combo = (fgN: number, bgN: number, bold = false) =>
 const BG_GREEN = bg(22);
 const BG_DARK  = bg(233);
 const BG_BLUE  = bg(24);
+const BG_TIME  = bg(53);   // dark purple — time segment
 
 // Named foregrounds
 const WHITE      = fg(255);
@@ -35,10 +36,12 @@ const RED_FG     = fg(203);
 const ORANGE_FG  = fg(215);
 const BLUE_FG    = fg(111);
 const GREEN_114  = fg(114);
+const TIME_FG    = fg(183); // light lavender — time segment text
 
 // Reset-to-background shortcuts
 const R_GREEN = RST + BG_GREEN;
 const R_DARK  = RST + BG_DARK;
+const R_TIME  = RST + BG_TIME;
 
 // ── Nerd Font Icons ──────────────────────────────────────────
 const ICON_BOLT      = '\uf0e7';  // model
@@ -85,6 +88,7 @@ const thermoIcon = levelIcon(['\uf2cb', '\uf2ca', '\uf2c9', '\uf2c8', '\uf2c7'])
 // renders — the list is a whitelist, not a blacklist. New sections
 // added in future versions stay off until the user opts in.
 const SECTION = {
+  TIME: 'time',
   MODEL: 'model',
   USD_COST: 'usd_cost',
   BURN_RATE: 'burn_rate',
@@ -303,6 +307,7 @@ interface PowerlineSeg {
 const PROTECTED_PRIORITY = 100;
 
 const SECTION_STYLES: Record<number, { bg: string; sep: number }> = {
+  53:  { bg: BG_TIME,  sep: 97 },
   22:  { bg: BG_GREEN, sep: 34 },
   24:  { bg: BG_BLUE,  sep: 30 },
   237: { bg: bg(237),  sep: 240 },
@@ -484,6 +489,30 @@ function buildModelTiers(displayName: string): string[] {
 
 export { buildModelTiers };
 
+// ── Time tiers ───────────────────────────────────────────────
+// Time is protected but not permanently — unlike model/context/branch/path,
+// its narrowest tier is empty, so under enough width pressure it disappears
+// entirely rather than staying visible in some minimal form. It's read live
+// from the system clock at render time (the renderer is spawned fresh per
+// render, so no caching/tracking is needed to keep it current).
+function buildTimeTiers(d: Date): string[] {
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const h24 = d.getHours();
+  const h12 = h24 % 12 || 12;
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  const hh24 = String(h24).padStart(2, '0');
+  return [
+    ` ${TIME_FG}${BOLD}${month}/${day} ${h12}:${mm} ${ampm}${R_TIME} `,
+    ` ${TIME_FG}${BOLD}${h12}:${mm} ${ampm}${R_TIME} `,
+    ` ${TIME_FG}${BOLD}${hh24}:${mm}${R_TIME} `,
+    '',
+  ];
+}
+
+export { buildTimeTiers };
+
 // ── Path tiers ────────────────────────────────────────────────
 // Path is protected (never dropped). Parent directories are always
 // abbreviated to one character regardless of width (shortenPath's default
@@ -552,12 +581,22 @@ function main(): void {
 
   // ════════════════════════════════════════════════════════════════
   // LINE 1: Segments in display order, each with a priority.
-  // model/context/branch/pwd are PROTECTED_PRIORITY (never dropped).
+  // time/model/context/branch/pwd are PROTECTED_PRIORITY (never dropped by
+  // fitSegments). time is the one exception that can still fully vanish —
+  // see the stepTiers/filter comments below.
   // Droppable priorities (higher = kept longer): usd_cost(5) drops first,
   // then duration(6), lines_changed(7), time_to_full(9), burn_rate(10) last.
   // ════════════════════════════════════════════════════════════════
 
   const line1Segs: PowerlineSeg[] = [];
+
+  let timeSeg: PowerlineSeg | undefined;
+  let timeTiers: string[] | undefined;
+  if (isSectionEnabled(config, SECTION.TIME)) {
+    timeTiers = buildTimeTiers(new Date());
+    timeSeg = { section: 53, priority: PROTECTED_PRIORITY, content: timeTiers[0] };
+    line1Segs.push(timeSeg);
+  }
 
   let modelSeg: PowerlineSeg | undefined;
   let modelTiers: string[] | undefined;
@@ -644,8 +683,12 @@ function main(): void {
   stepTiers(modelSeg, modelTiers);
   stepTiers(contextSeg, contextTiers);
   stepTiers(branchSeg, branchTiers);
+  stepTiers(timeSeg, timeTiers);
   stepTiers(pathSeg, pathTiers);
-  const line1 = renderPowerline(fitted);
+  // timeSeg's narrowest tier is '' (unlike the other protected segments,
+  // which always render something) — drop it from the render if stepTiers
+  // ran it all the way down, instead of rendering an empty powerline group.
+  const line1 = renderPowerline(fitted.filter(seg => stripAnsi(seg.content).length > 0));
 
   // ════════════════════════════════════════════════════════════════
   // LINE 2: Quota — pre-computed tiers from most to least detailed

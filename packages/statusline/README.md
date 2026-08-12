@@ -5,7 +5,7 @@ A two-line powerline-style statusline for Claude Code that displays session metr
 Both lines are **width-aware** — segments are progressively dropped as the terminal narrows so lines never wrap.
 
 ```
- Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ (90K/200K) │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
+ 8/12 3:45 PM ▶  Opus 4.6 │ $2.10 │ $12.60/hr │ 45% ████░░░░ (90K/200K) │ ~1h1m left │ +100 -30 │ 10m ▶  improve-auth ▶  ~/d/my-project ▶
  5h 33% ████░░░░░░░░ 1h57m (2:00PM) │ 7d 16% ██░░░░░░░░░░ Fri 10:00AM │ (3m old) ▶
 ```
 
@@ -56,6 +56,7 @@ When `sections` is absent from the config (or the file doesn't exist), all secti
 ```json
 {
   "sections": [
+    "time",
     "model",
     "context_window",
     "usd_cost",
@@ -70,6 +71,7 @@ Available section names:
 
 | Name | Segment |
 |---|---|
+| `time` | Current time, read live from the system clock (e.g. `8/12 3:45 PM`, shrinks to `3:45 PM`, then 24-hour `15:45`, then hides entirely) |
 | `model` | Model name (e.g. `Opus 4.6`) |
 | `usd_cost` | Total session cost (e.g. `$2.10`) |
 | `burn_rate` | Cost per hour (e.g. `$12.60/hr`) |
@@ -121,6 +123,7 @@ Tests and dev tooling for this package live under `tests/packages/statusline/` a
 
 | Segment | Source | Example | Priority |
 |---|---|---|---|
+| Time | System clock, read live at render time | `8/12 3:45 PM` | protected — shrinks, then disappears entirely (see below) |
 | Model name | `session.model.display_name` | `Opus 4.6` | protected — shrinks instead of dropping (see below) |
 | Context window | `session.context_window` tokens or `~/.claude/statusline-config.json` override | `45% ████░░░░ (90K/200K)` | protected — shrinks instead of dropping (see below) |
 | Git branch | `git rev-parse --abbrev-ref HEAD` | `improve-auth` | protected — shrinks instead of dropping (see below) |
@@ -131,14 +134,15 @@ Tests and dev tooling for this package live under `tests/packages/statusline/` a
 | Time to context limit | tokens remaining / token rate | `~1h1m left` | 9 |
 | Burn rate | cost / duration (shown after 1 min) | `$12.60/hr` | 10 (last to drop) |
 
-Segments are defined in display order, each with a `priority` number — higher means more important, kept longer. `fitSegments()` repeatedly removes the **lowest**-priority segment until the rendered line fits within `maxWidth`, stopping once only segments at or above `PROTECTED_PRIORITY` (100) remain. Model, context window, git branch, and working directory sit at that protected priority and are never *removed* by this loop — display order and priority are fully decoupled.
+Segments are defined in display order, each with a `priority` number — higher means more important, kept longer. `fitSegments()` repeatedly removes the **lowest**-priority segment until the rendered line fits within `maxWidth`, stopping once only segments at or above `PROTECTED_PRIORITY` (100) remain. Time, model, context window, git branch, and working directory sit at that protected priority and are never *removed* by `fitSegments()` — display order and priority are fully decoupled.
 
-Once every droppable segment is gone and the line still doesn't fit, the four protected segments shrink through their own tiers, **in this order — each one's ladder fully exhausted before the next one starts shrinking at all:**
+Once every droppable segment is gone and the line still doesn't fit, the five protected segments shrink through their own tiers, **in this order — each one's ladder fully exhausted before the next one starts shrinking at all:**
 
 1. **Model** — one step: full display name → first letter of the normalized family name (handles `Claude ` prefixes and `(1M context)` suffixes the same way the context-window-override lookup does), e.g. `Claude Sonnet 4.6` → `S`, `Opus 4.6` → `O`, `Haiku 3.5` → `H`.
 2. **Context window** — four tiers: full (icon + % + bar + `(used/total)`) → drop the `(used/total)` suffix → drop the bar too (icon + % only) → drop the percentage too (icon only — conveys "about how full", not an exact number).
 3. **Branch** — three length tiers (25 → 18 → 12 chars), with common prefixes (`chore/`, `feature/`, `feat/`, `fix/`, `bugfix/`, `hotfix/`, `release/`) stripped and long names trimmed with an ellipsis (e.g. `improve-playwrigh…`).
-4. **Path** — parent directories are always collapsed to their first character (unconditional, at every width — `~/dev/neat-core-js/.worktrees/sso` becomes `~/d/n/.w/sso`), but the *last* segment stays full until this point; only once model, context, and branch have all already given up everything they can does the last segment start ellipsis-truncating too (12 → 8 chars) — the final squeeze.
+4. **Time** — three tiers, then gone: `M/D h:mm AM/PM` (e.g. `8/12 3:45 PM`) → drop the date (`3:45 PM`) → drop AM/PM in favor of 24-hour (`15:45`) → disappears entirely. Unlike the other four protected segments, time doesn't stay visible in some minimal form — once its narrowest tier still doesn't fit, it's removed from the line rather than left empty.
+5. **Path** — parent directories are always collapsed to their first character (unconditional, at every width — `~/dev/neat-core-js/.worktrees/sso` becomes `~/d/n/.w/sso`), but the *last* segment stays full until this point; only once model, context, branch, and time have all already given up everything they can does the last segment start ellipsis-truncating too (12 → 8 chars) — the final squeeze.
 
 If, after all of that, the line still doesn't fit a very narrow terminal, it's left to wrap.
 
