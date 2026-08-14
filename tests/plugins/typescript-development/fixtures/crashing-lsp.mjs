@@ -4,6 +4,8 @@ import { appendFile, readFile } from "node:fs/promises";
 
 
 const statePath = process.env.TS_LSP_FIXTURE_STATE;
+const crashAlways = process.env.TS_LSP_FIXTURE_CRASH_ALWAYS === "1";
+const neverCrash = process.env.TS_LSP_FIXTURE_NEVER_CRASH === "1";
 let input = Buffer.alloc(0);
 let initialized = false;
 let crashed = false;
@@ -49,7 +51,7 @@ function receive(message) {
         return;
     }
 
-    if (launch === 1 && message.method === "textDocument/didChange" && !crashed) {
+    if (message.method === "textDocument/didChange" && !neverCrash && !crashed && (crashAlways || launch === 1)) {
         crashed = true;
         process.stderr.write("fixture crash after didChange\n");
         process.exit(9);

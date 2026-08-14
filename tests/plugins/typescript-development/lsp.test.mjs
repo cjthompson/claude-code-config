@@ -139,6 +139,45 @@ function decodeFrames(output) {
 }
 
 
+/** Spawn the proxy wrapper and accumulate its stdout/stderr lazily. */
+function spawnProxy({ env = process.env, cwd = process.cwd(), extraEnv = {} } = {}) {
+    const child = spawn(process.execPath, [WRAPPER], {
+        cwd,
+        env: { ...env, ...extraEnv },
+        stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdoutText = "";
+    let stderrText = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdoutText += chunk; });
+    child.stderr.on("data", (chunk) => { stderrText += chunk; });
+    return {
+        child,
+        stdout() { return stdoutText; },
+        stderr() { return stderrText; },
+        messages() { return decodeFrames(stdoutText); },
+        write(message) {
+            child.stdin.write(encodeFrame(message));
+        },
+        writeRaw(chunk) {
+            child.stdin.write(chunk);
+        },
+    };
+}
+
+
+/** Poll a getter until its value matches `predicate`, or throw on timeout. */
+async function waitFor(getValue, predicate, label, timeoutMs = 10_000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        if (predicate(getValue())) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`timed out waiting for ${label}`);
+}
+
+
 function directTscChild(wrapperPid) {
     try {
         const output = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
@@ -168,81 +207,94 @@ async function waitForLspMessage(getOutput, predicate, label, timeoutMs = 10_000
 test("wrapper restores an unsaved document after the native server crashes", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-recovery-"));
     const statePath = join(scratch, "launches");
-    const child = spawn(process.execPath, [WRAPPER], {
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
         cwd: scratch,
-        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP, TS_LSP_FIXTURE_STATE: statePath },
-        stdio: ["pipe", "pipe", "pipe"],
+        extraEnv: { TS_LSP_FIXTURE_STATE: statePath },
     });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
 
     try {
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", method: "initialized", params: {} }));
-        await new Promise((resolvePromise, reject) => {
-            const timeout = setTimeout(() => reject(new Error(`timed out waiting for dynamic registration; stderr: ${stderr}`)), 3_000);
-            const observe = () => {
-                const request = decodeFrames(stdout).find((message) => message.method === "client/registerCapability");
-                if (!request) return;
-                clearTimeout(timeout);
-                resolvePromise(request);
-            };
-            child.stdout.on("data", observe);
-            observe();
-        }).then((request) => {
-            child.stdin.write(encodeFrame({ jsonrpc: "2.0", id: request.id, result: null }));
-        });
-        child.stdin.write(encodeFrame({
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability", "dynamic registration");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+        proxy.write({
             jsonrpc: "2.0",
             method: "textDocument/didOpen",
             params: { textDocument: { uri: "file:///recovery.ts", languageId: "typescript", version: 1, text: "let value = 1;" } },
-        }));
-        child.stdin.write(encodeFrame({
-            jsonrpc: "2.0",
-            id: 2,
-            method: "textDocument/hover",
-            params: { textDocument: { uri: "file:///recovery.ts" }, position: { line: 0, character: 0 } },
-        }));
-        child.stdin.write(encodeFrame({
+        });
+        // Crash the fixture on launch 1; the proxy must replay the post-change document.
+        proxy.write({
             jsonrpc: "2.0",
             method: "textDocument/didChange",
             params: {
                 textDocument: { uri: "file:///recovery.ts", version: 2 },
                 contentChanges: [{ range: { start: { line: 0, character: 12 }, end: { line: 0, character: 13 } }, text: "2" }],
             },
-        }));
-
-        await new Promise((resolvePromise, reject) => {
-            const timeout = setTimeout(() => reject(new Error(`timed out waiting for recovery; stderr: ${stderr}`)), 3_000);
-            const observe = () => {
-                const replay = decodeFrames(stdout).find((message) => message.method === "fixture/replayed");
-                if (!replay) return;
-                clearTimeout(timeout);
-                resolvePromise(replay);
-            };
-            child.stdout.on("data", observe);
-            child.on("exit", () => observe());
-        }).then((replay) => {
-            assert.equal(replay.params.textDocument.text, "let value = 2;");
         });
-        await new Promise((resolvePromise, reject) => {
-            const timeout = setTimeout(() => reject(new Error(`timed out waiting for queued request; stderr: ${stderr}`)), 3_000);
-            const observe = () => {
-                const response = decodeFrames(stdout).find((message) => message.id === 2);
-                if (!response) return;
-                clearTimeout(timeout);
-                resolvePromise(response);
-            };
-            child.stdout.on("data", observe);
-            observe();
-        }).then((response) => assert.deepEqual(response.result, { contents: "recovered" }));
-        assert.equal(decodeFrames(stdout).every((message) => message.jsonrpc === "2.0"), true, `stdout contained non-LSP output: ${stdout}`);
+
+        const replay = await waitForLspMessage(proxy.stdout, (message) => message.method === "fixture/replayed", "recovery replay");
+        assert.equal(replay.params.textDocument.text, "let value = 2;");
+
+        // The replacement server must also be responsive to a new request after recovery.
+        proxy.write({
+            jsonrpc: "2.0",
+            id: 3,
+            method: "textDocument/hover",
+            params: { textDocument: { uri: "file:///recovery.ts" }, position: { line: 0, character: 0 } },
+        });
+        const postRecovery = await waitForLspMessage(proxy.stdout, (message) => message.id === 3 && message.result, "post-recovery hover response");
+        assert.deepEqual(postRecovery.result, { contents: "recovered" });
+
+        assert.equal(proxy.messages().every((message) => message.jsonrpc === "2.0"), true, `stdout contained non-LSP output: ${proxy.stdout()}`);
     } finally {
-        child.kill();
+        proxy.child.kill();
+        await rm(scratch, { recursive: true, force: true });
+    }
+});
+
+
+test("wrapper errors outstanding client requests when the child crashes", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-pending-error-"));
+    const statePath = join(scratch, "launches");
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
+        cwd: scratch,
+        extraEnv: { TS_LSP_FIXTURE_STATE: statePath },
+    });
+
+    try {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: { textDocument: { uri: "file:///pending.ts", languageId: "typescript", version: 1, text: "x" } },
+        });
+        // A request the fixture ignores — it stays outstanding, so the proxy owns the failure mode.
+        proxy.write({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "textDocument/definition",
+            params: { textDocument: { uri: "file:///pending.ts" }, position: { line: 0, character: 0 } },
+        });
+        // Crash the fixture on launch 1.
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: {
+                textDocument: { uri: "file:///pending.ts", version: 2 },
+                contentChanges: [{ text: "y" }],
+            },
+        });
+
+        const errorResponse = await waitForLspMessage(proxy.stdout, (message) => message.id === 2 && message.error, "outstanding request error");
+        assert.equal(errorResponse.error.code, -32603);
+        assert.match(errorResponse.error.message, /crashed before completing/i);
+    } finally {
+        proxy.child.kill();
         await rm(scratch, { recursive: true, force: true });
     }
 });
@@ -250,27 +302,26 @@ test("wrapper restores an unsaved document after the native server crashes", asy
 
 test("wrapper exits when the client ends the LSP session", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-exit-"));
-    const child = spawn(process.execPath, [WRAPPER], {
-        cwd: scratch,
+    const proxy = spawnProxy({
         env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
-        stdio: ["pipe", "pipe", "pipe"],
+        cwd: scratch,
     });
     try {
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", method: "initialized", params: {} }));
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null }));
-        child.stdin.write(encodeFrame({ jsonrpc: "2.0", method: "exit", params: null }));
-        const result = await new Promise((resolvePromise, reject) => {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        proxy.write({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null });
+        proxy.write({ jsonrpc: "2.0", method: "exit", params: null });
+        const result = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error("wrapper did not exit after LSP exit notification")), 1_000);
-            child.on("exit", (code, signal) => {
+            proxy.child.on("exit", (code, signal) => {
                 clearTimeout(timeout);
-                resolvePromise({ code, signal });
+                resolve({ code, signal });
             });
         });
         assert.equal(result.signal, null);
         assert.equal(result.code, 0);
     } finally {
-        child.kill();
+        proxy.child.kill();
         await rm(scratch, { recursive: true, force: true });
     }
 });
@@ -399,4 +450,218 @@ test("single-owner rule: only python-scripting and typescript-development may ca
         }
     }
     assert.deepEqual(owners.sort(), ["python-scripting", "typescript-development"].sort());
+});
+
+
+test("wrapper retries with the configured backoff sequence and exits nonzero on exhaustion", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-exhaustion-"));
+    const statePath = join(scratch, "launches");
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
+        cwd: scratch,
+        extraEnv: { TS_LSP_FIXTURE_CRASH_ALWAYS: "1", TS_LSP_FIXTURE_STATE: statePath },
+    });
+
+    try {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: { textDocument: { uri: "file:///exhaust.ts", languageId: "typescript", version: 1, text: "x" } },
+        });
+
+        // First crash → recovery 1/5 in 250ms.
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: {
+                textDocument: { uri: "file:///exhaust.ts", version: 2 },
+                contentChanges: [{ text: "y" }],
+            },
+        });
+        const expectedDelays = [250, 500, 1000, 2000, 4000];
+        await waitFor(proxy.stderr, (text) => /recovery 1\/5 in 250ms/.test(text), "recovery 1/5 in 250ms");
+
+        // Crashes 2–5: each waits for the previous launch's replay, then crashes the new launch.
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+            await waitForLspMessage(proxy.stdout, (message) => message.method === "fixture/replayed", `replay before crash ${attempt + 1}`);
+            proxy.write({
+                jsonrpc: "2.0",
+                method: "textDocument/didChange",
+                params: {
+                    textDocument: { uri: "file:///exhaust.ts", version: attempt + 2 },
+                    contentChanges: [{ text: "y" }],
+                },
+            });
+            const pattern = new RegExp(`recovery ${attempt + 1}/5 in ${expectedDelays[attempt]}ms`);
+            await waitFor(proxy.stderr, (text) => pattern.test(text), `recovery ${attempt + 1}/5 in ${expectedDelays[attempt]}ms`);
+        }
+
+        // Crash 6: replay from launch 6, then crash it; recovery is exhausted so the proxy exits nonzero.
+        await waitForLspMessage(proxy.stdout, (message) => message.method === "fixture/replayed", "replay before crash 6");
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: {
+                textDocument: { uri: "file:///exhaust.ts", version: 7 },
+                contentChanges: [{ text: "y" }],
+            },
+        });
+        const exit = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error(`wrapper did not exit after exhaustion; stderr: ${proxy.stderr()}`)), 15_000);
+            proxy.child.on("exit", (code, signal) => {
+                clearTimeout(timeout);
+                resolve({ code, signal });
+            });
+        });
+        assert.equal(exit.code, 1, `expected exit code 1, got ${exit.code}; stderr: ${proxy.stderr()}`);
+        assert.match(proxy.stderr(), /TypeScript LSP stopped/, `stderr must report exhaustion; stderr: ${proxy.stderr()}`);
+    } finally {
+        proxy.child.kill();
+        await rm(scratch, { recursive: true, force: true });
+    }
+});
+
+
+test("wrapper replays open documents but drops closed ones after recovery", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-didclose-"));
+    const statePath = join(scratch, "launches");
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
+        cwd: scratch,
+        extraEnv: { TS_LSP_FIXTURE_STATE: statePath },
+    });
+
+    try {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+
+        // Open two documents, then close one.
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: { textDocument: { uri: "file:///keep.ts", languageId: "typescript", version: 1, text: "kept" } },
+        });
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: { textDocument: { uri: "file:///close.ts", languageId: "typescript", version: 1, text: "closed" } },
+        });
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didClose",
+            params: { textDocument: { uri: "file:///close.ts" } },
+        });
+
+        // Trigger the crash.
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: {
+                textDocument: { uri: "file:///keep.ts", version: 2 },
+                contentChanges: [{ text: "x" }],
+            },
+        });
+
+        // Wait for replays and capture which URIs were replayed.
+        const replayedUris = new Set();
+        await waitFor(
+            () => proxy.messages().filter((m) => m.method === "fixture/replayed").map((m) => m.params.textDocument.uri),
+            (uris) => uris.includes("file:///keep.ts"),
+            "replay for keep.ts",
+            5_000,
+        );
+        for (const m of proxy.messages()) {
+            if (m.method === "fixture/replayed") replayedUris.add(m.params.textDocument.uri);
+        }
+        assert.ok(replayedUris.has("file:///keep.ts"), `kept document must be replayed; got: ${[...replayedUris].join(", ")}`);
+        assert.ok(!replayedUris.has("file:///close.ts"), `closed document must not be replayed; got: ${[...replayedUris].join(", ")}`);
+    } finally {
+        proxy.child.kill();
+        await rm(scratch, { recursive: true, force: true });
+    }
+});
+
+
+test("wrapper fails closed when a malformed frame arrives", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-malformed-"));
+    const statePath = join(scratch, "launches");
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
+        cwd: scratch,
+        extraEnv: { TS_LSP_FIXTURE_STATE: statePath },
+    });
+
+    try {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+
+        // Send a frame that lacks a Content-Length header.
+        proxy.writeRaw("garbage data without framing\r\n\r\n");
+
+        const exit = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("wrapper did not exit after malformed frame")), 3_000);
+            proxy.child.on("exit", (code, signal) => {
+                clearTimeout(timeout);
+                resolve({ code, signal });
+            });
+        });
+        assert.equal(exit.code, 1, `expected exit code 1, got ${exit.code}; stderr: ${proxy.stderr()}`);
+        assert.match(proxy.stderr(), /invalid client LSP input/, `stderr must report malformed frame; got: ${proxy.stderr()}`);
+    } finally {
+        proxy.child.kill();
+        await rm(scratch, { recursive: true, force: true });
+    }
+});
+
+
+test("wrapper fails closed when a didChange range exceeds the document", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "ts-lsp-invalid-range-"));
+    const statePath = join(scratch, "launches");
+    const proxy = spawnProxy({
+        env: { ...process.env, TS_LSP_BIN: CRASHING_LSP },
+        cwd: scratch,
+        extraEnv: { TS_LSP_FIXTURE_STATE: statePath },
+    });
+
+    try {
+        proxy.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+        proxy.write({ jsonrpc: "2.0", method: "initialized", params: {} });
+        const register = await waitForLspMessage(proxy.stdout, (message) => message.method === "client/registerCapability");
+        proxy.write({ jsonrpc: "2.0", id: register.id, result: null });
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: { textDocument: { uri: "file:///small.ts", languageId: "typescript", version: 1, text: "x" } },
+        });
+        // Range beyond the document's final line.
+        proxy.write({
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: {
+                textDocument: { uri: "file:///small.ts", version: 2 },
+                contentChanges: [{ range: { start: { line: 5, character: 0 }, end: { line: 5, character: 0 } }, text: "y" }],
+            },
+        });
+
+        const exit = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("wrapper did not exit after invalid range")), 3_000);
+            proxy.child.on("exit", (code, signal) => {
+                clearTimeout(timeout);
+                resolve({ code, signal });
+            });
+        });
+        assert.equal(exit.code, 1, `expected exit code 1, got ${exit.code}; stderr: ${proxy.stderr()}`);
+        assert.match(proxy.stderr(), /cannot snapshot client state/, `stderr must report range error; got: ${proxy.stderr()}`);
+    } finally {
+        proxy.child.kill();
+        await rm(scratch, { recursive: true, force: true });
+    }
 });

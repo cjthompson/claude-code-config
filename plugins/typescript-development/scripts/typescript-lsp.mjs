@@ -24,7 +24,7 @@ function writeFrame(stream, message) {
 }
 
 
-class FrameReader {
+class LspFrameReader {
     #buffer = Buffer.alloc(0);
 
     push(chunk, onMessage) {
@@ -46,7 +46,7 @@ class FrameReader {
 }
 
 
-function applyChanges(text, changes) {
+function applyContentChanges(text, changes) {
     let updated = text;
     for (const change of changes) {
         if (!change.range) {
@@ -87,7 +87,7 @@ class SessionSnapshot {
     workspaceFolders = new Map();
     documents = new Map();
 
-    observe(message) {
+    observeClient(message) {
         const { method, params } = message;
         if (method === "initialize") {
             this.initializeParams = params;
@@ -111,7 +111,7 @@ class SessionSnapshot {
         if (method === "textDocument/didChange") {
             const document = this.documents.get(params?.textDocument?.uri);
             if (!document) return;
-            document.text = applyChanges(document.text, params.contentChanges ?? []);
+            document.text = applyContentChanges(document.text, params.contentChanges ?? []);
             document.version = params.textDocument.version;
         }
         if (method === "textDocument/didClose") this.documents.delete(params?.textDocument?.uri);
@@ -153,8 +153,8 @@ async function resolveTsc() {
 
 class RecoveryProxy {
     snapshot = new SessionSnapshot();
-    clientReader = new FrameReader();
-    serverReader = new FrameReader();
+    clientReader = new LspFrameReader();
+    serverReader = new LspFrameReader();
     child = null;
     childStderr = "";
     recoveries = 0;
@@ -179,7 +179,7 @@ class RecoveryProxy {
     }
 
     startChild(recovering) {
-        this.serverReader = new FrameReader();
+        this.serverReader = new LspFrameReader();
         this.childStderr = "";
         const child = spawn(this.binary, ["--lsp", "--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
         this.child = child;
@@ -208,7 +208,7 @@ class RecoveryProxy {
 
     routeClient(message, byteLength) {
         try {
-            this.snapshot.observe(message);
+            this.snapshot.observeClient(message);
             if (message.method === "workspace/didChangeConfiguration") this.serverRequestResponses.clear();
         } catch (error) {
             this.fail(`cannot snapshot client state: ${error.message}`);
@@ -284,10 +284,8 @@ class RecoveryProxy {
             return;
         }
         if (this.state === "recovering") {
-            if (!cached) {
-                this.fail(`replacement TypeScript LSP requested uncached ${message.method}`);
-                return;
-            }
+            this.fail(`replacement TypeScript LSP requested uncached ${message.method}`);
+            return;
         }
         this.serverRequests.set(message.id, requestKey);
         writeFrame(process.stdout, message);
@@ -359,7 +357,8 @@ class RecoveryProxy {
         this.queuedBytes = 0;
         process.stderr.write(`typescript-lsp: ${message}\n`);
         if (this.child) this.child.kill();
-        process.exitCode = 1;
+        // Force exit: exitCode alone leaves open stdio / child handles alive long enough to hang.
+        process.exit(1);
     }
 }
 
