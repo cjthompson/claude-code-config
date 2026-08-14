@@ -132,7 +132,7 @@ differ.
 Pass requires: the agent states it must pass `lean-agents:full-executor` (the fully-qualified,
 plugin-scoped name) for the first case — a bare `full-executor` fails to resolve and forces a
 retry — and passes bare `general-purpose` for the second, since that is a built-in agent with
-no plugin prefix. Fail conditions: passing a bare name for any of this plugin's four agents
+no plugin prefix. Fail conditions: passing a bare name for any of this plugin's five agents
 (`main`, `lean-executor`, `standard-executor`, `full-executor`), or incorrectly prefixing a
 built-in agent like `general-purpose`, `Explore`, or `Plan` with `lean-agents:`.
 RED baseline expectation: without the fix, the agent reasons "the agent is named

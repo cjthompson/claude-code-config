@@ -1,6 +1,6 @@
 {
     "name": "lean-agents",
-    "description": "Reduced-toolset sub-agent profiles (lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with the project-tasks skill, which dispatches tasks to these agents by name.",
+    "description": "Reduced-toolset sub-agent profiles (read-only, lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with the project-tasks skill, which dispatches scouts, executors, and verifiers to these agents.",
     "author": {
         "name": "cjthompson"
     },

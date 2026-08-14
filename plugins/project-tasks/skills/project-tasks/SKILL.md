@@ -93,6 +93,30 @@ export PROJECT_TASKS_CONFIG_DIR
 - On Codex (and any host where `bin/` is not on PATH) `$TASK_DB` resolves to `node <path>/project-tasks/bin/task-db`, and the database is stored in `${CODEX_HOME:-$HOME/.codex}/project-tasks/tasks.db`.
 - If subagent, TaskList, or model-selection tools mentioned below are unavailable in the current host, keep the database operations working and tell the user which execution feature is unavailable. Do not invent tool calls.
 
+## Sub-agent Dispatch (capability-based)
+
+This skill dispatches three sub-agent roles. Each role is defined by **required capabilities**, not by a fixed agent name — pick the cheapest profile on the current host that satisfies the row. Model selection is similarly tier-based so the skill works on hosts with different model rosters (Claude, GPT, Composer, etc.):
+
+| Role     | Required tools                                                                 | Model tier                          | Default profile if lean-agents is installed | Fallback profile |
+|----------|--------------------------------------------------------------------------------|-------------------------------------|---------------------------------------------|------------------|
+| Planning Scout | Read, Glob, Grep, Bash, WebFetch, Worktree (Enter/Exit), SendMessage. No Edit, no Write, no Skill, no Agent, no MCP. | **Strong** — produces an Implementation Map from ambiguous requirements; benefits from a higher-tier model but should *avoid* the top tier. | `lean-agents:read-only`                     | `general-purpose` |
+| Execution Agent | Read, Edit, Write, Bash, Worktree (Enter/Exit)                                | **Fast / cheap** — follows a literal map mechanically; a smaller/faster model is the right tradeoff. | `lean-agents:lean-executor`                 | `general-purpose` |
+| Verifier | Read, Glob, Grep, Bash, WebFetch, Worktree (Enter/Exit), SendMessage. No Edit, no Write, no Skill, no Agent, no MCP. | **Strong** — returns Found/Partial/Not Found verdicts; benefits from a higher-tier model but should *avoid* the top tier. | `lean-agents:read-only`                     | `general-purpose` |
+
+- **Default profiles** are part of the optional `lean-agents` plugin (this repo's `plugins/lean-agents/`). When installed, they enforce read-only structurally (no write tools in the scout/verifier profiles) rather than relying on prompt discipline.
+- **Fallback profile** is `general-purpose` on hosts where the lean-agents plugin is not installed. When falling back, the role's read-only contract becomes prompt-level — the dispatch prompt must add an explicit "Do not modify any files" instruction, and the parent should report to the user with this exact phrasing: `Note: read-only enforcement fell back to prompt-level because lean-agents is not installed on this host.`
+- **Model tier selection** is a recommendation, not a hard rule. The parent picks whichever model on the host satisfies the tier:
+  - **Top tier** (reserved for the "Retry with most-capable model" path) — Claude Opus or Fable 5 on Claude Code; GPT-5.6-sol on Codex; Composer 2.5 or Grok 4.6 on Cursor. **Never dispatch the Scout or Verifier at this tier** — the Implementation Map and Found/Not-Found verdicts do not benefit from the additional cost, and a strong-tier model handles them reliably.
+  - **Strong tier** (default for Planning Scout and Verifier) — Claude Sonnet on Claude Code; GPT-5.6-terra on Codex; Grok 4.6 on Cursor, with Composer 2.5 as fallback.
+  - **Fast tier** (default for Execution Agent) — Claude Haiku on Claude Code; GPT-5.6-luna on Codex; Composer 2.5 or GPT-5.6-luna on Cursor.
+  - If the host exposes no model-selection parameter at all, drop the `model:` field and let the host's default carry.
+- **Profiles not listed** (e.g., `lean-agents:standard-executor`, `lean-agents:main`, `lean-agents:full-executor`) are disqualified from scout/verifier dispatch for two reasons:
+  1. **Capability mismatch** — they carry tools that exceed the role's contract: `Skill`, `Agent`, `AskUserQuestion`, `Cron*`, `LSP`, MCP, and (for `standard-executor`/`full-executor`) `WebSearch`. The read-only roles require *exactly* the read/search/network set, no more.
+  2. **Token cost** — the parent's System-tools line scales with the spawned agent's toolset. Spawning `lean-agents:full-executor` (~30–40k tokens) for a scout that needs Read+Glob+Grep+Bash wastes context budget that the parent could spend on the user's actual session.
+  For executor dispatch, these profiles *can* be used (they include Edit/Write) but `lean-agents:lean-executor` is still preferred for the same token-cost reason.
+
+The dispatch blocks further down (Stage 1, Stage 2, Checking a Task) reference this table rather than naming a profile directly, and use a `<tier>` placeholder in the `model:` field where applicable.
+
 ## Session State
 
 The following variables are maintained for the persistent task list feature. They reset when this skill session ends (not persisted across sessions).
@@ -389,20 +413,24 @@ Update status to in_progress:
 $TASK_DB update --project "..." --seq N --status in_progress
 ```
 
-The task runs as a **2-stage pipeline**: a Sonnet scout (read-only) produces an Implementation Map, then a Haiku executor follows it mechanically. Both run as background subagents so the user stays unblocked.
+The task runs as a **2-stage pipeline**: a Planning Scout (read-only, strong-tier model) produces an Implementation Map, then an Execution Agent (write-capable, fast-tier model) follows it mechanically. Both run as background subagents so the user stays unblocked.
 
-#### Stage 1: Sonnet Scout (read-only)
+#### Stage 1: Planning Scout (read-only)
 
-Dispatch a **background** subagent. Extract `type`, `title`, and each element of the `reqs` JSON array:
+Dispatch a **background** subagent per the Sub-agent Dispatch table (Planning Scout role — read-only, strong-tier model). Extract `type`, `title`, and each element of the `reqs` JSON array:
 
 ```
 Subagent tool parameters:
-  subagent_type: "general-purpose"
-  model: "sonnet"
+  subagent_type: "<scout profile from Sub-agent Dispatch table>"
+  model: "<strong-tier model on this host — e.g. sonnet on Claude Code, GPT-5.6-terra on Codex, Grok 4.6 on Cursor (Composer 2.5 fallback)>"
   run_in_background: true
   description: "Scout: #{SEQ} {short_title}"
   isolation: "worktree"
 ```
+
+If the host does not expose a `model:` selection parameter, omit it and let the host default carry.
+
+If falling back to `general-purpose` (no lean-agents plugin installed), the structural read-only guarantee is lost — the scout prompt already includes "Do NOT write, edit, or create any files. Read-only." but the agent still has Edit/Write tools available. Reinforce in the prompt: "You have Edit/Write tools available; do not use them for this task."
 
 **After scouting:** Call `syncTaskToList({SEQ}, "scouting", {type}, {title})` to update the TaskList display.
 
@@ -488,18 +516,22 @@ function names, and code snippets for every change.
 
 **Before dispatching executor:** Call `syncTaskToList({SEQ}, "executing", {type}, {title})` to update the TaskList display.
 
-#### Stage 2: Haiku Executor
+#### Stage 2: Execution Agent
 
-When the scout completes, dispatch the executor as another **background** subagent. Pass the scout's **full Implementation Map** verbatim.
+When the scout completes, dispatch the executor as another **background** subagent per the Sub-agent Dispatch table (Execution Agent role — write-capable, fast-tier model). Pass the scout's **full Implementation Map** verbatim.
 
 ```
 Subagent tool parameters:
-  subagent_type: "lean-agents:lean-executor"
-  model: "haiku"
+  subagent_type: "<executor profile from Sub-agent Dispatch table>"
+  model: "<fast-tier model on this host — e.g. haiku on Claude Code, GPT-5.6-luna on Codex, Composer 2.5 or GPT-5.6-luna on Cursor>"
   run_in_background: true
   description: "Execute: #{SEQ} {short_title}"
   isolation: "worktree"
 ```
+
+If the host does not expose a `model:` selection parameter, omit it and let the host default carry.
+
+The executor is *meant* to write, so a fallback to `general-purpose` does not lose any capability contract — it just pays a higher System-tools token cost. No prompt-level fallback reminder is needed here, unlike the read-only roles.
 
 Executor prompt:
 
@@ -537,10 +569,10 @@ Files to Modify, Files to Create, and Test Command sections}
 
 **After dispatching the scout, immediately inform the user** the task is running and that they can continue issuing commands. When the scout completes, chain the executor automatically — do not ask the user between stages.
 
-**Model selection:**
-- Default: Sonnet scout → Haiku executor (2-stage)
-- Retry (same approach): Sonnet scout → Haiku executor (2-stage)
-- Retry with Opus: Single Opus agent (combined scout+execute, no 2-stage)
+**Model selection (resolved per host):**
+- Default: strong-tier Planning Scout → fast-tier Execution Agent (2-stage)
+- Retry (same approach): same tier mapping (2-stage)
+- Retry with most-capable model: single combined scout+execute agent using a top-tier model (no 2-stage — collapse the pipeline)
 
 ### Step 3: Handle Completion
 
@@ -548,11 +580,11 @@ When a task runner subagent completes, report results and present review choice 
 
 ```
 a) Accept — mark complete and update changelog
-b) Retry — revert and re-run with Sonnet (provide feedback to guide the retry)
-c) Retry with Opus — revert and re-run with the most capable model (for harder tasks)
+b) Retry — revert and re-run with the same tier mapping (provide feedback to guide the retry)
+c) Retry with most-capable model — revert and re-run with the host's most-capable available model (for harder tasks)
 ```
 
-After presenting the choice (a) Accept / b) Retry / c) Retry with Opus, do not re-render the table — Step 4's sync calls handle updates.
+After presenting the choice (a) Accept / b) Retry / c) Retry with most-capable model, do not re-render the table — Step 4's sync calls handle updates.
 
 ### Step 4: Accept or Retry
 
@@ -585,11 +617,11 @@ Each output line is `#NNN|title`. If any lines are returned, inform the user:
 
 2. Ask for optional feedback using the host's available user-input mechanism: "What was wrong with the result? (optional — press Enter to skip)"
 
-3. Re-dispatch using the 2-stage pipeline (Sonnet scout → Haiku executor) with `## Retry Notes` included in the scout prompt. If user chose "Retry with Opus", dispatch a single Opus agent (combined scout+execute) instead. Update status back to `in_progress`.
+3. Re-dispatch using the 2-stage pipeline (strong-tier Planning Scout → fast-tier Execution Agent) with `## Retry Notes` included in the scout prompt. If the user chose "Retry with most-capable model", dispatch a single combined scout+execute agent using a top-tier model instead. Update status back to `in_progress`.
 
 4. Determine retry status:
-   - If user chose "Retry with Opus": call `syncTaskToList({SEQ}, "executing", {type}, {title})` (Opus is a combined scout+execute, goes straight to executing)
-   - If user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList({SEQ}, retryStatus, {type}, {title})` to update the TaskList entry.
+   - If the user chose "Retry with most-capable model": call `syncTaskToList({SEQ}, "executing", {type}, {title})` (combined scout+execute goes straight to executing)
+   - If the user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList({SEQ}, retryStatus, {type}, {title})` to update the TaskList entry.
 
 5. Return to accepting commands — don't block waiting for the retry.
 
@@ -667,7 +699,7 @@ When user says "check task #NNN":
 $TASK_DB get --project "..." --seq N
 ```
 
-2. Dispatch a **read-only subagent** using an available subagent or delegation tool with `subagent_type: "lean-agents:lean-executor"` and `model: "haiku"`. Extract requirements from the `reqs` JSON array. Pass this prompt:
+2. Dispatch a **read-only subagent** per the Sub-agent Dispatch table (Verifier role — strong-tier model, structurally read-only). Extract requirements from the `reqs` JSON array. Pass this prompt:
 
 ```
 You are a read-only task verifier. Do NOT modify any files.
@@ -725,6 +757,8 @@ for keywords likely to match widely. If you must use `grep`/`find`, exclude vend
   modify the repo, the index, or anything outside it — no `git add`/`commit`/`checkout`,
   no installs, no writes or redirects.
 ```
+
+If falling back to `general-purpose` (no lean-agents plugin installed), the verifier prompt must explicitly say: "You have Edit/Write tools available; do not use them for this verification. Do not run commands that mutate the repo, the index, or the filesystem." The verification rules block in the prompt body already lists allowed commands (`git log`, `rg`, `find`, Read) — keep it, and append the fallback reminder when needed.
 
 3. Present the report with an overall confidence summary:
    - **High** — all requirements Found or Cannot Verify, with at least one Found
