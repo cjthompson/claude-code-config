@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.68 - 2026-08-14
+
+### Fixes
+- **plugins/typescript-development**: tightened the TypeScript LSP recovery proxy and its tests. Renamed `FrameReader` → `LspFrameReader`, `SessionSnapshot.observe` → `observeClient`, and `applyChanges` → `applyContentChanges` so the names match the plan's public surface. Dropped an unreachable inner branch in `handleServerRequest`. Forced `process.exit(1)` in `fail()` so an open stdin or child handle can't keep the wrapper alive past a fail-closed decision.
+- **plugins/typescript-development**: split the recovery test so it verifies document restoration only, and added a separate test that verifies the plan's "cancel/error outstanding client requests on crash" rule by sending a request the fixture ignores (`textDocument/definition`) and asserting a `InternalError` (`-32603`) response with code/message intact.
+- **plugins/typescript-development**: added four tests that close the coverage gaps from the plan: the five-step backoff sequence (`recovery 1/5 in 250ms` … `5/5 in 4000ms`) and nonzero exit on the 6th crash; `textDocument/didClose` removing the document from the replay snapshot; malformed `Content-Length` frames triggering a fail-closed exit; out-of-range `didChange` triggering a fail-closed exit. The crashing fixture now honors `TS_LSP_FIXTURE_CRASH_ALWAYS` and `TS_LSP_FIXTURE_NEVER_CRASH` so the retry and exhaustion tests are deterministic. Added `spawnProxy` and `waitFor` helpers and routed the recovery and exit tests through them.
+- **repo**: added `"test": "node --test tests/**/*.test.mjs"` to `package.json` so the plan's `npm test && npm run typecheck` verification command works.
+
 ## v0.0.67 - 2026-08-12
 
 ### Changes

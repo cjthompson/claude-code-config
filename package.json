@@ -1,6 +1,6 @@
 {
   "name": "@cjthompson/claude-code-config",
-  "version": "0.0.67",
+  "version": "0.0.68",
   "workspaces": [
     "packages/installer"
   ],
