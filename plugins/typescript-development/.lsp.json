@@ -1,0 +1,16 @@
+{
+    "typescript": {
+        "command": "node",
+        "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/typescript-lsp.mjs"],
+        "extensionToLanguage": {
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".mts": "typescript",
+            ".cts": "typescript"
+        },
+        "transport": "stdio",
+        "initializationOptions": {},
+        "settings": {},
+        "maxRestarts": 3
+    }
+}

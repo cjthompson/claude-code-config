@@ -93,7 +93,7 @@
             "source": "./plugins/typescript-development",
             "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
             "version": "1.0.1",
-            "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+            "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging", "lsp"],
             "category": "development"
         }
     ]

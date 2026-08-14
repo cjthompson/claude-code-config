@@ -87,6 +87,10 @@ Deeper project-level guidance for production Python design, pytest strategy, exi
 
 Framework-neutral, project-level guidance for production TypeScript design, runtime-boundary validation, runtime and compile-time testing, repository-first tool configuration, ESM/CJS and package compatibility, difficult type-system questions, and focused annotation tightening. It vendors a commit-pinned, curated subset of Microsoft's official Handbook, modules, declaration-file, and TSConfig documentation; run `node plugins/typescript-development/scripts/sync-typescript-references.mjs --check` to verify the offline snapshot.
 
+The plugin ships a TypeScript 7 language server at `.lsp.json` for `.ts`/`.tsx`/`.mts`/`.cts`. The config launches `${CLAUDE_PLUGIN_ROOT}/scripts/typescript-lsp.mjs`, an LSP-aware recovery proxy. It delegates all executable discovery to the unchanged `scripts/typescript-lsp.sh --check` control path: `$TS_LSP_BIN` → project `./node_modules/.bin/tsc` (only if it reports TypeScript 7) → `$PATH` → common Homebrew paths. That project-local lookup is intentional. Install TypeScript 7 globally (`npm i -g typescript@7`), in the project, or set `$TS_LSP_BIN`.
+
+Unlike a generic restart loop, the Node proxy retains current open-document text, configuration, and workspace changes. If native `tsc` crashes, it retries five times with a 250 ms–4 s exponential backoff, internally initializes a replacement, replays that state, and then releases up to 10 seconds/1 MiB of queued client traffic. Diagnostics go only to stderr; after recovery is exhausted, it exits nonzero so Claude Code's `maxRestarts: 3` creates a fully fresh session. The Bash script remains directly runnable as the lower-complexity comparison launcher.
+
 ## Hooks
 
 Custom Claude Code hooks, located in `plugins/<name>/hooks/`. Like skills, each is a standalone plugin with its own `.claude-plugin/plugin.json`.

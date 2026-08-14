@@ -8,7 +8,7 @@
     "homepage": "https://github.com/cjthompson/claude-code-config",
     "repository": "https://github.com/cjthompson/claude-code-config",
     "license": "MIT",
-    "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+    "keywords": ["typescript", "testing", "tooling", "modules", "typing", "packaging", "lsp"],
     "category": "developer-tools",
     "skills": "./skills/"
 }

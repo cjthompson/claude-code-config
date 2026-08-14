@@ -77,8 +77,8 @@ test("plugin registers in Claude and Codex marketplaces", async () => {
         name: "typescript-development",
         source: "./plugins/typescript-development",
         description: "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
-        version: "1.0.0",
-        keywords: ["typescript", "testing", "tooling", "modules", "typing", "packaging"],
+        version: "1.0.1",
+        keywords: ["typescript", "testing", "tooling", "modules", "typing", "packaging", "lsp"],
         category: "development",
     });
 
@@ -93,9 +93,10 @@ test("plugin registers in Claude and Codex marketplaces", async () => {
 });
 
 
-test("plugin has no runtime components beyond skills and reference synchronization", async () => {
+test("plugin exposes a TypeScript 7 LSP via .lsp.json but no other runtime components", async () => {
     const { access } = await import("node:fs/promises");
-    for (const path of [".lsp.json", ".mcp.json", ".app.json", "agents", "hooks"]) {
+    await assertFile(join(PLUGIN, ".lsp.json"));
+    for (const path of [".mcp.json", ".app.json", "agents", "hooks"]) {
         await assert.rejects(access(join(PLUGIN, path)));
     }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.67 - 2026-08-12
+
+### Changes
+- **plugins/typescript-development**: added a TypeScript 7 language server via `.lsp.json` covering `.ts`/`.tsx`/`.mts`/`.cts`. The LSP command is a thin Node wrapper (`scripts/typescript-lsp.mjs`) that resolves `tsc` in priority order — `$TS_LSP_BIN`, `./node_modules/.bin/tsc` (only when it reports TypeScript 7), `$PATH`, then common Homebrew install paths — refuses to start anything other than TypeScript 7 with a clear stderr message, then spawns the resolved binary with `--lsp --stdio` and forwards `SIGTERM`/`SIGINT`/`SIGHUP` so restarts never orphan the server. Mirrors the python-scripting single-owner pattern; the new `tests/plugins/typescript-development/lsp.test.mjs` enforces structural integrity and asserts only `python-scripting` and `typescript-development` may carry a `.lsp.json`.
+- **plugins/typescript-development**: the `.lsp.json` args reference the wrapper as `${CLAUDE_PLUGIN_ROOT}/scripts/typescript-lsp.mjs`. A bare relative path resolves against the LSP subprocess's working directory — the user's project, not the plugin — so it produced `MODULE_NOT_FOUND` and three failed restarts anywhere except this repo's own root. The wrapper also carries no `argv[1]` entry guard: Node realpath-resolves `import.meta.url` but not `argv[1]`, so under a symlinked or aliased invocation path such a guard silently skipped `main()` and exited 0 without ever speaking LSP. `lsp.test.mjs` covers both, including a behavioral probe that drives the wrapper through a symlink from a foreign cwd and requires a framed response.
+- **plugins/typescript-development**: dropped `.lsp.json` from the structure test's forbidden list (it now has a positive existence assertion) and updated the marketplace registration fixture to include the new `"lsp"` keyword.
+- **plugins/typescript-development**: appended `"lsp"` to the `keywords` arrays in both `.claude-plugin/plugin.json` and `.cursor-plugin/plugin.json` and to the entry in `.claude-plugin/marketplace.json`. README's `typescript-development` section now documents the LSP install requirements and the `$TS_LSP_BIN` override.
+- **plugins/typescript-development**: upgraded the default Node LSP launcher into an LSP-aware TypeScript 7 recovery proxy. It delegates executable discovery to the unchanged Bash control launcher, snapshots open-document/configuration/workspace state, retries five native-server crashes with bounded exponential backoff, reseeds a replacement server, and bounds queued traffic. It keeps stdout protocol-only, writes concise crash evidence to stderr, fails closed for unsupported server-originated operations, and lets Claude Code take over after recovery exhaustion.
+
 ## v0.0.66 - 2026-08-11
 
 ### Changes
