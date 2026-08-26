@@ -1,353 +1,65 @@
 #!/usr/bin/env node
 /**
  * task-db — SQLite helper for the project-tasks skill.
+ *
  * Ships in the plugin's bin/ directory. On Claude Code that dir is added to the
  * Bash tool's PATH (invoked as the bare command `task-db`); other hosts (e.g.
  * Codex) run it via `node <path-to-bin/task-db>`. Set PROJECT_TASKS_HOME (or
  * CODEX_HOME) to choose the DB location; defaults to ~/.claude.
  *
- * All SQL is handled internally. Callers pass plain string arguments;
- * no shell escaping is needed on the caller side.
- */
-import { execSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-
-const TASK_HOME = process.env.PROJECT_TASKS_HOME
-    ?? (process.env.CODEX_HOME ? join(process.env.CODEX_HOME, 'project-tasks') : null)
-    ?? join(process.env.HOME, '.claude');
-mkdirSync(TASK_HOME, { recursive: true });
-
-const DB_PATH = join(TASK_HOME, 'tasks.db');
-
-/** Run SQL via sqlite3 stdin. Returns trimmed stdout. */
-function sql(query, flags = '') {
-    return execSync(`sqlite3 ${flags} "${DB_PATH}"`, {
-        input: query,
-        encoding: 'utf-8',
-    }).trim();
-}
-
-/** SQL-escape a value: double single quotes. */
-function esc(val) {
-    return String(val ?? '').replace(/'/g, "''");
-}
-
-const argv = process.argv.slice(2);
-const cmd = argv[0];
-
-/** Get the value of the first occurrence of a named flag. */
-function get(flag) {
-    const i = argv.indexOf(flag);
-    return i !== -1 ? argv[i + 1] ?? null : null;
-}
-
-/** Get all values for a repeatable flag. */
-function all(flag) {
-    const vals = [];
-    for (let i = 0; i < argv.length; i++) {
-        if (argv[i] === flag && i + 1 < argv.length) vals.push(argv[++i]);
-    }
-    return vals;
-}
-
-const has = (flag) => argv.includes(flag);
-
-const now = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
-
-/**
- * Normalize a project identifier to a canonical form so that different agents
- * (or different remote URL formats) all key into the same task list.
+ * All SQL is handled internally. Callers pass plain string arguments; no shell
+ * escaping is needed on the caller side.
  *
- * Transformations:
- *   - strip trailing `.git`
- *   - convert SSH form (`git@host:owner/repo`) to HTTPS-style host path
- *   - drop scheme from HTTPS URLs
- *   - drop trailing slash
+ * This file is now dispatch and nothing else — three layers, each testable
+ * without the other two:
  *
- * Examples:
- *   git@github.com:cjthompson/claude-mixed-models.git
- *     -> github.com/cjthompson/claude-mixed-models
- *   https://github.com/cjthompson/claude-mixed-models.git
- *     -> github.com/cjthompson/claude-mixed-models
- *   git@github.com:cjthompson/claude-mixed-models
- *     -> github.com/cjthompson/claude-mixed-models
+ *     lib/cli.mjs       argv → validated Action   (pure; no sqlite3)
+ *     lib/handlers.mjs  Action → effect           (one function per command)
+ *     lib/db.mjs        the sqlite3 process layer
+ *
+ * The old flat `switch (cmd)` and its `get`/`all`/`has` argv helpers are gone.
+ * Those helpers `indexOf`'d the whole argv and reported nothing: `get('--title')`
+ * returned the NEXT FLAG when the value was omitted, and an unknown command was
+ * the only thing that ever failed. Every legacy flat name now errors naming its
+ * replacement — `parseArgv` raises it from `RENAMES`, this file only surfaces it.
+ *
+ * Exit codes are returned by handlers, never thrown by `process.exit` mid-write:
+ * setting `process.exitCode` lets Node flush stdout before exiting, which
+ * `process.exit()` does not guarantee when stdout is a pipe. `db init` still
+ * exits 2 on a first-time setup.
  */
-function normalizeProject(raw) {
-    let p = String(raw ?? '').trim();
-    if (!p) return p;
-    p = p.replace(/\.git$/, '');
-    p = p.replace(/^git@([^:]+):/, '$1/');
-    p = p.replace(/^https?:\/\//, '');
-    p = p.replace(/\/$/, '');
-    return p;
+
+import { CliError, parseArgv } from '../lib/cli.mjs';
+import { DbError } from '../lib/db.mjs';
+import { HANDLERS } from '../lib/handlers.mjs';
+
+/** @returns {number} the process exit code */
+function main() {
+    const action = parseArgv(process.argv.slice(2));
+
+    // A bare `task-db`, a group with no leaf (`task deps`), or an explicit
+    // --help are all requests for usage rather than failures.
+    if (action.kind === 'help') {
+        process.stdout.write(`${action.usage}\n`);
+        return 0;
+    }
+
+    const handler = HANDLERS[action.handler];
+    if (!handler) {
+        throw new CliError(
+            `ERROR: internal: no handler named '${action.handler}' for '${action.command}'.`,
+        );
+    }
+    return handler(action) ?? 0;
 }
 
-switch (cmd) {
-    case 'init': {
-        // Check before creating — exit 2 if this is a first-time setup
-        const existing = sql("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks';");
-        const firstTime = existing === '';
-
-        sql(`CREATE TABLE IF NOT EXISTS tasks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            type TEXT NOT NULL CHECK(type IN('fix','task','todo')),
-            title TEXT NOT NULL,
-            priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN('high','medium','low')),
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','in_progress','completed','cancelled')),
-            tags TEXT DEFAULT '[]',
-            reqs TEXT DEFAULT '[]',
-            depends_on TEXT DEFAULT '[]',
-            created TEXT NOT NULL,
-            updated TEXT,
-            in_changelog INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(project,seq)
-        );`);
-
-        // Migrate: add columns introduced after initial schema
-        const cols = sql("PRAGMA table_info(tasks);");
-        if (!cols.includes('feedback')) {
-            sql("ALTER TABLE tasks ADD COLUMN feedback TEXT;");
-        }
-        if (!cols.includes('completed_at')) {
-            sql("ALTER TABLE tasks ADD COLUMN completed_at TEXT;");
-        }
-
-        process.exit(firstTime ? 2 : 0);
-        break;
-    }
-
-    case 'insert': {
-        const p       = esc(normalizeProject(get('--project')));
-        const type    = get('--type');
-        const title   = esc(get('--title'));
-        const priority = get('--priority') ?? 'medium';
-        const tags    = esc(JSON.stringify(all('--tag')));
-        const reqs    = esc(JSON.stringify(all('--req')));
-        const deps    = esc(JSON.stringify(all('--dep').map(Number)));
-        const created = esc(get('--created') ?? now());
-
-        const result = sql(`
-            INSERT INTO tasks(project,seq,type,title,priority,tags,reqs,depends_on,created)
-            VALUES('${p}',(SELECT COALESCE(MAX(seq),0)+1 FROM tasks WHERE project='${p}'),'${type}','${title}','${priority}','${tags}','${reqs}','${deps}','${created}');
-            SELECT printf('#%03d',seq) FROM tasks WHERE id=last_insert_rowid();
-        `);
-        process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'update': {
-        const p    = esc(normalizeProject(get('--project')));
-        const seq  = get('--seq');
-        const sets = [];
-
-        // Simple scalar fields
-        const status      = get('--status');
-        const priority    = get('--priority');
-        const type        = get('--type');
-        const title       = get('--title');
-        const createdAt   = get('--created');
-        const completedAt = get('--completed-at');
-        const feedback    = get('--feedback');
-
-        // JSON array fields (repeatable flags)
-        const tagVals = all('--tag');
-        const reqVals = all('--req');
-        const depVals = all('--dep');
-
-        if (status)      sets.push(`status='${esc(status)}'`);
-        if (priority)    sets.push(`priority='${esc(priority)}'`);
-        if (type)        sets.push(`type='${esc(type)}'`);
-        if (title)       sets.push(`title='${esc(title)}'`);
-        if (createdAt)   sets.push(`created='${esc(createdAt)}'`);
-        if (completedAt) sets.push(`completed_at='${esc(completedAt)}'`);
-        if (feedback)    sets.push(`feedback='${esc(feedback)}'`);
-        if (tagVals.length > 0) sets.push(`tags='${esc(JSON.stringify(tagVals))}'`);
-        if (reqVals.length > 0) sets.push(`reqs='${esc(JSON.stringify(reqVals))}'`);
-        if (depVals.length > 0) sets.push(`depends_on='${esc(JSON.stringify(depVals.map(Number)))}'`);
-
-        sets.push(`updated='${esc(get('--updated') ?? now())}'`);
-        sql(`UPDATE tasks SET ${sets.join(',')} WHERE project='${p}' AND seq=${seq};`);
-        break;
-    }
-
-    case 'get': {
-        const p   = esc(normalizeProject(get('--project')));
-        const seq = get('--seq');
-        const result = sql(
-            `SELECT seq,type,title,priority,tags,reqs,depends_on,status FROM tasks WHERE project='${p}' AND seq=${seq};`,
-            '-json',
-        );
-        process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'list': {
-        const p      = esc(normalizeProject(get('--project')));
-        const status = get('--status');
-        const where  = status ? `AND status='${status}'` : `AND status!='cancelled'`;
-        const result = sql(
-            `SELECT printf('#%03d',seq),type,title,priority,status,tags,depends_on FROM tasks WHERE project='${p}' ${where} ORDER BY seq DESC;`,
-            '-separator "|"',
-        );
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'blocked': {
-        // Returns seq numbers (newline-separated) of pending tasks with incomplete dependencies
-        const p = esc(normalizeProject(get('--project')));
-        const result = sql(`
-            SELECT seq FROM tasks
-            WHERE project='${p}' AND status='pending' AND depends_on!='[]'
-            AND EXISTS (
-                SELECT 1 FROM json_each(depends_on) j
-                JOIN tasks d ON d.project='${p}' AND d.seq=j.value
-                WHERE d.status!='completed'
-            );
-        `);
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'unblocked': {
-        // Returns pipe-separated rows (#NNN|title) of tasks newly unblocked by completing seq N
-        const p   = esc(normalizeProject(get('--project')));
-        const seq = get('--seq');
-        const result = sql(`
-            SELECT printf('#%03d',seq),title FROM tasks
-            WHERE project='${p}' AND status='pending' AND depends_on!='[]'
-            AND EXISTS (SELECT 1 FROM json_each(depends_on) j WHERE j.value=${seq})
-            AND NOT EXISTS (
-                SELECT 1 FROM json_each(depends_on) j
-                JOIN tasks d ON d.project='${p}' AND d.seq=j.value
-                WHERE d.status!='completed'
-            );
-        `, '-separator "|"');
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'check-deps': {
-        // Returns pipe-separated rows (#NNN|title|status) of incomplete dependencies for seq N
-        const p   = esc(normalizeProject(get('--project')));
-        const seq = get('--seq');
-        const result = sql(`
-            SELECT printf('#%03d',seq),title,status FROM tasks
-            WHERE project='${p}'
-            AND seq IN (
-                SELECT j.value FROM tasks t, json_each(t.depends_on) j
-                WHERE t.project='${p}' AND t.seq=${seq}
-            )
-            AND status!='completed';
-        `, '-separator "|"');
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'validate-deps': {
-        // Prints any dep seq numbers that don't exist in the project
-        const p    = esc(normalizeProject(get('--project')));
-        const deps = esc(JSON.stringify(all('--dep').map(Number)));
-        const result = sql(`
-            SELECT j.value FROM json_each('${deps}') j
-            WHERE j.value NOT IN (SELECT seq FROM tasks WHERE project='${p}');
-        `);
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'changelog': {
-        const p      = esc(normalizeProject(get('--project')));
-        const filter = has('--new-only') ? 'AND in_changelog=0' : '';
-        const result = sql(`
-            SELECT seq,substr(updated,1,10),type,title,tags FROM tasks
-            WHERE project='${p}' AND status='completed' ${filter}
-            ORDER BY updated DESC;
-        `, '-separator "|"');
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'mark-changelog': {
-        const p = esc(normalizeProject(get('--project')));
-        if (has('--all')) {
-            sql(`UPDATE tasks SET in_changelog=1 WHERE project='${p}' AND status='completed';`);
-        } else {
-            const seqs = all('--seq');
-            if (seqs.length > 0) {
-                sql(`UPDATE tasks SET in_changelog=1 WHERE project='${p}' AND seq IN (${seqs.join(',')});`);
-            }
-        }
-        break;
-    }
-
-    case 'recent': {
-        const p     = esc(normalizeProject(get('--project')));
-        const limit = get('--limit') ?? '20';
-        const result = sql(`
-            SELECT printf('#%03d',seq),type,title,status FROM tasks
-            WHERE project='${p}' ORDER BY seq DESC LIMIT ${limit};
-        `, '-separator "|"');
-        if (result) process.stdout.write(result + '\n');
-        break;
-    }
-
-    case 'migrate': {
-        // Rewrite legacy/duplicate project identifiers to their normalized form.
-        const distinct = sql(`SELECT DISTINCT project FROM tasks;`, '-separator "\n"');
-        const names = distinct ? distinct.split('\n').filter(Boolean) : [];
-
-        // old -> new (only when they differ)
-        const renames = new Map();
-        for (const oldName of names) {
-            const newName = normalizeProject(oldName);
-            if (newName !== oldName) renames.set(oldName, newName);
-        }
-
-        if (renames.size === 0) {
-            process.stdout.write('No project names needed migration.\n');
-            break;
-        }
-
-        // One UPDATE per distinct (old, new) pair. We renumber seq on the
-        // source rows to start at MAX(new.seq)+1, so the UNIQUE(project,
-        // seq) constraint can't trip on seqs that already exist at the
-        // destination. This handles the common case where the same real
-        // project was logged under two different old names with
-        // overlapping sequence numbers.
-        let totalMoved = 0;
-        for (const [oldName, newName] of renames) {
-            const maxNew = Number(sql(
-                `SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE project='${esc(newName)}';`,
-            )) || 0;
-            // Pull source rows as JSON; sqlite3 -json returns a top-level
-            // array like `[{"id":1,"seq":1}, ...]` which is already valid.
-            const json = sql(
-                `SELECT id, seq FROM tasks WHERE project='${esc(oldName)}' ORDER BY id;`,
-                '-json',
-            );
-            if (!json) continue;
-            const rows = JSON.parse(json);
-            let nextSeq = maxNew + 1;
-            for (const { id } of rows) {
-                sql(`UPDATE tasks SET seq=${nextSeq} WHERE id=${id};`);
-                nextSeq++;
-            }
-            const count = rows.length;
-            sql(`UPDATE tasks SET project='${esc(newName)}' WHERE project='${esc(oldName)}';`);
-            process.stdout.write(`${oldName} -> ${newName}  (${count} row${count === 1 ? '' : 's'})\n`);
-            totalMoved += count;
-        }
-        process.stdout.write(`Migrated ${totalMoved} row${totalMoved === 1 ? '' : 's'} across ${renames.size} project${renames.size === 1 ? '' : 's'}.\n`);
-        break;
-    }
-
-    default: {
-        const commands = 'init|insert|update|get|list|blocked|unblocked|check-deps|validate-deps|changelog|mark-changelog|recent|migrate';
-        process.stderr.write(`Unknown command: ${cmd ?? '(none)'}\nUsage: task-db <${commands}> [options]\n`);
-        process.exit(1);
+try {
+    process.exitCode = main();
+} catch (err) {
+    if (err instanceof CliError || err instanceof DbError) {
+        process.stderr.write(`${err.message}\n`);
+        process.exitCode = err.exitCode;
+    } else {
+        throw err;
     }
 }

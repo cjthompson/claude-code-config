@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.0.69 - 2026-08-26
+
+### Tasks
+- Add project plans, nested task commands, reconciliation, and source-safety guards (#plans, #task-db)
+
+## 2026-08-17
+
+### Fixes
+- preserve verbatim empty plan bodies (#plans, #task-db)
+
+### Tasks
+- add forced lock-timeout rollback regression (#task-db, #testing)
+- refresh project-tasks test and storage documentation (#docs, #task-db)
+- make plan note task references project-qualified with legacy read compatibility (#plans, #task-db)
+
+## 2026-08-16
+
+### Tasks
+- Run the haiku and Opus skill verification loop (#docs)
+- README plans section and 2.0.0 version bump (#docs, #release)
+- plan update lifecycle and cascades (#plans, #task-db)
+
+## 2026-08-13
+
+### Tasks
+- plan create, get, and list handlers (#plans, #task-db)
+
+## 2026-06-12
+
+### Tasks
+- Create tests/ directory structure mirroring plugins and packages (#testing)
+- Create tests/README.md and index.md files for plugins and packages (#testing, #documentation)
+- Create test-results.md files to track test execution results (#testing)
+- Create test scenario files for textual plugin skills (#testing, #textual)
+
+## 2026-03-21
+
+### Tasks
+- Add indicator that installed file hashes match (current) (#installer)
+
 ## v0.0.68 - 2026-08-14
 
 ### Fixes
@@ -16,6 +56,26 @@
 - **plugins/typescript-development**: dropped `.lsp.json` from the structure test's forbidden list (it now has a positive existence assertion) and updated the marketplace registration fixture to include the new `"lsp"` keyword.
 - **plugins/typescript-development**: appended `"lsp"` to the `keywords` arrays in both `.claude-plugin/plugin.json` and `.cursor-plugin/plugin.json` and to the entry in `.claude-plugin/marketplace.json`. README's `typescript-development` section now documents the LSP install requirements and the `$TS_LSP_BIN` override.
 - **plugins/typescript-development**: upgraded the default Node LSP launcher into an LSP-aware TypeScript 7 recovery proxy. It delegates executable discovery to the unchanged Bash control launcher, snapshots open-document/configuration/workspace state, retries five native-server crashes with bounded exponential backoff, reseeds a replacement server, and bounds queued traffic. It keeps stdout protocol-only, writes concise crash evidence to stderr, fails closed for unsupported server-originated operations, and lets Claude Code take over after recovery exhaustion.
+
+## Unreleased - 2026-08-14
+
+### Fixes
+- **project-tasks**: `task update` now performs the plan auto-advance the spec requires — moving a child to `in_progress` promotes its plan `pending → in_progress` in the same transaction. `references/plans.md` instructs the skill never to set a plan's status by hand for this, so nothing was doing it and plans stayed `pending` while their children ran. The update only ever promotes: a `completed` or `cancelled` plan is never dragged backwards by a late child update, a plan-less task is a no-op, and an invocation that also moves the task to another plan promotes the plan it now belongs to. (#plans, #task-db)
+- **project-tasks**: `planDrift` now reports `staged`. `references/plans.md` defines a non-empty drift indicator as "a candidate is staged **or** the linked file no longer matches the applied hash", but only the file half was implemented, so an inline plan holding an unapplied proposal reported `n/a`. Both call sites passed hand-built partial objects rather than rows, so the missing column would have read as `undefined` and kept reporting nothing staged; `pending_hash` is now required to be present and absent throws. `staged` outranks `drifted`, since `plan propose` re-reads the file. (#plans, #task-db)
+- **project-tasks**: removed a raw NUL byte used as an in-band diff sentinel in `plan-sync.mjs`. Runtime behavior was correct — it is stripped before emit — but the byte made the file binary to `grep`, and git's binary heuristic only inspects the first 8000 bytes, so it rendered as text purely by accident of where the constant sat. Now an escaped U+E000, guarded by a test asserting no source file carries a literal control character. (#task-db)
+
+### Tasks
+- **project-tasks**: implemented `plan update` — title, status and tag mutation with the confirmation rules the spec requires. Cancelling needs `--confirm-cancel` even when the plan has no children, and cascades to child tasks by marking them `cancelled` rather than deleting or orphaning them (`plan_id` is `ON DELETE RESTRICT`); already-terminal children are left untouched so their `updated` stays meaningful. Completing with non-terminal children needs `--force-complete`. Every status change writes one `status` note so `plan status` can narrate the transition. (#plans, #task-db)
+- **project-tasks**: split the plan handlers into `lib/plan-read.mjs` (reporting) and `lib/plan-sync.mjs` (reconciliation), leaving `handlers.mjs` to the `db`/`task` commands and the plan CRUD. The integration suite's unimplemented-command roster is now derived from `PLAN_STUBS` rather than hand-listed, so it empties itself as handlers land and cannot silently go stale. (#task-db)
+- **project-tasks**: implemented `plan tasks` (emits `#NNN|project|anchor|type|title|priority|status`, never filters children by repository) and `plan progress` (header with title, source, drift and N/M complete; task table with id, project, step, status, when, commit; deterministic one-paragraph summary; latest note; `--counts` emits `total|pending|in_progress|completed|cancelled|blocked`; both honor `--output-file`). Cross-project child tasks are returned unchanged. (#plans, #task-db)
+- **project-tasks**: implemented `plan status` — prints the stored plan body verbatim, inserting a blockquote status line under each heading whose slugified text matches a task `plan_anchor`, and renders notes carrying that task ref beneath the matching heading; unattributed notes go in a History footer showing the last 10 (configurable via `--limit`) plus an `(N earlier notes)` line. When no heading matches any anchor, the body still prints verbatim and the unmatched anchors are warned to stderr — never silently falling back to a table. (#plans, #task-db)
+- **project-tasks**: implemented the `plan propose` / `plan apply` / `plan discard` staging loop. `propose` re-reads `path` for linked plans and accepts `--content-file` only for inline plans (source-type guard errors match the spec verbatim); exits 3 with a unified diff when the candidate differs, 0 and clears staging when identical, 4 when the path is unreadable; refuses to stage when the candidate would produce a duplicate `plan_anchor`. `apply` promotes `pending_content`/`pending_hash`/`pending_at` into `content`/`content_hash`/`synced_at`, clears staging, and writes an `applied` auto-note with the hash — refusing when nothing is staged. (#plans, #task-db)
+- **project-tasks**: implemented `plan attach` and `plan detach`. `attach` sets `path`, flips `source` to `linked`, stages the file content, and refuses while a different candidate is already pending. `detach` with a matching live hash copies current content in, clears `path`, flips to `inline`, records `origin_path`, and (`--delete-file`) unlinks the file. `detach` with a differing live hash requires `--confirm-source-change` and preserves the live bytes as `pending_content` for reconciliation rather than discarding them; a changed source file is left on disk and `--delete-file` is refused until the pending content is applied or discarded. (#plans, #task-db)
+
+## Unreleased - 2026-08-13
+
+### Tasks
+- **project-tasks**: implemented the four `plan note` handlers — `add`, `list`, `replace`, `delete`. Note ids are allocated as `MAX(id)+1` inside the same `UPDATE` via `json_insert`, never round-tripped through JavaScript, so concurrent writers cannot collide; deleting a note leaves the remaining ids untouched and the next allocation at `MAX+1`. `add --kind` accepts only the writable kinds (`manual`, `tasks-created`, `reconciled`), `replace` preserves the original `ts` and stamps `edited`, and `--force` is required to replace or delete a helper-emitted lifecycle kind. Plan stub count drops 13 → 9. (#plans, #task-db)
 
 ## v0.0.66 - 2026-08-11
 

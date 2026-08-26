@@ -50,7 +50,7 @@ No other packages have automated tests yet.
 | statusline | Automated unit tests (node:test) | Has tests | [index.md](packages/statusline/index.md) |
 | installer | — | No tests yet | [index.md](packages/installer/index.md) |
 | output-styles | — | No tests yet | [index.md](packages/output-styles/index.md) |
-| task-db | — | No tests yet | [index.md](packages/task-db/index.md) |
+| task-db | Automated unit tests (node:test) | Has tests | [index.md](packages/task-db/index.md) |
 
 ## Adding New Tests
 

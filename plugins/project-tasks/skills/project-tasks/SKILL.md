@@ -1,7 +1,7 @@
 ---
 name: project-tasks
-description: Use when the user says "task:", "fix:", "todo:", "log task:", "log fix:", "run task:", "run fix:", or asks to log, run, list, or manage project tasks. Also use when asked to generate or update a changelog from completed tasks.
-TRIGGER when: user message starts with "task:", "fix:", "todo:", "log task:", "log fix:", "run task:", or "run fix:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task #NNN", "run all tasks", "update changelog", or "generate changelog".
+description: Use when the user says "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", "run fix:", or asks to log, run, list, or manage project tasks and plans. Also use when asked to generate or update a changelog from completed tasks.
+TRIGGER when: user message starts with "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", or "run fix:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task #NNN", "run all tasks", "update changelog", or "generate changelog", or on any plan phrasing: "list plans", "show plan PNNN", "run plan PNNN", "update plan PNNN", "close plan PNNN", "cancel plan PNNN".
 DO NOT TRIGGER when: user is asking a general question about tasks/todos unrelated to project management.
 model: haiku
 ---
@@ -23,6 +23,14 @@ This skill supports both Claude Code and Codex.
 Run the setup block at the start of every invocation and use the resulting variables in every command:
 
 ```bash
+# Every example below invokes the helper as `$TASK_DB <command>`, unquoted, and
+# on the fallback path $TASK_DB holds two words ("node /path/to/task-db"). bash
+# splits an unquoted expansion into words; zsh does NOT, and would try to run
+# the whole string as a single command name, failing with
+# "no such file or directory: node /path/to/task-db". This makes zsh behave
+# like bash for that one case. It is not a builtin in bash, hence the guard.
+setopt sh_word_split 2>/dev/null || true
+
 command -v node >/dev/null 2>&1 || echo "ERROR: node is required"
 
 # Resolve how to invoke the helper into $TASK_DB. Use it unquoted: `$TASK_DB <command>`.
@@ -149,6 +157,31 @@ hideListRequested = false
 - User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
 - User asks to "update changelog" or "generate changelog"
 - User says "hide list" — hide the persistent task list without cancelling tasks
+- User says `plan: <description or absolute file path>`, or asks to "list plans", "show plan PNNN", "run plan PNNN", "update plan PNNN", "close plan PNNN", "cancel plan PNNN" — see **Plans** below
+
+## Plans
+
+A **plan** is an epic: one document plus the tasks derived from it. Its body is either stored *inline* in the database or *linked* to a file on disk. Tasks joined to a plan carry a `plan_id` and a `plan_anchor` (a slug of the step heading they came from), so when the document changes the affected tasks can be found again instead of drifting.
+
+**Two ID spaces — do not mix them:**
+
+| ID | Space | Where it is used |
+|----|-------|------------------|
+| `#NNN` | task seq, project-local | `task get/update --seq`, task tables, changelog |
+| `P###` | plan seq, project-local | Everything the **user** types or reads: `plan get/status/update --seq`, plan tables |
+| plain integer | plan **global** id, cross-project | Only `task add`/`task update --plan-id` |
+
+`--plan-id` never takes a `P###` string. Resolve the global numeric `id` from `$TASK_DB plan get --project "..." --seq {plan_seq}` first, then pass that integer. A plan is global on purpose: one plan may own tasks in several repositories, which is why `plan tasks` and `plan progress` print a `project` column and why `--project` on a plan command identifies the plan's owner rather than filtering its children.
+
+**Placeholders in the examples name their space.** `{task_seq}` is a task's `#NNN`, `{plan_seq}` is a plan's `P###`, `{plan_id}` is the global integer from `plan get`, `{note_id}` is a note's id from `plan note list`, `{plan_project}` is the plan's owning project. These are rarely equal; **never copy one into another's slot**. A bare `N` is the seq of whatever command it appears on — a task seq on a `task` command, a plan seq on a `plan` command.
+
+`--seq` accepts either the display form or its bare number — `plan get --seq P002` and `plan get --seq 2` are the same call, as are `task get --seq "#004"` and `task get --seq 4`. So a `P###` or `#NNN` read straight out of any output can be handed back unchanged **to `--seq`**; other integer flags (`--task`, `--dep`, `--id`, `--plan-id`) take bare numbers and reject a prefixed one. Quote `"#004"` in shell, or `#` starts a comment. A display id from the *wrong* space is refused by name, so `plan get --seq "#004"` fails rather than silently resolving to plan 4.
+
+`--plan-id` is the exception: the global id has no display form, so it takes a bare integer only and rejects `P###` outright.
+
+Passing a wrong **bare number** still does not error — every one of these is a valid integer, so the helper finds a real row and acts on the wrong thing. Two ways that goes wrong silently: a task seq in the `--plan-id` slot moves the task to whichever plan carries that global id (it errors only when no plan does), and `plan update --seq --status completed` given a task seq closes an unrelated plan. Both exit 0. Preferring the prefixed display form is the cheapest protection against both.
+
+> **Read `references/plans.md` before ANY plan operation.** Every plan workflow — Import vs Link, `create-tasks`, the propose/apply reconciliation loop, close and cancel confirmations, notes — lives there, along with the confirmation rules that must not be guessed. Do not run a `plan` command from memory.
 
 ## Prerequisites
 
@@ -160,7 +193,7 @@ Run these steps at the start of **every** skill invocation, before any other ope
 
 2. Initialize the database:
 ```bash
-$TASK_DB init
+$TASK_DB db init
 ```
 - Exit code `0` — database already existed, continue normally
 - Exit code `2` — **first-time setup**: database was just created. Show the user this tip:
@@ -322,10 +355,10 @@ When the user provides a task/fix/todo prefix (including `log task:`, `log fix:`
 
    Repeat until accepted.
 
-3. **Insert the task** using `$TASK_DB insert`. Pass each requirement as a separate `--req` flag, each tag as a separate `--tag` flag, each dependency seq number as a separate `--dep` flag. All values are passed as plain strings — no escaping of any kind is needed.
+3. **Insert the task** using `$TASK_DB task add`. Pass each requirement as a separate `--req` flag, each tag as a separate `--tag` flag, each dependency seq number as a separate `--dep` flag. All values are passed as plain strings — no escaping of any kind is needed.
 
 ```bash
-$TASK_DB insert \
+$TASK_DB task add \
   --project "git@github.com:org/repo" \
   --type "fix" \
   --title "Log lines shouldn't exceed one line" \
@@ -339,7 +372,7 @@ The output is the assigned task ID (e.g. `#001`). Report it to the user.
 
    If the task has dependencies, validate they exist:
    ```bash
-   $TASK_DB validate-deps --project "..." --dep 3 --dep 5
+   $TASK_DB task deps validate --project "..." --dep 3 --dep 5
    ```
    If any output is printed, those seq numbers don't exist — warn the user. The task is still logged.
 
@@ -367,7 +400,7 @@ When dispatching a task (via "Run Now", "run task #NNN", or "Auto-Run All"):
 ### Step 0: Check Dependencies
 
 ```bash
-$TASK_DB check-deps --project "..." --seq N
+$TASK_DB task deps check --project "..." --seq N
 ```
 
 If any output is printed, the task is **blocked**. Each line is `#NNN|title|status`. Report to the user and do NOT dispatch:
@@ -380,7 +413,7 @@ If any output is printed, the task is **blocked**. Each line is `#NNN|title|stat
 Before proceeding to isolation strategy, create the TaskList entry so the task is visible in the running tasks table:
 
 ```bash
-$TASK_DB get --project "$PROJECT" --seq N
+$TASK_DB task get --project "$PROJECT" --seq N
 ```
 
 Use the returned `title` and `type` to call `syncTaskToList(N, "pending", type, title)`.
@@ -405,13 +438,15 @@ Present recommendation with brief reasoning. Let user override.
 
 Read the task data:
 ```bash
-$TASK_DB get --project "..." --seq N
+$TASK_DB task get --project "..." --seq N
 ```
 
 Update status to in_progress:
 ```bash
-$TASK_DB update --project "..." --seq N --status in_progress
+$TASK_DB task update --project "..." --seq N --status in_progress
 ```
+
+If the task carries a `plan_id`, this same call promotes its plan from `pending` to `in_progress` — no separate plan command is needed.
 
 The task runs as a **2-stage pipeline**: a Planning Scout (read-only, strong-tier model) produces an Implementation Map, then an Execution Agent (write-capable, fast-tier model) follows it mechanically. Both run as background subagents so the user stays unblocked.
 
@@ -590,24 +625,43 @@ After presenting the choice (a) Accept / b) Retry / c) Retry with most-capable m
 
 **If accepted:**
 
-1. Update task status:
+1. Commit the changes first, so the completion record can cite the commit:
+   `git add -A && git commit -m "{type}: {task title}"`
+
+2. Capture the commit sha and the completion timestamp, then close the task out with both:
+
 ```bash
-$TASK_DB update --project "..." --seq N --status completed
+# Substitute the real values for the examples below:
+#   sha       = git rev-parse HEAD
+#   timestamp = date '+%Y-%m-%d %H:%M'
+$TASK_DB task update --project "..." --seq N --status completed \
+  --completed-at "2026-08-09 14:32" --commit-sha 4f2a9c1
 ```
 
-2. Check if any tasks were unblocked:
+`--completed-at` takes `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `YYYY-MM-DD HH:MM:SS`; `--commit-sha` takes 7–40 hex characters.
+
+Always pass `--completed-at`. The helper stamps `completed_at` itself when a task reaches `completed`, so this is about accuracy rather than presence: the stamp records when the helper was told, which is only the same as when the work finished if you close the task out promptly. Pass the real time whenever they differ. Pass `--commit-sha` **whenever the work produced a commit** — which is every task that reached this step, since the commit happens first. Only a task completed with no commit at all (see "Completing a Task Manually") legitimately omits it. Never pass a sha that is not the commit for *this* task: an unrelated `HEAD` looks authoritative in the changelog and points a future reader at the wrong change.
+
+3. Check if any tasks were unblocked:
 ```bash
-$TASK_DB unblocked --project "..." --seq N
+$TASK_DB task deps unblocked --project "..." --seq N
 ```
 Each output line is `#NNN|title`. If any lines are returned, inform the user:
 `Unblocked: #003 "Create settings modal skeleton" is now ready to run.`
 
-3. Commit the changes: `git add -A && git commit -m "{type}: {task title}"`
+4. **If the task belongs to a plan**, check the plan's remaining work. The `task get` output already carries the plan's `plan_seq` (the string `"P002"`) and `plan_project` — pass both through unchanged; `--seq` accepts the `P###` form, so no stripping is needed and there is no reason to look the plan up again. Pass `plan_project` as `--project`, since a plan may be owned by a different repository than the task. Note both flags below take the PLAN's values, not the task's — the task seq you have been using for the last three steps does not belong in either slot:
+```bash
+$TASK_DB plan progress --project "{plan_project}" --seq {plan_seq} --counts
+```
+The output is `total|pending|in_progress|completed|cancelled|blocked`. Offer to close the plan only when `total` is greater than `0` **and** `pending`, `in_progress` and `blocked` are all `0`. The `total > 0` check matters: a childless plan — or a lookup that hit the wrong plan — also reports all-zero, and without it the mistake produces the close offer instead of an error.
+> All tasks under P00N are complete. Close the plan?
 
-4. Auto-update `CHANGELOG.md` — see Changelog section below.
+Only on an affirmative answer run `$TASK_DB plan update --project "{plan_project}" --seq {plan_seq} --status completed`. If any sibling is still incomplete, say so and do not offer to close. Never pass `--force-complete` here — see `references/plans.md`.
 
-5. Update both TaskList entries to completed: `syncTaskToList({SEQ}, "completed", {type}, {title})`
-6. Re-render the table to show completed status before removal.
+5. Auto-update `CHANGELOG.md` — see Changelog section below.
+
+6. Update both TaskList entries to completed: `syncTaskToList({SEQ}, "completed", {type}, {title})`
+7. Re-render the table to show completed status before removal.
 
 **If retry:**
 
@@ -638,17 +692,17 @@ If no tasks are currently running, confirm: `No running tasks to hide.`
 ## Listing Tasks
 
 ```bash
-$TASK_DB list --project "..."
+$TASK_DB task list --project "..."
 # Filtered:
-$TASK_DB list --project "..." --status pending
+$TASK_DB task list --project "..." --status pending
 ```
 
 Get blocked task seq numbers:
 ```bash
-$TASK_DB blocked --project "..."
+$TASK_DB task deps blocked --project "..."
 ```
 
-Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|priority|status|tags|depends_on`.
+Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|priority|status|tags|depends_on|plan`. The trailing `plan` column is a `P###` display id, empty for tasks that belong to no plan; when the plan belongs to a different project it also carries that project's name.
 
 ```
 | ID   | Type | Title                                    | Priority | Status  | Tags         | Deps       |
@@ -659,17 +713,20 @@ Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|
 
 - Parse `tags` JSON: `["#ui","#layout"]` → `#ui, #layout`. Display `—` if empty.
 - Parse `depends_on` JSON: `[3,5]` → `#003, #005`. Display `—` if empty.
-- If a pending task's seq appears in the `blocked` output, show status as **blocked**.
+- If a pending task's seq appears in the `task deps blocked` output, show status as **blocked**.
 
 ## Completing a Task Manually
 
 ```bash
-$TASK_DB update --project "..." --seq N --status completed
+$TASK_DB task update --project "..." --seq N --status completed \
+  --completed-at "2026-08-09 14:32"
 ```
+
+Substitute the real timestamp from `date '+%Y-%m-%d %H:%M'`. Add `--commit-sha <sha>` when a commit exists for the work.
 
 Check for unblocked tasks:
 ```bash
-$TASK_DB unblocked --project "..." --seq N
+$TASK_DB task deps unblocked --project "..." --seq N
 ```
 
 Then auto-update `CHANGELOG.md`, commit, and confirm to the user.
@@ -677,7 +734,7 @@ Then auto-update `CHANGELOG.md`, commit, and confirm to the user.
 ## Cancelling a Task
 
 ```bash
-$TASK_DB update --project "..." --seq N --status cancelled
+$TASK_DB task update --project "..." --seq N --status cancelled
 ```
 
 Confirm: `Task #NNN cancelled.`
@@ -685,7 +742,7 @@ Confirm: `Task #NNN cancelled.`
 ## Setting Task Priority
 
 ```bash
-$TASK_DB update --project "..." --seq N --priority high
+$TASK_DB task update --project "..." --seq N --priority high
 ```
 
 Confirm: `Task #NNN priority set to {priority}.`
@@ -696,7 +753,7 @@ When user says "check task #NNN":
 
 1. Read the task:
 ```bash
-$TASK_DB get --project "..." --seq N
+$TASK_DB task get --project "..." --seq N
 ```
 
 2. Dispatch a **read-only subagent** per the Sub-agent Dispatch table (Verifier role — strong-tier model, structurally read-only). Extract requirements from the `reqs` JSON array. Pass this prompt:
@@ -774,8 +831,8 @@ When user says "run all tasks":
 
 1. List all pending tasks:
 ```bash
-$TASK_DB list --project "..." --status pending
-$TASK_DB blocked --project "..."
+$TASK_DB task list --project "..." --status pending
+$TASK_DB task deps blocked --project "..."
 ```
 
 2. Present them to the user. Mark blocked tasks. Recommend worktree isolation (multiple tasks = always recommend worktree).
@@ -796,21 +853,21 @@ When user says "update changelog" or "generate changelog", OR automatically afte
 
 **Auto-update** (after each task completion):
 ```bash
-$TASK_DB changelog --project "..." --new-only
+$TASK_DB task changelog list --project "..." --new-only
 ```
 
 After writing entries to `CHANGELOG.md`, mark them:
 ```bash
-$TASK_DB mark-changelog --project "..." --seq 1 --seq 2
+$TASK_DB task changelog mark --project "..." --seq 1 --seq 2
 ```
 
 **Regenerate** (on explicit "generate changelog"):
 ```bash
-$TASK_DB changelog --project "..."
-$TASK_DB mark-changelog --project "..." --all
+$TASK_DB task changelog list --project "..."
+$TASK_DB task changelog mark --project "..." --all
 ```
 
-Each output row is pipe-separated: `seq|date|type|title|tags`.
+Each output row is pipe-separated: `seq|date|type|title|tags|plan`.
 
 Write `CHANGELOG.md` in **this exact format**:
 
@@ -818,6 +875,9 @@ Write `CHANGELOG.md` in **this exact format**:
 # Changelog
 
 ## {YYYY-MM-DD}
+
+### {Plan title} (P00N)
+- {title} ({#tag1, #tag2})
 
 ### Fixes
 - {title} ({#tag1, #tag2})
@@ -831,7 +891,8 @@ Write `CHANGELOG.md` in **this exact format**:
 
 **Format rules:**
 - Group by completion date, newest first
-- Within each date, group by type: **Fixes**, then **Tasks**, then **Todos**
+- Within each date, plan groups come **first** — one `### {Plan title} (P00N)` heading per plan, holding every completed child task regardless of its type. Rows with an empty `plan` column then fall through to the flat type sections below.
+- After the plan groups, group the remaining rows by type: **Fixes**, then **Tasks**, then **Todos**
 - Within each type, newest first
 - Omit empty type sections
 - Parse tags JSON: `["#ui","#layout"]` → `(#ui, #layout)`. No parenthetical if tags is `[]`.
@@ -841,7 +902,7 @@ Write `CHANGELOG.md` in **this exact format**:
 
 When starting a new conversation in a project:
 ```bash
-$TASK_DB recent --project "..."
+$TASK_DB task recent --project "..."
 ```
 
 This helps avoid re-implementing completed work and understand the project trajectory.
@@ -868,3 +929,11 @@ This helps avoid re-implementing completed work and understand the project traje
 | `check task #NNN` | Verify task in codebase (read-only) |
 | `hide list` | Hide persistent task list (running tasks continue) |
 | `update changelog` | Regenerate changelog from completed tasks |
+| `plan: description` | Create an inline plan (`references/plans.md`) |
+| `plan: /abs/path.md` | Create a plan from a file — asks Import or Link |
+| `list plans` | Show all plans with done/total and drift |
+| `show plan PNNN` | Annotated plan body (`plan status`) + progress table |
+| `run plan PNNN` | Dispatch that plan's unblocked pending tasks |
+| `update plan PNNN` | Re-read the source, propose a diff, reconcile tasks |
+| `close plan PNNN` | Mark the plan completed (confirms if children remain) |
+| `cancel plan PNNN` | Cancel the plan; confirms before cascading to children |

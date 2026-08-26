@@ -11,9 +11,9 @@
         {
             "name": "project-tasks",
             "source": "./plugins/project-tasks",
-            "description": "Capture tasks inline with task:/fix:/todo: prefixes, store in SQLite, dispatch to subagents, and auto-generate changelogs.",
-            "version": "1.0.2",
-            "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+            "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
+            "version": "2.0.0",
+            "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
             "category": "development"
         },
         {

@@ -1,21 +1,23 @@
 {
     "name": "project-tasks",
-    "description": "Capture project tasks inline, store them in SQLite, dispatch work, and generate changelogs.",
+    "description": "Capture project tasks inline, store them in SQLite, group work under plans, dispatch work, and generate changelogs.",
     "author": {
         "name": "cjthompson"
     },
     "license": "MIT",
-    "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+    "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
+    "version": "2.0.0",
     "skills": "./skills/",
     "interface": {
         "displayName": "Project Tasks",
-        "shortDescription": "Track tasks, fixes, todos, and changelog entries from chat.",
-        "longDescription": "Project Tasks captures task:, fix:, and todo: requests into a SQLite-backed project task list. It supports dependency tracking, task review, changelog generation, and host-aware helper paths for Claude Code and Codex.",
+        "shortDescription": "Track tasks, fixes, todos, plans, and changelog entries from chat.",
+        "longDescription": "Project Tasks captures task:, fix:, todo:, and plan: requests into a SQLite-backed project task list. A plan is an epic — one document, stored inline or linked to a file on disk, plus the tasks derived from it, which stay reconcilable as the document changes. It supports dependency tracking, task review, changelog generation, and host-aware helper paths for Claude Code and Codex.",
         "developerName": "cjthompson",
         "category": "Development",
         "capabilities": ["Tasks", "Write", "Workflow"],
         "defaultPrompt": [
             "task: add tests for the parser edge cases",
+            "plan: /path/to/docs/plans/2026-01-01-search-rewrite.md",
             "list tasks",
             "update changelog"
         ]

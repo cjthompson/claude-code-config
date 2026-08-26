@@ -1,10 +1,10 @@
 {
     "name": "project-tasks",
-    "description": "Capture tasks inline with task:/fix:/todo: prefixes, store in SQLite, dispatch to subagents, and auto-generate changelogs.",
+    "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
     "author": {
         "name": "cjthompson"
     },
-    "keywords": ["tasks", "changelog", "sqlite", "subagents"],
+    "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
     "license": "MIT",
-    "version": "1.0.2"
+    "version": "2.0.0"
 }

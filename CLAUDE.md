@@ -22,6 +22,8 @@ This repository contains configurable elements for Claude Code, including skills
 
 - **`~/.claude` is off-limits** — Never read or write files directly under `~/.claude/`. Always work in this repository (`docs/`, `plugins/`, `packages/`, etc.).
 
+- **Plans** - always write plan files into `./docs/`
+
 ## Skill Editing Verification
 
 When editing a skill file (`SKILL.md`) that contains a `model:` field in its YAML frontmatter (e.g., `model: haiku`), perform the following verification loop after making changes:

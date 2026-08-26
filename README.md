@@ -18,7 +18,7 @@ The Python and TypeScript development plugins also include Codex manifests and a
 
 | Plugin | Description |
 |--------|-------------|
-| **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, dispatch to subagents, auto-generate changelogs |
+| **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, group them under `plan:` epics, dispatch to subagents, auto-generate changelogs |
 | **lean-agents** | Reduced-toolset sub-agent profiles (`lean-executor`, `standard-executor`, `main`, `full-executor`) that lower System-tools token overhead vs. spawning the default agent; pairs with `project-tasks`, which dispatches by name |
 | **output-styles** | Custom output styles (`Concise`, `Terse`) selectable via `/output-style` |
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
@@ -57,11 +57,23 @@ Custom skills for Claude Code, located in `plugins/<name>/skills/`. Each skill i
 
 ### project-tasks
 
-Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Tasks are stored in a global SQLite database (`~/.claude/tasks.db`) and dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
+Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. `PROJECT_TASKS_HOME` selects the directory containing `tasks.db`. The Claude default is `~/.claude/tasks.db`; the Codex default is `$CODEX_HOME/project-tasks/tasks.db`, falling back to `$HOME/.codex/project-tasks/tasks.db`. Tasks are dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
 
 **Commands:** `task: <desc>`, `fix: <desc>`, `todo: <desc>`, `list tasks`, `run task #N`, `run all tasks`, `update changelog`
 
 **Project identity:** the task list is keyed by a per-project name. Create `.claude/project-tasks.json` at the project root with `{"projectName": "github.com/owner/repo"}` to lock in a stable identifier (recommended — keeps the list consistent across agents, worktrees, and clones). Without it, the skill falls back to the git remote URL or directory basename and prompts you to create the file the first time.
+
+**Plans (v2):** a plan is an epic — one document plus the tasks derived from it. `plan: <description>` writes the document into the database; `plan: /abs/path/to/doc.md` offers to either import the file (and delete it) or link to it, leaving it authoritative on disk.
+
+Plans use the `P###` ID space (for example, `P001`); ordinary tasks use the separate `#NNN` ID space (for example, `#001`).
+
+Tasks created from a plan carry an *anchor*, a slug of the step heading they came from, so the document and the task list stay joined. When the document changes, `plan propose` re-reads it and stages the candidate, printing a diff; `plan apply` commits it or `plan discard` drops it. Staging is what makes review trustworthy — a command that diffed and committed at once could commit a document that changed after you read the diff, so `plan apply` verifies the bytes it promotes still hash to what was reviewed.
+
+`plan status` renders the document annotated with each step's progress; `plan progress` is a standalone report (table plus a short written summary, or `--counts` for a machine-readable line). Plans are global, so a single plan can own tasks in several repositories.
+
+**Commands:** `plan: <desc|path>`, `list plans`, `show plan P00N`, `run plan P00N`, `update plan P00N`, `close plan P00N`, `cancel plan P00N`
+
+> **Upgrading to 2.0:** the `task-db` helper moved from 13 flat commands to a nested surface (`task add`, `task deps blocked`, `plan note add`, …). There are no aliases — every old name errors with a message naming its replacement. The database itself migrates additively in place; no task is renumbered and nothing is rebuilt. Only the skill invokes the helper directly, so this matters only if you scripted against it.
 
 ### orchestration-strategy
 
