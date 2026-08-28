@@ -286,6 +286,11 @@ $TASK_DB plan progress --project "$PROJECT" --seq N --counts
   `--counts` replaces all of that with `total|pending|in_progress|completed|cancelled|blocked`,
   which is the form the accept-flow in `SKILL.md` uses.
 
+That same all-zero-incomplete check can also fire after `task update --clear-plan`
+unlinks a plan's last incomplete child — see "Removing a Task's Plan Link" in
+`SKILL.md`. That is a real completion count, not a bug: it reflects removal, not
+completion, of the unlinked task's work.
+
 For `show plan PNNN`, render `plan status` and follow it with `plan progress`.
 
 ## Running a plan (`run plan PNNN`)
