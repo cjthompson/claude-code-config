@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.71 - 2026-08-27
+
+### Add --clear-plan to task update (unlink a task from its plan) (P001)
+- registry.mjs — add --clear-plan flag + exclusive/atLeastOne rules
+- handlers.mjs — clear plan_id/plan_anchor in taskUpdate
+- SKILL.md — new section, Quick Reference row, When to Use bullet
+- Tests — parser + integration + plan-read cases for --clear-plan
+
 ## v0.0.70 - 2026-08-26
 
 ### Changes
