@@ -61,6 +61,8 @@ Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. `PROJECT_TASKS_H
 
 **Commands:** `task: <desc>`, `fix: <desc>`, `todo: <desc>`, `list tasks`, `run task #N`, `run all tasks`, `update changelog`
 
+**Slash commands (Claude Code only):** `/project-tasks:task-add`, `task-update`, `task-read`, `task-list`, `task-run`, and the `plan-*` equivalents, plus `/project-tasks:menu` for a guided picker with a "More actions" reference of everything else.
+
 **Project identity:** the task list is keyed by a per-project name. Create `.claude/project-tasks.json` at the project root with `{"projectName": "github.com/owner/repo"}` to lock in a stable identifier (recommended — keeps the list consistent across agents, worktrees, and clones). Without it, the skill falls back to the git remote URL or directory basename and prompts you to create the file the first time.
 
 **Plans (v2):** a plan is an epic — one document plus the tasks derived from it. `plan: <description>` writes the document into the database; `plan: /abs/path/to/doc.md` offers to either import the file (and delete it) or link to it, leaving it authoritative on disk.
