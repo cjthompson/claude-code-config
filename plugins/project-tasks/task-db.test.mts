@@ -1035,9 +1035,25 @@ describe('cli — Group D: cross-flag rules', () => {
     );
   });
 
+  it('mutual exclusion throws for --clear-plan with --plan-id or --anchor', () => {
+    match(
+      parseFail(['task', 'update', '--project', 'p', '--seq', '1', '--clear-plan', '--plan-id', '7']).message,
+      /mutually exclusive/i,
+    );
+    match(
+      parseFail(['task', 'update', '--project', 'p', '--seq', '1', '--clear-plan', '--anchor', 'step-one']).message,
+      /mutually exclusive/i,
+    );
+  });
+
   it('atLeastOne rejects a bare update on both update commands', () => {
     match(parseFail(['task', 'update', '--project', 'p', '--seq', '1']).message, /at least one/i);
     match(parseFail(['plan', 'update', '--project', 'p', '--seq', '1']).message, /at least one/i);
+  });
+
+  it('--clear-plan alone satisfies atLeastOne', () => {
+    const action = parseOk(['task', 'update', '--project', 'p', '--seq', '1', '--clear-plan']);
+    strictEqual(action.opts.clearPlan, true);
   });
 
   it('atLeastOne rejects a bare task changelog mark', () => {
@@ -1235,6 +1251,7 @@ describe('cli — Group D: remaining surface coverage', () => {
        '--completed-at', '2026-08-09', '--commit-sha', 'deadbeef', '--feedback', 'f',
        '--plan-id', '7', '--anchor', 'Step 2', '--tag', 't', '--req', 'r', '--dep', '2'],
     ],
+    ['task update clearing the plan link', ['task', 'update', '--project', 'p', '--seq', '1', '--clear-plan']],
     ['task recent with an explicit limit', ['task', 'recent', '--project', 'p', '--limit', '5']],
     ['task deps check', ['task', 'deps', 'check', '--project', 'p', '--seq', '1']],
     ['task deps blocked', ['task', 'deps', 'blocked', '--project', 'p']],

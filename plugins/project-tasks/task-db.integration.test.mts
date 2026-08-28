@@ -620,6 +620,70 @@ describe('task update — plan auto-advance', () => {
     });
 });
 
+describe('task update — clearing the plan link', () => {
+    function planWithChild(home: string) {
+        exec(
+            home,
+            `INSERT INTO plans(project,seq,title,source,status,created)
+              VALUES('proj',1,'Plan','inline','pending','2026-08-14 09:00');
+             INSERT INTO tasks(project,seq,type,title,status,created,plan_id,plan_anchor)
+              VALUES('proj',1,'task','Child','pending','2026-08-14 09:00',
+                     (SELECT id FROM plans WHERE project='proj' AND seq=1),'step-one');`,
+        );
+    }
+    const clearedBoth = (home: string) =>
+        query(home, 'SELECT count(*) FROM tasks WHERE seq=1 AND plan_id IS NULL AND plan_anchor IS NULL;');
+
+    it('clears both plan_id and plan_anchor to NULL', () => {
+        const home = initialized();
+        planWithChild(home);
+        strictEqual(run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan']).code, 0);
+        strictEqual(clearedBoth(home), '1');
+    });
+
+    it('leaves other columns untouched and still advances updated', () => {
+        const home = initialized();
+        planWithChild(home);
+        const before = query(home, 'SELECT updated FROM tasks WHERE seq=1;');
+        run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan']);
+        strictEqual(query(home, 'SELECT status FROM tasks WHERE seq=1;'), 'pending');
+        strictEqual(query(home, 'SELECT title FROM tasks WHERE seq=1;'), 'Child');
+        notStrictEqual(query(home, 'SELECT updated FROM tasks WHERE seq=1;'), before);
+    });
+
+    it('combined with --status in_progress nulls plan_id but leaves the plan alone (auto-advance no-ops)', () => {
+        const home = initialized();
+        planWithChild(home);
+        run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan', '--status', 'in_progress']);
+        strictEqual(clearedBoth(home), '1');
+        strictEqual(query(home, "SELECT status FROM plans WHERE seq=1;"), 'pending');
+    });
+
+    it('combined with --commit-sha nulls the plan columns and sets commit_sha', () => {
+        const home = initialized();
+        planWithChild(home);
+        run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan', '--commit-sha', 'deadbeef']);
+        strictEqual(clearedBoth(home), '1');
+        strictEqual(query(home, 'SELECT commit_sha FROM tasks WHERE seq=1;'), 'deadbeef');
+    });
+
+    it('succeeds (exit 0) on an already plan-less task', () => {
+        const home = initialized();
+        run(home, ['task', 'add', '--project', 'proj', '--type', 'task', '--title', 'Loner']);
+        strictEqual(run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan']).code, 0);
+    });
+
+    it('clearing two different plan-less tasks in sequence does not trip the partial unique index', () => {
+        // idx_tasks_plan_anchor is WHERE plan_anchor IS NOT NULL, so two NULL
+        // anchors from --clear-plan must not collide with each other.
+        const home = initialized();
+        run(home, ['task', 'add', '--project', 'proj', '--type', 'task', '--title', 'One']);
+        run(home, ['task', 'add', '--project', 'proj', '--type', 'task', '--title', 'Two']);
+        strictEqual(run(home, ['task', 'update', '--project', 'proj', '--seq', '1', '--clear-plan']).code, 0);
+        strictEqual(run(home, ['task', 'update', '--project', 'proj', '--seq', '2', '--clear-plan']).code, 0);
+    });
+});
+
 describe('sources are text, not accidentally binary', () => {
     const SOURCES = [
         'lib/cli.mjs', 'lib/db.mjs', 'lib/handlers.mjs', 'lib/normalize.mjs',

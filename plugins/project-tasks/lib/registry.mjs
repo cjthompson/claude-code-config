@@ -108,12 +108,19 @@ export const COMMANDS = {
       // Global numeric id from `plan get`, NOT the P### display sequence.
       '--plan-id': { key: 'planId', type: 'int' },
       '--anchor': { key: 'anchor', type: 'slug' },
+      // Nulls plan_id AND plan_anchor together; unlinks the task without deleting
+      // it or its history. Mutually exclusive with --plan-id/--anchor.
+      '--clear-plan': { key: 'clearPlan', type: 'bool' },
       '--tag': { key: 'tags', type: 'str[]' },
       '--req': { key: 'reqs', type: 'str[]' },
       '--dep': { key: 'deps', type: 'int[]' },
     },
     rules: {
       requires: [{ flag: '--anchor', needs: '--plan-id' }],
+      exclusive: [
+        ['--clear-plan', '--plan-id'],
+        ['--clear-plan', '--anchor'],
+      ],
       // A bare --seq errors rather than writing a no-op timestamp.
       atLeastOne: [
         {
@@ -133,6 +140,7 @@ export const COMMANDS = {
             '--tag',
             '--req',
             '--dep',
+            '--clear-plan',
           ],
         },
       ],

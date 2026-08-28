@@ -252,6 +252,17 @@ describe('plan tasks', () => {
         match(r.err, /no plan P099/);
         strictEqual(r.out, '');
     });
+
+    it('excludes a child cleared with --clear-plan, without touching its siblings', () => {
+        // --clear-plan removes the link, not the work — this confirms the removed
+        // child drops out of `plan tasks` while the other three remain.
+        const home = initialized();
+        spreadPlan(home);
+        run(home, ['task', 'update', '--project', 'testproj', '--seq', '1', '--clear-plan']);
+        const rows = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out.split('\n');
+        strictEqual(rows.length, 3);
+        deepStrictEqual(rows.map((line) => line.split('|')[0]), ['#002', '#003', '#004']);
+    });
 });
 
 // ── plan status ───────────────────────────────────────────────
@@ -616,5 +627,17 @@ describe('plan progress', () => {
         notStrictEqual(counts.code, 0);
         match(counts.err, /no plan P042/);
         strictEqual(counts.out, '', 'a missing plan must not report zero counts as success');
+    });
+
+    it('--counts total decrements when a child is cleared with --clear-plan, not completed', () => {
+        // The removed child is gone, not finished — this is the "plan looks
+        // complete because a task was unlinked" case documented in SKILL.md.
+        const home = initialized();
+        spreadPlan(home);
+        run(home, ['task', 'update', '--project', 'testproj', '--seq', '1', '--clear-plan']);
+        strictEqual(
+            run(home, ['plan', 'progress', '--project', 'testproj', '--seq', '1', '--counts']).out,
+            '3|0|1|1|1|0',
+        );
     });
 });

@@ -252,6 +252,10 @@ function taskUpdate(action) {
     }
     for (const [column, value] of planColumns(o)) sets.push(`${column}=${value}`);
 
+    // The registry's exclusive rule guarantees o.planId/o.anchor are undefined
+    // whenever o.clearPlan is true, so this never collides with planColumns() above.
+    if (o.clearPlan) sets.push('plan_id=NULL', 'plan_anchor=NULL');
+
     if (o.tags !== undefined) sets.push(`tags='${esc(JSON.stringify(o.tags))}'`);
     if (o.reqs !== undefined) sets.push(`reqs='${esc(JSON.stringify(o.reqs))}'`);
     if (o.deps !== undefined) sets.push(`depends_on='${esc(JSON.stringify(o.deps))}'`);

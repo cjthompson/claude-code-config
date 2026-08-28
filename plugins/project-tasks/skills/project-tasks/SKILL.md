@@ -154,7 +154,7 @@ hideListRequested = false
 - User says `log task: <description>` or `log fix: <description>` (log only, no execution prompt)
 - User says `run task: <description>` or `run fix: <description>` (log and run immediately)
 - User asks to "list tasks", "run task #NNN", "run all tasks"
-- User asks to "complete task", "mark completed", "cancel task", "set priority", "check task"
+- User asks to "complete task", "mark completed", "cancel task", "set priority", "check task", "unlink task from its plan", "remove task from plan"
 - User asks to "update changelog" or "generate changelog"
 - User says "hide list" — hide the persistent task list without cancelling tasks
 - User says `plan: <description or absolute file path>`, or asks to "list plans", "show plan PNNN", "run plan PNNN", "update plan PNNN", "close plan PNNN", "cancel plan PNNN" — see **Plans** below
@@ -739,6 +739,42 @@ $TASK_DB task update --project "..." --seq N --status cancelled
 
 Confirm: `Task #NNN cancelled.`
 
+## Removing a Task's Plan Link
+
+1. Read the task first, before clearing — its `plan_seq` and `plan_project` are gone
+   once `--clear-plan` runs, and step 3 below needs both (a plan may be owned by a
+   different repository than the task, so `plan_project` is not interchangeable with
+   the task's own project):
+```bash
+$TASK_DB task get --project "..." --seq N
+```
+
+2. Clear the link:
+```bash
+$TASK_DB task update --project "..." --seq N --clear-plan
+```
+
+Confirm: `Task #NNN is no longer linked to a plan.`
+
+The task, its status, and its history are untouched — only the plan link and anchor
+are cleared. It just drops out of that plan's `plan tasks` / `plan progress` counts,
+and if the plan's source document still contains the step this task came from, the
+next `update plan PNNN` will re-propose it as a new task — unlinking removes the
+task's membership, not the heading from the document.
+
+3. If step 1's `task get` returned a `plan_seq`, re-check that plan now, using the
+   same rule Step 4 of Running a Task uses. Pass the `plan_seq`/`plan_project` from
+   step 1 unchanged (do not look the plan up again):
+```bash
+$TASK_DB plan progress --project "{plan_project}" --seq {plan_seq} --counts
+```
+If this now shows `total` > 0 and `pending`/`in_progress`/`blocked` all `0`, ask:
+
+> P00N now shows all remaining tasks complete because #NNN was unlinked, not finished.
+> Close it if that's accurate, or leave it open?
+
+Only on an affirmative answer run `$TASK_DB plan update --project "{plan_project}" --seq {plan_seq} --status completed` — same as Step 4.
+
 ## Setting Task Priority
 
 ```bash
@@ -925,6 +961,7 @@ This helps avoid re-implementing completed work and understand the project traje
 | `run all tasks` | Execute all pending tasks |
 | `complete task #NNN` | Manually mark completed + update changelog |
 | `cancel task #NNN` | Cancel a pending task |
+| `unlink task #NNN from its plan` | Clear the task's plan link (task and history stay; drops from that plan's progress) |
 | `set priority of #NNN to high` | Change priority |
 | `check task #NNN` | Verify task in codebase (read-only) |
 | `hide list` | Hide persistent task list (running tasks continue) |
