@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.72 - 2026-08-27
+
+### Add --clear-plan to task update (unlink a task from its plan) (P001)
+- references/plans.md — cross-reference plan-completeness side effect
+
 ## v0.0.71 - 2026-08-27
 
 ### Add --clear-plan to task update (unlink a task from its plan) (P001)
