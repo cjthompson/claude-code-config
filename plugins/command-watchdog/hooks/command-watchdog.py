@@ -27,6 +27,13 @@ resolving *this* interpreter's version would pin that resolution for the
 child too, before the child's own `cd`/tool invocations get a chance to
 resolve their own directory-local versions. Using the always-present system
 interpreter sidesteps that entirely.
+
+Diagnostics: shares bash-watchdog.py's toggle — `touch` DEBUG_FLAG and every
+run appends to DEBUG_LOG (same path, so the wrap decision and the watchdog's
+own lifecycle interleave in one chronological file). Covers what's otherwise
+silently swallowed: missing `ps`/`sample` on this machine, a kill signal that
+didn't land, and the exit-code coercion when the child died from a signal
+(negative returncode) rather than exiting normally.
 """
 import os
 import re
@@ -35,10 +42,26 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 IDLE_LIMIT = int(os.environ.get("WATCHDOG_IDLE", "90"))
 POLL = int(os.environ.get("WATCHDOG_POLL", "5"))
 CPU_EPSILON = 0.05  # seconds of CPU advance that counts as "still working"
+DEBUG_FLAG = "/tmp/command-watchdog-debug.on"
+DEBUG_LOG = "/tmp/command-watchdog-debug.log"
+
+
+def debug_log(fields):
+    """Best-effort append; must never raise or interfere with kill/exit logic."""
+    try:
+        if not os.path.exists(DEBUG_FLAG):
+            return
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        line = ts + " " + " ".join("{}={!r}".format(k, v) for k, v in fields.items())
+        with open(DEBUG_LOG, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 cmd = " ".join(sys.argv[1:]).strip()
 if not cmd:
@@ -69,6 +92,7 @@ def group_cpu(pgid):
             ["ps", "-A", "-o", "pid=,pgid=,time="], capture_output=True, text=True
         ).stdout
     except FileNotFoundError:
+        debug_log({"stage": "ps-unavailable"})
         return total, busiest
     for line in out.splitlines():
         parts = line.strip().split(None, 2)
@@ -86,6 +110,7 @@ def group_cpu(pgid):
 
 
 def dump_diagnostics(pgid, busiest):
+    debug_log({"stage": "hang-detected", "pgid": pgid, "busiest": busiest, "idle_limit": IDLE_LIMIT})
     out = "\n\n=== command-watchdog: HANG DETECTED ===\n"
     out += "No output and no CPU progress for {}s (process group {}).\n\n".format(
         IDLE_LIMIT, pgid
@@ -110,6 +135,7 @@ def dump_diagnostics(pgid, busiest):
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             ).stdout
         except FileNotFoundError:
+            debug_log({"stage": "sample-unavailable"})
             sample_out = ""
         out += sample_out[:6000]
     out += "\n=== killing process group {} ===\n".format(pgid)
@@ -125,6 +151,7 @@ proc = subprocess.Popen(
 )
 os.close(w_fd)
 pgid = os.getpgid(proc.pid)
+debug_log({"stage": "cw-start", "cmd": cmd, "idle_limit": IDLE_LIMIT, "poll": POLL, "pid": proc.pid, "pgid": pgid})
 
 lock = threading.Lock()
 last_activity = time.time()
@@ -182,14 +209,14 @@ while True:
     for sig, target in ((signal.SIGTERM, -pgid), (signal.SIGTERM, proc.pid)):
         try:
             os.kill(target, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
+        except (ProcessLookupError, PermissionError) as e:
+            debug_log({"stage": "kill-signal-failed", "sig": "SIGTERM", "target": target, "error": type(e).__name__})
     time.sleep(3)
     for sig, target in ((signal.SIGKILL, -pgid), (signal.SIGKILL, proc.pid)):
         try:
             os.kill(target, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
+        except (ProcessLookupError, PermissionError) as e:
+            debug_log({"stage": "kill-signal-failed", "sig": "SIGKILL", "target": target, "error": type(e).__name__})
     try:
         proc.wait()
     except Exception:
@@ -203,5 +230,8 @@ except OSError:
     pass
 
 if hung:
+    debug_log({"stage": "cw-exit", "hung": True, "proc_returncode": proc.returncode, "exit_code": 124})
     sys.exit(124)
-sys.exit(proc.returncode if proc.returncode is not None and proc.returncode >= 0 else 1)
+exit_code = proc.returncode if proc.returncode is not None and proc.returncode >= 0 else 1
+debug_log({"stage": "cw-exit", "hung": False, "proc_returncode": proc.returncode, "exit_code": exit_code})
+sys.exit(exit_code)

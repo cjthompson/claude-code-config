@@ -5,7 +5,7 @@
     },
     "metadata": {
         "description": "Skills for task management, multi-agent orchestration, sub-agent profiles, output styles, hooks, and language-specific coding guidance.",
-        "version": "1.0.1"
+        "version": "1.0.2"
     },
     "plugins": [
         {
@@ -68,7 +68,7 @@
             "name": "command-watchdog",
             "source": "./plugins/command-watchdog",
             "description": "Idle-hang watchdog for Bash commands matching configurable patterns (rspec, fresheyes.sh) — kills them when output and CPU both go flat, with rtk fallback for everything else.",
-            "version": "1.0.1",
+            "version": "1.0.2",
             "keywords": ["hooks", "bash", "watchdog", "idle-detection"],
             "category": "development"
         },

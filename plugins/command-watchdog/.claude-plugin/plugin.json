@@ -5,5 +5,6 @@
         "name": "cjthompson"
     },
     "keywords": ["hooks", "bash", "watchdog", "idle-detection", "rspec"],
-    "license": "MIT"
+    "license": "MIT",
+    "version": "1.0.2"
 }
