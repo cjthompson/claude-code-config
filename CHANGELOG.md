@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-07
+
+### Add
+- project-tasks: new `/project-tasks:init` slash command that initializes the database (`$TASK_DB db init`) and loads the `project-tasks` skill.
+
 ## v0.0.72 - 2026-08-27
 
 ### Add --clear-plan to task update (unlink a task from its plan) (P001)
