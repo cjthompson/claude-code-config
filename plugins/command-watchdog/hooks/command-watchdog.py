@@ -14,11 +14,32 @@ Detection model:
   timer alive, while a true deadlock/IO-wait (silent AND cpu-flat) trips fast.
 
 This handles the IDLE case. A CPU-bound infinite loop (busy but stuck) is NOT
-idle, so it is intentionally left to the OUTER Bash-tool `timeout` ceiling.
+idle by this definition — CPU keeps advancing — so it is caught instead by
+WATCHDOG_MAX_RUNTIME below, a hard wall-clock cap applied regardless of
+activity. Leave it unset (default) for commands with legitimate long
+runtimes (test suites, builds); set it short for calls that should always be
+near-instant (e.g. a hook's own rewrite-decision step), where any runtime
+past the cap is itself the bug, not real work.
+
+A third, independent trigger: orphan detection. This process records its
+ppid at startup; every poll (≤1s) it re-checks os.getppid(). If that value
+changes, our original parent (whatever invoked this script — Claude Code's
+own process, or the PreToolUse hook process for the rtk-decision sub-call)
+has exited and we've been reparented (to launchd/init or a subreaper). That
+parent is never coming back to read our output or care about our result, so
+there is no reason to wait out IDLE_LIMIT or MAX_RUNTIME — the child process
+group is killed immediately. This is what actually bounds a CPU-bound spin
+loop left running by a crashed/killed parent (e.g. a force-quit Claude Code
+session): MAX_RUNTIME is disabled by default for long-running commands and
+IDLE_LIMIT never trips on a busy loop, so without this check an orphaned
+spin loop would burn 100% CPU indefinitely, exactly as observed in the
+incident that prompted this file.
 
 Env overrides:
-  WATCHDOG_IDLE  idle window in seconds (default 90)
-  WATCHDOG_POLL  CPU sampling interval in seconds (default 5)
+  WATCHDOG_IDLE         idle window in seconds (default 90)
+  WATCHDOG_POLL         CPU sampling interval in seconds (default 5)
+  WATCHDOG_MAX_RUNTIME  hard wall-clock cap in seconds, kills regardless of
+                        output/CPU activity (default 0 = disabled)
 
 Invoked via /usr/bin/python3 (the system interpreter), deliberately bypassing
 any `mise`/`pyenv`/etc. shim: this process's env (PATH, GEM_HOME, ...) is
@@ -46,7 +67,9 @@ from datetime import datetime, timezone
 
 IDLE_LIMIT = int(os.environ.get("WATCHDOG_IDLE", "90"))
 POLL = int(os.environ.get("WATCHDOG_POLL", "5"))
+MAX_RUNTIME = int(os.environ.get("WATCHDOG_MAX_RUNTIME", "0"))  # 0 = disabled
 CPU_EPSILON = 0.05  # seconds of CPU advance that counts as "still working"
+PARENT_PID = os.getppid()  # captured before our own parent can possibly exit
 DEBUG_FLAG = "/tmp/command-watchdog-debug.on"
 DEBUG_LOG = "/tmp/command-watchdog-debug.log"
 
@@ -109,12 +132,24 @@ def group_cpu(pgid):
     return total, busiest
 
 
-def dump_diagnostics(pgid, busiest):
-    debug_log({"stage": "hang-detected", "pgid": pgid, "busiest": busiest, "idle_limit": IDLE_LIMIT})
-    out = "\n\n=== command-watchdog: HANG DETECTED ===\n"
-    out += "No output and no CPU progress for {}s (process group {}).\n\n".format(
-        IDLE_LIMIT, pgid
-    )
+def dump_diagnostics(pgid, busiest, reason):
+    debug_log({
+        "stage": "hang-detected", "pgid": pgid, "busiest": busiest, "reason": reason,
+        "idle_limit": IDLE_LIMIT, "max_runtime": MAX_RUNTIME,
+    })
+    out = "\n\n=== command-watchdog: HANG DETECTED ({}) ===\n".format(reason)
+    if reason == "orphaned":
+        out += "Parent process (pid {}) exited — we've been reparented to pid {}; killing rather than waiting it out (process group {}).\n\n".format(
+            PARENT_PID, os.getppid(), pgid
+        )
+    elif reason == "max-runtime":
+        out += "Hard wall-clock cap of {}s reached regardless of activity (process group {}).\n\n".format(
+            MAX_RUNTIME, pgid
+        )
+    else:
+        out += "No output and no CPU progress for {}s (process group {}).\n\n".format(
+            IDLE_LIMIT, pgid
+        )
     out += "Process group tree:\n"
     try:
         ps_out = subprocess.run(
@@ -177,6 +212,7 @@ reader_thread.start()
 hung = False
 last_cpu = 0.0
 last_cpu_check = time.time()
+start_time = time.time()
 
 while True:
     returncode = proc.poll()
@@ -196,12 +232,19 @@ while True:
 
     with lock:
         idle = now - last_activity
-    if idle < IDLE_LIMIT:
+
+    if os.getppid() != PARENT_PID:
+        reason = "orphaned"
+    elif MAX_RUNTIME and (now - start_time) >= MAX_RUNTIME:
+        reason = "max-runtime"
+    elif idle >= IDLE_LIMIT:
+        reason = "idle"
+    else:
         continue
 
     hung = True
     _, busiest = group_cpu(pgid)
-    dump_diagnostics(pgid, busiest)
+    dump_diagnostics(pgid, busiest, reason)
     # Signal the whole group via a negative pid (killpg-equivalent). Ignore
     # ProcessLookupError (already gone) and PermissionError (a group member we
     # can't signal); the KILL escalation and the direct-pid fallback cover
