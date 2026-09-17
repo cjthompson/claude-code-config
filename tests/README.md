@@ -42,6 +42,7 @@ No other packages have automated tests yet.
 | rust-coding | Scenario-based | No tests yet | [index.md](plugins/rust-coding/index.md) |
 | textual | Scenario-based (reference skill) | No tests yet | [index.md](plugins/textual/index.md) |
 | deep-planning | Scenario-based | No tests yet | [index.md](plugins/deep-planning/index.md) |
+| output-styles | — | No tests yet | [index.md](packages/output-styles/index.md) |
 
 ## Packages
 
@@ -49,7 +50,6 @@ No other packages have automated tests yet.
 |---------|-----------|--------|-------|
 | statusline | Automated unit tests (node:test) | Has tests | [index.md](packages/statusline/index.md) |
 | installer | — | No tests yet | [index.md](packages/installer/index.md) |
-| output-styles | — | No tests yet | [index.md](packages/output-styles/index.md) |
 | task-db | Automated unit tests (node:test) | Has tests | [index.md](packages/task-db/index.md) |
 
 ## Adding New Tests

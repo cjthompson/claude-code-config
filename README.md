@@ -20,7 +20,7 @@ The Python and TypeScript development plugins also include Codex manifests and a
 |--------|-------------|
 | **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, group them under `plan:` epics, dispatch to subagents, auto-generate changelogs |
 | **lean-agents** | Reduced-toolset sub-agent profiles (`lean-executor`, `standard-executor`, `main`, `full-executor`) that lower System-tools token overhead vs. spawning the default agent; pairs with `project-tasks`, which dispatches by name |
-| **output-styles** | Custom output styles (`Concise`, `Terse`) selectable via `/output-style` |
+| **output-styles** | Custom output styles (`output-styles:Concise`, `output-styles:Terse`) selectable via `/output-style` |
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
@@ -119,12 +119,30 @@ To add a pattern, edit `plugins/command-watchdog/hooks/watchdog-patterns.txt` �
 
 ## Output Styles
 
-Custom Claude Code output styles, installed into `~/.claude/output-styles/` and selectable via `/output-style`. Located in `plugins/output-styles/`. Install via the TUI installer or `npm run install-package output-styles`.
+Custom Claude Code output styles, located in `plugins/output-styles/`. They ship with the `output-styles` **plugin** — installing it via the [Plugin Marketplace](#plugin-marketplace) is all that's needed. There is no package install step, and nothing is copied into `~/.claude/output-styles/`.
 
-| Style | Description |
-|-------|-------------|
-| **Concise** | Terse one-or-two-sentence answers; action lists are captured as tasks rather than buried in prose |
-| **Terse** | Headline-and-bullet answers with all process narration stripped; every reply reporting work closes with a `Result` status block; detail loads only on request |
+Because they are plugin-provided, the style names are **namespaced with the plugin name**. The prefix is required — a bare `Terse` matches no style, and Claude Code does not report an error when a configured style name fails to resolve; it silently falls back to default behavior.
+
+| Style | Name to use | Description |
+|-------|-------------|-------------|
+| Concise | `output-styles:Concise` | Terse one-or-two-sentence answers; action lists are captured as tasks rather than buried in prose |
+| Terse | `output-styles:Terse` | Headline-and-bullet answers with all process narration stripped; every reply reporting work closes with a `Result` status block; detail loads only on request |
+
+Select one for the current project:
+
+```
+/output-style output-styles:Terse
+```
+
+That writes to the project's `.claude/settings.local.json`. To change the **user-level** default instead, edit `~/.claude/settings.json` by hand — `/output-style` and `/config` always write project-local, and there is no scope flag:
+
+```json
+{
+  "outputStyle": "output-styles:Terse"
+}
+```
+
+Run `/output-style` with no argument to list the available styles; the configured value must match one of the listed names exactly.
 
 ## Statusline
 
