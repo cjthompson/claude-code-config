@@ -299,12 +299,10 @@ test("discovery derives plugin ids and marketplace source from the manifest", as
     assert.equal(styles.marketplaceName, MARKETPLACE);
 
     // Regression: source was once built from repoRoot's basename, which in a git
-    // worktree is the branch name — printing a repo that does not exist.
+    // worktree is the branch name — printing a repo that does not exist. The exact
+    // equality below is the guard; do not add a "does not contain the basename"
+    // assertion, which inverts in the real checkout whose basename IS the repo name.
     assert.equal(styles.marketplaceSource, "cjthompson/claude-code-config");
-    assert.ok(
-        !styles.marketplaceSource.includes(ROOT.split("/").pop()),
-        "marketplace source must not leak the checkout directory name",
-    );
 
     assert.equal(styles.items.length, 1, "a plugin is one atomic item");
     const [item] = styles.items;
