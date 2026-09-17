@@ -1,39 +1,61 @@
 # Test: Changelog Generation from Completed Tasks
 
-## Setup
+## Isolated database setup
 
-The following files exist in the project root:
+Create and export a unique task store before running `commands/init.md` or any
+helper command:
 
-**CLAUDE.md**
-```markdown
-# Claude Monitor
-
-A terminal multiplexer monitor built with Ink (React for CLI).
-
-## Commands
-- `npm run dev` — start in development mode
-- `npm run build` — compile TypeScript
-- `npm run test` — run test suite
+```bash
+TEST_PROJECT_TASKS_HOME=$(mktemp -d "${TMPDIR:-/tmp}/project-tasks-changelog.XXXXXX")
+export PROJECT_TASKS_HOME="$TEST_PROJECT_TASKS_HOME"
 ```
 
-**README.md**
-```markdown
-# claude-monitor
-Real-time terminal multiplexer monitor. Displays pane output, handles scrolling, and supports keyboard shortcuts.
+Then run the canonical initialization in `commands/init.md`; its database
+initialization must use this exported temporary store.
+
+Clean up only the exact directory returned by `mktemp` after the scenario. The
+test must never use the default Claude/Codex task store, create `tasks.db` in the
+worktree, invoke `sqlite3`, construct SQL, or inspect the database file.
+
+Use project identifier `claude-monitor`. Seed the fixture exclusively through
+the helper:
+
+```bash
+$TASK_DB task add --project "claude-monitor" --type fix \
+  --title "Log lines should never exceed one line" --priority high \
+  --tag "#ui" --req "Replace line breaks" --req "Trim whitespace" \
+  --created "2026-03-04 14:30"
+$TASK_DB task update --project "claude-monitor" --seq "#001" \
+  --status completed --completed-at "2026-03-04 14:45"
+
+$TASK_DB task add --project "claude-monitor" --type task \
+  --title "Add keyboard shortcut to pause all panes" --priority medium \
+  --tag "#keybindings" --tag "#ux" --req "Bind p key to toggle pause" \
+  --req "Show PAUSED indicator" --created "2026-03-04 14:35"
+$TASK_DB task update --project "claude-monitor" --seq "#002" \
+  --status completed --completed-at "2026-03-04 15:10"
+
+$TASK_DB task add --project "claude-monitor" --type todo \
+  --title "Investigate memory leak in long-running sessions" --priority low \
+  --tag "#performance" --req "Profile heap usage" \
+  --req "Identify uncollected objects" --created "2026-03-04 15:30"
+
+$TASK_DB task add --project "claude-monitor" --type fix \
+  --title "Pane resize causes content to overlap" --priority high \
+  --tag "#ui" --tag "#layout" --req "Fix resize handler" \
+  --created "2026-03-03 09:00"
+$TASK_DB task update --project "claude-monitor" --seq "#004" \
+  --status completed --completed-at "2026-03-03 09:45"
+
+$TASK_DB task add --project "claude-monitor" --type task \
+  --title "Write integration tests for PaneManager" --priority medium \
+  --tag "#testing" --req "Add integration tests" \
+  --created "2026-03-03 10:00"
+$TASK_DB task update --project "claude-monitor" --seq "#005" \
+  --status completed --completed-at "2026-03-03 11:30"
 ```
 
-The database `~/.claude/tasks.db` contains these rows for this project:
-
-```sql
-INSERT INTO tasks(project,seq,type,title,priority,status,tags,reqs,created,updated,in_changelog) VALUES
-('claude-monitor',1,'fix','Log lines should never exceed one line','high','completed','["#ui"]','["Replace line breaks","Trim whitespace"]','2026-03-04 14:30','2026-03-04 14:45',0),
-('claude-monitor',2,'task','Add keyboard shortcut to pause all panes','medium','completed','["#keybindings","#ux"]','["Bind p key to toggle pause","Show PAUSED indicator"]','2026-03-04 14:35','2026-03-04 15:10',0),
-('claude-monitor',3,'todo','Investigate memory leak in long-running sessions','low','pending','["#performance"]','["Profile heap usage","Identify un-GCd objects"]','2026-03-04 15:30',NULL,0),
-('claude-monitor',4,'fix','Pane resize causes content to overlap','high','completed','["#ui","#layout"]','["Fix resize handler"]','2026-03-03 09:00','2026-03-03 09:45',0),
-('claude-monitor',5,'task','Write integration tests for PaneManager','medium','completed','["#testing"]','["Add integration tests"]','2026-03-03 10:00','2026-03-03 11:30',0);
-```
-
-**CHANGELOG.md** does NOT exist yet (first changelog generation).
+`CHANGELOG.md` does not exist before the scenario.
 
 ## Scenario
 
@@ -41,13 +63,16 @@ The user says:
 
 > Generate the changelog
 
-## Expected Behavior
+## Expected behavior
 
-1. The skill queries all completed tasks (`status='completed'`) from the database, ordered by completion date descending.
+1. The skill runs:
 
-2. The skill creates `CHANGELOG.md` at the project root.
+   ```bash
+   $TASK_DB task changelog list --project "claude-monitor"
+   ```
 
-3. The full expected output of `CHANGELOG.md` is:
+2. It creates `CHANGELOG.md` with exactly:
+
    ```markdown
    # Changelog
 
@@ -68,60 +93,68 @@ The user says:
    - Write integration tests for PaneManager (#testing)
    ```
 
-4. Pending tasks (like "Investigate memory leak") are NOT included.
+3. The pending todo is excluded.
+4. After successfully writing the file, the skill marks the returned completed
+   tasks through the helper:
 
-5. After writing the changelog, the skill updates `in_changelog=1` for all completed tasks.
+   ```bash
+   $TASK_DB task changelog mark --project "claude-monitor" --all
+   ```
 
-6. The tasks table rows are not otherwise modified during changelog generation.
+5. Task status, requirements, tags, titles, and completion timestamps are not
+   otherwise modified.
 
-## Failure Criteria
+## Failure criteria
 
-- **FAIL** if `CHANGELOG.md` is not created at the project root.
-- **FAIL** if the file does not start with `# Changelog`.
-- **FAIL** if completed tasks are not grouped by completion date.
-- **FAIL** if dates are not sorted newest first.
-- **FAIL** if tasks within a date are not grouped under the correct type heading (`### Fixes`, `### Tasks`, `### Todos`).
-- **FAIL** if the type prefix (e.g., `fix:`) appears in the bullet point title.
-- **FAIL** if tags are missing from entries that have tags.
-- **FAIL** if tags JSON is not parsed correctly (e.g. raw `["#ui"]` instead of `(#ui)`).
-- **FAIL** if a pending task appears in the changelog.
-- **FAIL** if `in_changelog` is not set to `1` after writing.
-- **FAIL** if the type section ordering within a date is not Fixes, Tasks, Todos.
+- **FAIL** if the isolated `PROJECT_TASKS_HOME` is not established before any
+  helper command.
+- **FAIL** if the default Claude/Codex task store or a repository-local database
+  is used.
+- **FAIL** if the skill invokes `sqlite3`, constructs SQL, or reads `tasks.db`.
+- **FAIL** if full regeneration omits completed tasks, includes pending tasks,
+  or fails to call `task changelog mark --all` after writing.
+- **FAIL** if the changelog differs from the expected headings, ordering,
+  titles, or tag formatting.
+- **FAIL** if unrelated task fields change.
 
 ---
 
-## Variant: Auto-Update After Task Completion
+## Variant: Auto-update after task completion
 
-### Setup (Variant)
+### Setup
 
-**CHANGELOG.md** already exists with previous entries:
-```markdown
-# Changelog
+Use a fresh isolated store with the same helper-created fixture. Mark the older
+tasks as already written:
 
-## 2026-03-03
-
-### Fixes
-- Pane resize causes content to overlap (#ui, #layout)
-
-### Tasks
-- Write integration tests for PaneManager (#testing)
+```bash
+$TASK_DB task changelog mark --project "claude-monitor" --seq 4 --seq 5
 ```
 
-The tasks from 2026-03-03 have `in_changelog=1`. The tasks from 2026-03-04 have `in_changelog=0`.
+Create the existing `CHANGELOG.md` containing only the 2026-03-03 section.
 
-### Scenario (Variant)
+### Scenario
 
 A task completes and the skill auto-updates the changelog.
 
-### Expected Behavior (Variant)
+### Expected behavior
 
-1. The skill queries only `WHERE in_changelog=0 AND status='completed'` — it does NOT re-read all completed tasks.
-2. The new date section (`## 2026-03-04`) is added above the existing `## 2026-03-03` section.
-3. The existing `## 2026-03-03` section remains unchanged.
-4. After writing, `in_changelog` is set to `1` for the newly added tasks.
+1. The skill requests only new entries:
 
-### Failure Criteria (Variant)
+   ```bash
+   $TASK_DB task changelog list --project "claude-monitor" --new-only
+   ```
 
-- **FAIL** if the skill queries all completed tasks instead of only `in_changelog=0`.
-- **FAIL** if the existing `## 2026-03-03` section is duplicated or modified.
-- **FAIL** if `in_changelog` is not updated for the newly written tasks.
+2. It prepends the 2026-03-04 section without changing or duplicating the
+   existing 2026-03-03 section.
+3. After successfully writing the new entries, it marks only their sequences:
+
+   ```bash
+   $TASK_DB task changelog mark --project "claude-monitor" --seq 1 --seq 2
+   ```
+
+### Failure criteria
+
+- **FAIL** if auto-update omits `--new-only`.
+- **FAIL** if the existing section is duplicated or modified.
+- **FAIL** if the newly written sequences are not marked through the helper.
+- **FAIL** if already-written or pending task sequences are marked as new.

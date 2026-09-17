@@ -4,8 +4,8 @@
  *
  * Ships in the plugin's bin/ directory. On Claude Code that dir is added to the
  * Bash tool's PATH (invoked as the bare command `task-db`); other hosts (e.g.
- * Codex) run it via `node <path-to-bin/task-db>`. Set PROJECT_TASKS_HOME (or
- * CODEX_HOME) to choose the DB location; defaults to ~/.claude.
+ * Codex) run it via `node <path-to-bin/task-db>`. Set PROJECT_TASKS_HOME to
+ * override the agent-neutral, platform-native database location.
  *
  * All SQL is handled internally. Callers pass plain string arguments; no shell
  * escaping is needed on the caller side.

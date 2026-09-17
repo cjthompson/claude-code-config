@@ -28,8 +28,8 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, posix, win32 } from 'node:path';
 
 /**
  * A user-facing failure raised below the parser.
@@ -89,19 +89,46 @@ function formatBusyTimeout(timeoutMs) {
 const homeCache = new Map();
 
 /**
+ * Resolve the agent-neutral directory containing the project-tasks database.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   platform?: NodeJS.Platform,
+ *   home?: string,
+ * }} [options]
+ * @returns {string}
+ */
+export function resolveProjectTasksHome({
+    env = process.env,
+    platform = process.platform,
+    home = homedir(),
+} = {}) {
+    if (env.PROJECT_TASKS_HOME) return env.PROJECT_TASKS_HOME;
+
+    if (platform === 'win32') {
+        const dataHome = env.LOCALAPPDATA || env.APPDATA || win32.join(home, 'AppData', 'Local');
+        return win32.join(dataHome, 'project-tasks');
+    }
+    if (platform === 'darwin') {
+        return posix.join(home, 'Library', 'Application Support', 'project-tasks');
+    }
+
+    const dataHome = env.XDG_DATA_HOME || posix.join(home, '.local', 'share');
+    return posix.join(dataHome, 'project-tasks');
+}
+
+/**
  * Resolve the database path from the environment.
  *
  * Read per call rather than frozen at import, so a test can point the module at
  * a temp home without re-importing it. Every real invocation is a fresh process
  * where the value cannot change anyway.
  *
+ * @param {Parameters<typeof resolveProjectTasksHome>[0]} [options]
  * @returns {string}
  */
-export function dbPath() {
-    const home =
-        process.env.PROJECT_TASKS_HOME ??
-        (process.env.CODEX_HOME ? join(process.env.CODEX_HOME, 'project-tasks') : null) ??
-        join(process.env.HOME ?? '', '.claude');
+export function dbPath(options) {
+    const home = resolveProjectTasksHome(options);
     let path = homeCache.get(home);
     if (path === undefined) {
         mkdirSync(home, { recursive: true });

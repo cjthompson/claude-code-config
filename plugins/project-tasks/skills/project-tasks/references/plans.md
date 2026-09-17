@@ -3,7 +3,7 @@
 Read this file before running any `plan` command. It covers creating a plan, turning it into
 tasks, keeping those tasks in step with a changing document, and closing the plan out.
 
-All commands use `$TASK_DB` from the Host Compatibility setup block in `SKILL.md`, and every
+All commands use `$TASK_DB` from `commands/init.md`, and every
 `plan` command needs `--project "$PROJECT"`.
 
 ## The three rules
@@ -14,7 +14,7 @@ All commands use `$TASK_DB` from the Host Compatibility setup block in `SKILL.md
 2. **On refusal, do NOT `plan apply`.** Run `plan discard` so the stale candidate does not
    linger and fire the drift indicator forever.
 3. **`--confirm-cancel`, `--force-complete`, and `--confirm-source-change` are never issued
-   without an affirmative answer to an AskUserQuestion first.** Use the exact prompts below.
+   without an affirmative answer through the host's user-input mechanism first.** Use the exact prompts below.
    Do not pre-emptively add a confirming flag "to save a round trip".
 
 ## ID spaces
@@ -58,7 +58,7 @@ The command prints the new `P###`.
 
 ### From a file path (`plan: /abs/path/to/doc.md`)
 
-**Always ask first.** Present exactly this fork with AskUserQuestion:
+**Always ask first.** Present exactly this fork with the host's user-input mechanism:
 
 > **a) Import** — copy the plan into the database and delete the file from disk. The
 > database becomes the single source of truth; there is nothing left to drift.
@@ -284,11 +284,11 @@ $TASK_DB plan progress --project "$PROJECT" --seq N --counts
 - **`plan progress`** — a header (title, source, drift, `3/7 complete`), a task table
   (ID, project, step, status, when, commit), a one-paragraph summary, and the latest note.
   `--counts` replaces all of that with `total|pending|in_progress|completed|cancelled|blocked`,
-  which is the form the accept-flow in `SKILL.md` uses.
+  which is the form the accept flow in `task-execution.md` uses.
 
 That same all-zero-incomplete check can also fire after `task update --clear-plan`
-unlinks a plan's last incomplete child — see "Removing a Task's Plan Link" in
-`SKILL.md`. That is a real completion count, not a bug: it reflects removal, not
+unlinks a plan's last incomplete child — see "Remove a task's plan link" in
+`task-commands.md`. That is a real completion count, not a bug: it reflects removal, not
 completion, of the unlinked task's work.
 
 For `show plan PNNN`, render `plan status` and follow it with `plan progress`.
@@ -296,8 +296,8 @@ For `show plan PNNN`, render `plan status` and follow it with `plan progress`.
 ## Running a plan (`run plan PNNN`)
 
 List the plan's tasks, filter to `pending` in the current project, drop anything `task deps
-blocked` reports, then dispatch each through the normal **Running a Task** pipeline in
-`SKILL.md`. The first child moved to `in_progress` promotes the plan automatically — never
+blocked` reports, then dispatch each through Preconditions and Start the task in
+`task-execution.md`. The first child moved to `in_progress` promotes the plan automatically — never
 set the plan's status by hand for that.
 
 ```bash

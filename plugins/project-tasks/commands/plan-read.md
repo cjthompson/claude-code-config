@@ -4,8 +4,9 @@ description: Show one plan's record and its tasks
 
 Parse `$ARGUMENTS` as a plan seq (`PNNN` or bare `N`).
 
-Run the project-tasks skill's host-compatibility setup block to resolve
-`$TASK_DB`, then both:
+If this invocation has not already completed `commands/init.md`, run it now to
+resolve `$TASK_DB` and `$PROJECT`. Otherwise, reuse those resolved values. Then
+run both:
 
 ```bash
 $TASK_DB plan get --project "<current project>" --seq <seq>

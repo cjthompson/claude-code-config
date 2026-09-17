@@ -7,7 +7,98 @@
  */
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert/strict';
+import { tmpdir } from 'node:os';
 import { normalizeProject, slugify } from './lib/normalize.mjs';
+import * as database from './lib/db.mjs';
+
+// ── lib/db.mjs — platform-native storage ──
+
+function resolveProjectTasksHome(options: {
+  env: Record<string, string | undefined>;
+  platform: string;
+  home: string;
+}): string | undefined {
+  const resolver = Reflect.get(database, 'resolveProjectTasksHome');
+  return typeof resolver === 'function' ? resolver(options) : undefined;
+}
+
+describe('resolveProjectTasksHome', () => {
+  it('preserves PROJECT_TASKS_HOME as the cross-platform override', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: { PROJECT_TASKS_HOME: '/custom/task-store' },
+      platform: 'darwin',
+      home: '/Users/tester',
+    }), '/custom/task-store');
+  });
+
+  it('treats an empty PROJECT_TASKS_HOME as unset', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: { PROJECT_TASKS_HOME: '' },
+      platform: 'darwin',
+      home: '/Users/tester',
+    }), '/Users/tester/Library/Application Support/project-tasks');
+  });
+
+  it('uses Application Support on macOS and ignores agent-specific homes', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: { CODEX_HOME: '/Users/tester/.codex' },
+      platform: 'darwin',
+      home: '/Users/tester',
+    }), '/Users/tester/Library/Application Support/project-tasks');
+  });
+
+  it('uses XDG_DATA_HOME on Linux', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: { XDG_DATA_HOME: '/data/tester' },
+      platform: 'linux',
+      home: '/home/tester',
+    }), '/data/tester/project-tasks');
+  });
+
+  it('falls back to ~/.local/share on Linux', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: {},
+      platform: 'linux',
+      home: '/home/tester',
+    }), '/home/tester/.local/share/project-tasks');
+  });
+
+  it('uses LOCALAPPDATA on Windows', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: {
+        LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local',
+        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+      },
+      platform: 'win32',
+      home: 'C:\\Users\\tester',
+    }), 'C:\\Users\\tester\\AppData\\Local\\project-tasks');
+  });
+
+  it('falls back to APPDATA when LOCALAPPDATA is unavailable on Windows', () => {
+    strictEqual(resolveProjectTasksHome({
+      env: { APPDATA: 'C:\\Users\\tester\\AppData\\Roaming' },
+      platform: 'win32',
+      home: 'C:\\Users\\tester',
+    }), 'C:\\Users\\tester\\AppData\\Roaming\\project-tasks');
+  });
+
+  it('uses the platform resolver when constructing the live database path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'project-tasks-path-'));
+    const previousHome = process.env.PROJECT_TASKS_HOME;
+    process.env.PROJECT_TASKS_HOME = join(root, 'ignored-process-home');
+    try {
+      strictEqual(database.dbPath({
+        env: { PROJECT_TASKS_HOME: join(root, 'resolved-home') },
+        platform: 'linux',
+        home: '/home/tester',
+      }), join(root, 'resolved-home', 'tasks.db'));
+    } finally {
+      if (previousHome === undefined) delete process.env.PROJECT_TASKS_HOME;
+      else process.env.PROJECT_TASKS_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 // ── lib/normalize.mjs ─────────────────────────────────────────
 
@@ -183,7 +274,7 @@ describe('normalize', () => {
 // as their `it` bodies execute. node:test runs declarations in order, so the
 // ledger is complete by the time C reads it. Do not reorder these blocks.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { deepStrictEqual, match, notStrictEqual } from 'node:assert/strict';
 import { parseArgv, CliError } from './lib/cli.mjs';

@@ -1,28 +1,23 @@
-# Test: Task Logging to SQLite
+# Test: Task Logging through task-db
 
-## Setup
+## Isolated database setup
 
-The following files exist in the project root:
+Create and export a unique task store before running `commands/init.md` or any
+helper command:
 
-**CLAUDE.md**
-```markdown
-# Claude Monitor
-
-A terminal multiplexer monitor built with Ink (React for CLI).
-
-## Commands
-- `npm run dev` — start in development mode
-- `npm run build` — compile TypeScript
-- `npm run test` — run test suite
+```bash
+TEST_PROJECT_TASKS_HOME=$(mktemp -d "${TMPDIR:-/tmp}/project-tasks-log.XXXXXX")
+export PROJECT_TASKS_HOME="$TEST_PROJECT_TASKS_HOME"
 ```
 
-**README.md**
-```markdown
-# claude-monitor
-Real-time terminal multiplexer monitor. Displays pane output, handles scrolling, and supports keyboard shortcuts.
-```
+Then run the canonical initialization in `commands/init.md`; its database
+initialization must use this exported temporary store.
 
-The database `~/.claude/tasks.db` has no existing rows for this project.
+Clean up only the exact directory returned by `mktemp` after the scenario. The
+test must never use the default Claude/Codex task store, create `tasks.db` in the
+worktree, invoke `sqlite3`, construct SQL, or inspect the database file.
+
+Use project identifier `claude-monitor`.
 
 ## Scenario
 
@@ -30,75 +25,85 @@ The user says:
 
 > fix: Log lines should never exceed one line
 
-## Expected Behavior
+## Expected behavior
 
-1. The skill runs the prerequisite steps: checks `sqlite3` availability, runs `CREATE TABLE IF NOT EXISTS`, and determines the project identifier.
+1. Isolation is established before initialization or task commands.
+2. The skill interprets at least one concrete requirement and adds the task
+   through the helper, equivalent to:
 
-2. A new row is inserted into the `tasks` table with:
-   - `type` = `fix`
-   - `title` = `Log lines should never exceed one line`
-   - `priority` = `high` (fix prefix defaults to high)
-   - `status` = `pending`
-   - `tags` = `[]`
-   - `reqs` = a JSON array with at least one concrete requirement string
-   - `created` = current date/time in `YYYY-MM-DD HH:MM` format
-   - `seq` = `1` (first task in this project)
-
-3. The INSERT and SELECT are combined in a single `sqlite3` invocation to retrieve the assigned ID via `last_insert_rowid()`.
-
-4. The skill reports the assigned ID (`#001`) to the user.
-
-5. The skill presents a tri-modal choice:
+   ```bash
+   $TASK_DB task add --project "claude-monitor" --type fix \
+     --title "Log lines should never exceed one line" --priority high \
+     --req "Replace line breaks with spaces and trim surrounding whitespace"
    ```
+
+3. The helper returns `#001`, which the skill reports to the user.
+4. `$TASK_DB task get --project "claude-monitor" --seq "#001"` shows:
+   - `type`: `fix`
+   - `title`: `Log lines should never exceed one line`
+   - `priority`: `high`
+   - `status`: `pending`
+   - at least one concrete requirement
+5. The skill presents:
+
+   ```text
    a) Run Now
    b) Log Only
    c) Auto-Run All
    ```
 
-6. If the user selects **b) Log Only**, no subagent is dispatched. The task remains `pending`.
+6. If the user selects Log Only, no subagent is dispatched and the task remains
+   pending.
 
-## Failure Criteria
+## Failure criteria
 
-- **FAIL** if `sqlite3` prerequisite check is skipped.
-- **FAIL** if `CREATE TABLE IF NOT EXISTS` is not run.
-- **FAIL** if the project identifier is not determined before the INSERT.
-- **FAIL** if single quotes in user input are not escaped (doubled) in the SQL.
-- **FAIL** if the INSERT and ID retrieval use separate `sqlite3` invocations (breaks `last_insert_rowid()`).
+- **FAIL** if `PROJECT_TASKS_HOME` is not redirected to the unique temporary
+  directory before `$TASK_DB db init` or any task command.
+- **FAIL** if the default Claude/Codex task store or a repository-local database
+  is used.
+- **FAIL** if the skill invokes `sqlite3`, constructs SQL, or reads `tasks.db`.
+- **FAIL** if the task is not created with `$TASK_DB task add`.
+- **FAIL** if the assigned helper ID is not reported.
 - **FAIL** if `priority` is not `high` for a `fix:` prefix.
-- **FAIL** if `reqs` is empty or not a valid JSON array.
-- **FAIL** if `created` is missing or not in `YYYY-MM-DD HH:MM` format.
-- **FAIL** if the tri-modal choice (`a/b/c`) is not presented after logging.
-- **FAIL** if selecting "Log Only" triggers a subagent dispatch.
+- **FAIL** if the task has no concrete requirement.
+- **FAIL** if the tri-modal choice is not presented.
+- **FAIL** if Log Only dispatches a subagent or changes the pending status.
 
 ---
 
-## Variant: Second Task in Same Project
+## Variant: Second task in a fresh isolated store
 
-### Setup (Variant)
+### Setup
 
-The database already has one row for this project:
+Create a new unique `mktemp` task store, export it before `db init`, and seed the
+first task through the helper, never through SQL:
 
-```sql
-INSERT INTO tasks(project,seq,type,title,priority,status,tags,reqs,created)
-VALUES('claude-monitor',1,'task','Add keyboard shortcut to pause all panes','low','completed','["#keybindings","#ux"]','["Bind p key to toggle pause","Show PAUSED indicator"]','2026-03-03 10:00');
+```bash
+$TASK_DB task add --project "claude-monitor" --type task \
+  --title "Add keyboard shortcut to pause all panes" --priority low \
+  --tag "#keybindings" --tag "#ux" \
+  --req "Bind p key to toggle pause" --req "Show PAUSED indicator"
+$TASK_DB task update --project "claude-monitor" --seq "#001" \
+  --status completed --completed-at "2026-03-03 10:00"
 ```
 
-### Scenario (Variant)
+### Scenario
 
 The user says:
 
 > todo: Add unit tests for the scroll buffer module
 
-### Expected Behavior (Variant)
+### Expected behavior
 
-1. The new task gets `seq` = `2` (auto-incremented from max existing seq).
-2. The `type` is `todo`.
-3. The existing row is not modified.
-4. Since the prefix is `todo:`, the execution choice is **not** presented — the skill simply confirms the todo was logged.
+1. `$TASK_DB task add` returns `#002`.
+2. The new task type is `todo` and its status is `pending`.
+3. Task `#001` remains unchanged.
+4. The skill confirms the todo was logged without presenting an execution
+   choice.
 
-### Failure Criteria (Variant)
+### Failure criteria
 
-- **FAIL** if `seq` is not `2`.
-- **FAIL** if the existing task row is modified in any way.
-- **FAIL** if the heading prefix is not `todo`.
-- **FAIL** if an execution choice is presented for a `todo:` prefix.
+- **FAIL** if the helper does not assign `#002` in the fresh isolated store.
+- **FAIL** if task `#001` is modified.
+- **FAIL** if the new task type is not `todo`.
+- **FAIL** if an execution choice is presented for `todo:`.

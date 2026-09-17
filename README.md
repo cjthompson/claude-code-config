@@ -57,7 +57,7 @@ Custom skills for Claude Code, located in `plugins/<name>/skills/`. Each skill i
 
 ### project-tasks
 
-Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. `PROJECT_TASKS_HOME` selects the directory containing `tasks.db`. The Claude default is `~/.claude/tasks.db`; the Codex default is `$CODEX_HOME/project-tasks/tasks.db`, falling back to `$HOME/.codex/project-tasks/tasks.db`. Tasks are dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
+Capture tasks inline with `task:`, `fix:`, or `todo:` prefixes. Claude and Codex share one agent-neutral database by default: `~/Library/Application Support/project-tasks/tasks.db` on macOS, `${XDG_DATA_HOME:-$HOME/.local/share}/project-tasks/tasks.db` on Linux, and `%LOCALAPPDATA%\project-tasks\tasks.db` on Windows (falling back to `%APPDATA%`). `PROJECT_TASKS_HOME` overrides the directory containing `tasks.db`. On first use, legacy Claude or Codex databases are detected but never migrated without explicit user approval. Any migration must be dry-run and backed up before its applying step; legacy stores remain unchanged until then. Tasks are dispatched to subagents for execution so the lead agent stays available. Completed tasks auto-update `CHANGELOG.md`.
 
 **Commands:** `task: <desc>`, `fix: <desc>`, `todo: <desc>`, `list tasks`, `run task #N`, `run all tasks`, `update changelog`
 

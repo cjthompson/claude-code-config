@@ -1,125 +1,180 @@
 # Test: Project Identifier Discovery
 
-The skill derives a `$PROJECT` string that keys into the SQLite task list. The discovery algorithm in the Prerequisites section (step 3) has three tiers:
+The canonical algorithm is `commands/init.md` under **Resolve the project
+identifier**. It resolves `$PROJECT` in four ordered steps:
 
-1. Walk up from cwd looking for `.claude/project-tasks.json`. If found, use its `projectName`.
-2. Otherwise, use `git remote get-url origin` (with `.git` stripped).
-3. Otherwise, use `basename` of the git toplevel.
+1. Walk from cwd through the Git-root boundary (or filesystem root outside
+   Git). At each level, check
+   `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json`,
+   `.codex/project-tasks.json`, and `.claude/project-tasks.json`; use the first
+   nonempty `projectName`.
+2. Otherwise normalize `git remote get-url origin` to `host/owner/repo`.
+3. Otherwise, only inside a Git repository, use the Git top-level basename.
+4. Otherwise prompt for a project name and offer to create the config.
 
-If all three tiers return empty, the skill must prompt the user.
+The walk checks the boundary directory itself, then stops. It must not adopt a
+config from a directory above the current Git repository.
+
+For any scenario that proceeds to a task command, create and export the
+isolated store before running `commands/init.md` or any helper command:
+
+```bash
+TEST_PROJECT_TASKS_HOME=$(mktemp -d "${TMPDIR:-/tmp}/project-tasks-discovery.XXXXXX")
+export PROJECT_TASKS_HOME="$TEST_PROJECT_TASKS_HOME"
+```
+
+Then run the canonical initialization in `commands/init.md`; its database
+initialization must use this exported temporary store.
+
+Never use the default Claude/Codex task store or create a database in the
+worktree. Clean up only the exact directory returned by `mktemp`.
 
 ---
 
-## Variant 1: Project with `.claude/project-tasks.json` committed
+## Variant 1: Config at the project root
 
 ### Setup
 
-A git repo with the following committed file at the project root:
+A Git repository contains `.claude/project-tasks.json`:
 
-**`.claude/project-tasks.json`**
 ```json
 {
   "projectName": "github.com/acme/widget"
 }
 ```
 
-The git remote is also set (to a different URL) to verify Tier 1 wins over Tier 2:
+Its origin is deliberately different:
+
 ```bash
 git remote add origin "git@github.com:different/url.git"
 ```
 
-### Scenario
+### Expected behavior
 
-The user issues a `task:` command from the project root. The skill runs the prerequisite `$PROJECT` derivation.
+1. The config walk finds the file at the Git root.
+2. `$PROJECT` is `github.com/acme/widget`.
+3. The origin fallback is not used and onboarding is not shown.
 
-### Expected Behavior
+### Failure criteria
 
-1. The walk-up loop finds `.claude/project-tasks.json` at the project root.
-2. `PROJECT` is set to `github.com/acme/widget` (the file's value, NOT the git remote URL).
-3. The Tier 2 fallback is NOT used.
-4. No onboarding prompt is shown.
-
-### Failure Criteria
-
-- **FAIL** if `$PROJECT` is the git remote URL (Tier 2) instead of the file's `projectName`.
-- **FAIL** if the walk-up loop errors out and falls through without finding the file.
-- **FAIL** if the file is found but the JSON is not parsed (e.g. `node -e` errors are not redirected to `/dev/null`).
-- **FAIL** if `$PROJECT` is empty when the file exists with a valid `projectName`.
+- **FAIL** if the origin wins over the nonempty configured `projectName`.
+- **FAIL** if a valid config is ignored or `$PROJECT` remains empty.
 
 ---
 
-## Variant 2: Nested subdirectory, file at project root
+## Variant 2: Host-selected config directory in a nested checkout path
 
 ### Setup
 
-Same as Variant 1, but the user is in a nested subdirectory:
-```
-/project-root/.claude/project-tasks.json
-/project-root/packages/inner/   ← cwd
-```
+The cwd is `/project-root/packages/inner`. The Git root contains
+`$PROJECT_TASKS_CONFIG_DIR/project-tasks.json`; for a Codex-host example,
+`PROJECT_TASKS_CONFIG_DIR=.codex`.
 
-### Scenario
+### Expected behavior
 
-The user issues a `task:` command from `packages/inner/`.
+1. The walk checks the cwd and each parent through `/project-root`.
+2. It checks the host-selected path plus `.codex` and `.claude` at each level.
+3. It uses the Git-root file's nonempty `projectName`.
 
-### Expected Behavior
+### Failure criteria
 
-1. The walk-up loop checks `/project-root/packages/inner/.claude/project-tasks.json` (not found), then `/project-root/packages/.claude/project-tasks.json` (not found), then `/project-root/.claude/project-tasks.json` (found).
-2. `PROJECT` is set to `github.com/acme/widget`.
-
-### Failure Criteria
-
-- **FAIL** if the walk-up only checks the cwd and not parent directories.
-- **FAIL** if the walk-up stops at the first directory without checking for the file.
+- **FAIL** if only the cwd is checked.
+- **FAIL** if `.codex` or the host-selected config directory is ignored.
+- **FAIL** if the Git root itself is not checked.
 
 ---
 
-## Variant 3: Project without `.claude/project-tasks.json`, but with a git remote
+## Variant 3: No config, origin available
 
 ### Setup
 
-A git repo with a remote but no `.claude/project-tasks.json` file at any level.
+A Git repository has no project config and origin
+`git@github.com:acme/widget.git`.
 
-### Scenario
+### Expected behavior
 
-The user issues a `task:` command.
+1. The bounded config walk finds nothing.
+2. `$PROJECT` becomes `github.com/acme/widget` after SSH-prefix and trailing
+   `.git` normalization.
+3. The basename and onboarding fallbacks are not used.
 
-### Expected Behavior
+### Failure criteria
 
-1. The walk-up loop runs without finding a `.claude/project-tasks.json` file.
-2. Tier 2 fires: `PROJECT` is set to the git remote URL with `.git` stripped.
-3. No onboarding prompt is shown (Tier 2 succeeded).
-
-### Failure Criteria
-
-- **FAIL** if Tier 2 doesn't strip the `.git` suffix from the URL.
-- **FAIL** if the walk-up doesn't terminate and reaches `/` without success.
-- **FAIL** if the onboarding prompt is shown when Tier 2 would have succeeded.
+- **FAIL** if the normalized key retains the SSH prefix, `.git`, or a trailing
+  slash.
+- **FAIL** if onboarding is shown despite a usable origin.
 
 ---
 
-## Variant 4: No project file, no git remote — onboarding prompt
+## Variant 4: No config or origin, but inside Git
 
 ### Setup
 
-A directory with no `.claude/project-tasks.json` anywhere in the tree, AND no git repo (so `git remote get-url origin` and `git rev-parse --show-toplevel` both fail).
+The Git top-level directory is `/work/widget`, with no project config and no
+origin.
 
-### Scenario
+### Expected behavior
 
-The user issues a `task:` command.
+`$PROJECT` becomes `widget`. This basename fallback is allowed only because a
+Git top-level directory exists.
 
-### Expected Behavior
+### Failure criteria
 
-1. All three tiers return empty.
-2. The skill uses AskUserQuestion to prompt the user for a project name.
-3. After the user picks a name and chooses to create the file, the skill writes `.claude/project-tasks.json` at the project toplevel (or, in a no-git scenario, at a sensible location — e.g. cwd's `.claude/`).
-4. The user's chosen name is used as `$PROJECT` for the rest of the session.
-5. The skill does NOT silently fall back to a directory basename and proceed — that would re-introduce the fragmentation problem this mechanism exists to prevent.
+- **FAIL** if the Git-root basename is not used.
+- **FAIL** if an arbitrary cwd basename is used instead.
 
-### Failure Criteria
+---
 
-- **FAIL** if the skill uses a directory basename silently when all three tiers fail (the original behavior — explicitly disallowed).
-- **FAIL** if no prompt is shown and `$PROJECT` is empty for the rest of the session.
-- **FAIL** if the prompt doesn't offer to create the file.
-- **FAIL** if the file is created with malformed JSON.
-- **FAIL** if `node` is invoked to read the file but errors are not suppressed (a missing/malformed file should not abort the whole walk-up).
+## Variant 5: Outside Git with no config
+
+### Setup
+
+The cwd is not inside a Git repository and no project config is found through
+the filesystem-root boundary.
+
+### Expected behavior
+
+1. The first three resolution steps return empty.
+2. The skill prompts through the current host's user-input mechanism.
+3. It offers exactly:
+
+   ```text
+   a) Yes, create and stage for commit
+   b) Yes, create but don't commit
+   c) No, use the name for this session
+   ```
+
+4. For (a) or (b), it writes valid JSON under
+   `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` at the cwd. It stages only
+   that file for (a) and never commits automatically.
+5. It uses the chosen name for the session.
+
+### Failure criteria
+
+- **FAIL** if an arbitrary directory basename is silently selected.
+- **FAIL** if no project name is requested.
+- **FAIL** if the creation choices differ or the resulting JSON is invalid.
+- **FAIL** if the file is committed automatically.
+
+---
+
+## Variant 6: Parent config above the Git-root boundary
+
+### Setup
+
+`/parent/.claude/project-tasks.json` names `wrong-parent`, while
+`/parent/child-repo` is a Git root with no config and origin
+`git@github.com:acme/child.git`. The cwd is
+`/parent/child-repo/packages/inner`.
+
+### Expected behavior
+
+1. The config walk checks through `/parent/child-repo` and stops.
+2. It does not read `/parent/.claude/project-tasks.json`.
+3. `$PROJECT` resolves from the child repository origin as
+   `github.com/acme/child`.
+
+### Failure criteria
+
+- **FAIL** if the walk crosses the Git-root boundary.
+- **FAIL** if `$PROJECT` becomes `wrong-parent`.

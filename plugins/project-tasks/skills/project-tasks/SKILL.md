@@ -1,976 +1,188 @@
 ---
 name: project-tasks
-description: Use when the user says "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", "run fix:", or asks to log, run, list, or manage project tasks and plans. Also use when asked to generate or update a changelog from completed tasks.
-TRIGGER when: user message starts with "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", or "run fix:" (these are definitive triggers — always invoke this skill). Also trigger when user says "list tasks", "run task #NNN", "run all tasks", "update changelog", or "generate changelog", or on any plan phrasing: "list plans", "show plan PNNN", "run plan PNNN", "update plan PNNN", "close plan PNNN", "cancel plan PNNN".
-DO NOT TRIGGER when: user is asking a general question about tasks/todos unrelated to project management.
+description: Use when the user says "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", or "run fix:", or asks to log, run, list, check, complete, cancel, or prioritize project tasks; manage project plans; or generate a changelog from completed tasks.
+TRIGGER when: user message starts with "task:", "fix:", "todo:", "plan:", "log task:", "log fix:", "run task:", or "run fix:". Also trigger for task/plan listing, execution, checking, completion, cancellation, priority, plan-link, and changelog requests.
+DO NOT TRIGGER when: user is asking a general question about tasks or todos unrelated to project management.
 model: haiku
 ---
 
 # Project Tasks
 
-## Overview
+## Purpose
 
-Capture small tasks and fixes to a SQLite database and execute them cheaply via minimal-context subagents when the host exposes subagent tools. Auto-generate `CHANGELOG.md` from completed work.
+Store project tasks and plans through the bundled `task-db` helper, execute
+tasks through background agents, validate results before destructive retries,
+and generate `CHANGELOG.md` entries from completed work.
 
-**Core principle:** The lead agent is always available. Every task — even a single one — is dispatched to a subagent so the user can keep issuing commands.
+The lead agent remains available while task workers run. Never perform task
+database operations with `sqlite3` or by reading the database file directly.
 
-> **IMPORTANT:** All database operations MUST use the resolved helper command `$TASK_DB <command>`. Do NOT call sqlite3 directly — ever. The helper script handles all SQL internally.
+## Required routing
 
-## Host Compatibility
+Read only the references needed for the current request:
 
-This skill supports both Claude Code and Codex.
+| Request | Required reference |
+|---|---|
+| Every invocation | [commands/init.md](../../commands/init.md) |
+| Create/list/update/check/complete/cancel/prioritize a task, or generate changelog | [references/task-commands.md](references/task-commands.md) |
+| Run all tasks | [references/task-commands.md](references/task-commands.md) and [references/task-execution.md](references/task-execution.md) |
+| Run one task, dispatch Scout/Executor, accept work, or handle worker failure | [references/task-execution.md](references/task-execution.md) |
+| Validate, repair, restart, clarify, reject, cancel, or recover an executing task | [references/validation-flow.md](references/validation-flow.md) |
+| Run a plan | [references/plans.md](references/plans.md) and [references/task-execution.md](references/task-execution.md) |
+| Any plan operation | [references/plans.md](references/plans.md) |
 
-Run the setup block at the start of every invocation and use the resulting variables in every command:
+For a completion decision after a worker returns, read both
+`task-execution.md` and `validation-flow.md`. References are one level deep;
+do not look for another workflow file through a reference.
 
-```bash
-# Every example below invokes the helper as `$TASK_DB <command>`, unquoted, and
-# on the fallback path $TASK_DB holds two words ("node /path/to/task-db"). bash
-# splits an unquoted expansion into words; zsh does NOT, and would try to run
-# the whole string as a single command name, failing with
-# "no such file or directory: node /path/to/task-db". This makes zsh behave
-# like bash for that one case. It is not a builtin in bash, hence the guard.
-setopt sh_word_split 2>/dev/null || true
+## Core invariants
 
-command -v node >/dev/null 2>&1 || echo "ERROR: node is required"
+1. Use `$TASK_DB <command>` for every database operation. Never invoke
+   `sqlite3`, construct SQL, delete `tasks.db`, or read the database file.
+2. Quote task display IDs in shell commands: `--seq "#004"`. Plan display IDs
+   use `P###`; a plan's global numeric `id` is used only by `--plan-id`.
+3. A write-capable worker never commits. Acceptance stages only proven
+   task-owned paths and commits after the user confirms.
+4. Validation and checking are read-only. They do not change files, the index,
+   task status, requirements, or completion metadata.
+5. Repair keeps the current implementation. Restart discards task-owned work
+   only after explicit confirmation. Neither action uses broad
+   `git checkout .`, `git reset --hard`, `git clean`, or `git add -A`.
+6. Do not dispatch, accept, repair, restart, or clean up while another callback
+   is active for the same task. Ignore callbacks whose generation or dispatch
+   identity is stale.
+7. If path ownership, branch/worktree identity, or the baseline cannot be
+   proven, leave work unchanged and ask the user how to proceed.
+8. Nested agents are selected by capability and tier, never by a provider name.
 
-# Resolve how to invoke the helper into $TASK_DB. Use it unquoted: `$TASK_DB <command>`.
-#
-# Fast path — Claude Code adds the plugin's bin/ directory to the Bash tool's
-# PATH while the plugin is enabled, so the helper is callable as `task-db`.
-# Fallback — other hosts (e.g. Codex) or TUI-installer setups: locate the
-# bundled helper file and run it via `node <path>`.
-if command -v task-db >/dev/null 2>&1; then
-  TASK_DB="task-db"
-else
-  HELPER="${PROJECT_TASKS_DB_HELPER:-}"
-  if [ -z "$HELPER" ]; then
-    for candidate in \
-      "plugins/project-tasks/bin/task-db" \
-      "bin/task-db" \
-      "../bin/task-db" \
-      "../../bin/task-db"
-    do
-      if [ -f "$candidate" ]; then
-        HELPER="$candidate"
-        break
-      fi
-    done
-  fi
-  if [ -z "$HELPER" ]; then
-    for root in "$HOME/.claude" "${CODEX_HOME:-$HOME/.codex}"; do
-      [ -d "$root" ] || continue
-      HELPER=$(find "$root" -type f -path "*/project-tasks/bin/task-db" -print -quit 2>/dev/null)
-      [ -n "$HELPER" ] && break
-    done
-  fi
-  # Legacy fallback: copy made by this repo's TUI installer before the bin/ move.
-  if [ -z "$HELPER" ] && [ -f "$HOME/.claude/task-db.mjs" ]; then
-    HELPER="$HOME/.claude/task-db.mjs"
-  fi
-  test -n "$HELPER" || echo "ERROR: task-db helper not found"
-  test -f "$HELPER" || echo "ERROR: task-db helper not found at $HELPER"
-  TASK_DB="node $HELPER"
-fi
+## Agent roles and tiers
 
-IS_CODEX_HOST=0
-if [ -n "$CODEX_HOME" ] || [ -n "$CODEX_SANDBOX" ] || [ -n "$CODEX_THREAD_ID" ] || [ -n "$CODEX_CI" ]; then
-  IS_CODEX_HOST=1
-fi
+| Role | Required capabilities | Default tier |
+|---|---|---|
+| Planning Scout | Read/search/network/worktree; no write, skill, agent, or MCP delegation | Strong |
+| Execution Agent | Read/edit/write/shell/worktree | Fast |
+| Verifier | Read/search/network/worktree; no write, skill, agent, or MCP delegation | User-selected Strong or Top |
 
-if [ -z "$PROJECT_TASKS_HOME" ]; then
-  if [ "$IS_CODEX_HOST" = "1" ]; then
-    PROJECT_TASKS_HOME="${CODEX_HOME:-$HOME/.codex}/project-tasks"
-  else
-    PROJECT_TASKS_HOME="$HOME/.claude"
-  fi
-fi
-export PROJECT_TASKS_HOME
+Resolve `Fast < Strong < Top` through the current host's model roster. Omit the
+`model` parameter when the host cannot select one. The frontmatter
+`model: haiku` controls skill exercise/verification; it does not select nested
+agents.
 
-PROJECT_TASKS_CONFIG_DIR="${PROJECT_TASKS_CONFIG_DIR:-}"
-if [ -z "$PROJECT_TASKS_CONFIG_DIR" ]; then
-  if [ "$IS_CODEX_HOST" = "1" ]; then
-    PROJECT_TASKS_CONFIG_DIR=".codex"
-  else
-    PROJECT_TASKS_CONFIG_DIR=".claude"
-  fi
-fi
-export PROJECT_TASKS_CONFIG_DIR
+When the host's agent roster includes the optional `lean-agents` plugin, use
+the fully qualified `lean-agents:read-only` profile for Planning Scouts and
+Verifiers, and `lean-agents:lean-executor` for Execution Agents. Never try
+those names on a host where they are absent.
+
+Otherwise, use a capability-equivalent host profile. When no structurally
+read-only profile is available, use the host's general subagent and reinforce
+the prompt with:
+
+> You have write tools available only because the read-only profile is not
+> installed. Do not use them. Do not modify files, the index, or task data.
+
+Tell the user when prompt-level enforcement is required:
+
+> Note: this host does not expose a structurally read-only subagent, so
+> read-only enforcement is prompt-level for this dispatch.
+
+## Session state
+
+Maintain one entry per running task:
+
+```text
+runningTasks[seq] = {
+  status: pending | scouting | executing | awaiting_decision | validating |
+          completed | cancelled | failed,
+  executionGeneration,
+  validationTier?: strong | top,
+  validationSnapshot?,
+  repairPassCount: 0 | 1 | 2,
+  originalImplementationMap?,
+  currentImplementationMap?,
+  lastExecutorReport?,
+  scoutStatus,
+  taskListEntryIds: { scout, execute? },
+  activeDispatch?: { generation, stage, id, cancellationRequested? },
+  executionContext?: {
+    isolation: worktree | direct,
+    path, branch, baseCommit, baselineSnapshot,
+    worktreeCreatedByTask?, branchCreatedByTask?,
+    ownedPaths: repository-relative POSIX paths[],
+    recoveryRequired?
+  }
+}
 ```
 
-- On Claude Code the plugin's `bin/` directory is added to the Bash tool's PATH, so `$TASK_DB` resolves to the bare `task-db` command. A legacy `~/.claude/task-db.mjs` copy (from this repo's older TUI installer) remains a last-resort fallback.
-- On Codex (and any host where `bin/` is not on PATH) `$TASK_DB` resolves to `node <path>/project-tasks/bin/task-db`, and the database is stored in `${CODEX_HOME:-$HOME/.codex}/project-tasks/tasks.db`.
-- If subagent, TaskList, or model-selection tools mentioned below are unavailable in the current host, keep the database operations working and tell the user which execution feature is unavailable. Do not invent tool calls.
-
-## Sub-agent Dispatch (capability-based)
-
-This skill dispatches three sub-agent roles. Each role is defined by **required capabilities**, not by a fixed agent name — pick the cheapest profile on the current host that satisfies the row. Model selection is similarly tier-based so the skill works on hosts with different model rosters (Claude, GPT, Composer, etc.):
-
-| Role     | Required tools                                                                 | Model tier                          | Default profile if lean-agents is installed | Fallback profile |
-|----------|--------------------------------------------------------------------------------|-------------------------------------|---------------------------------------------|------------------|
-| Planning Scout | Read, Glob, Grep, Bash, WebFetch, Worktree (Enter/Exit), SendMessage. No Edit, no Write, no Skill, no Agent, no MCP. | **Strong** — produces an Implementation Map from ambiguous requirements; benefits from a higher-tier model but should *avoid* the top tier. | `lean-agents:read-only`                     | `general-purpose` |
-| Execution Agent | Read, Edit, Write, Bash, Worktree (Enter/Exit)                                | **Fast / cheap** — follows a literal map mechanically; a smaller/faster model is the right tradeoff. | `lean-agents:lean-executor`                 | `general-purpose` |
-| Verifier | Read, Glob, Grep, Bash, WebFetch, Worktree (Enter/Exit), SendMessage. No Edit, no Write, no Skill, no Agent, no MCP. | **Strong** — returns Found/Partial/Not Found verdicts; benefits from a higher-tier model but should *avoid* the top tier. | `lean-agents:read-only`                     | `general-purpose` |
-
-- **Default profiles** are part of the optional `lean-agents` plugin (this repo's `plugins/lean-agents/`). When installed, they enforce read-only structurally (no write tools in the scout/verifier profiles) rather than relying on prompt discipline.
-- **Fallback profile** is `general-purpose` on hosts where the lean-agents plugin is not installed. When falling back, the role's read-only contract becomes prompt-level — the dispatch prompt must add an explicit "Do not modify any files" instruction, and the parent should report to the user with this exact phrasing: `Note: read-only enforcement fell back to prompt-level because lean-agents is not installed on this host.`
-- **Model tier selection** is a recommendation, not a hard rule. The parent picks whichever model on the host satisfies the tier:
-  - **Top tier** (reserved for the "Retry with most-capable model" path) — Claude Opus or Fable 5 on Claude Code; GPT-5.6-sol on Codex; Composer 2.5 or Grok 4.6 on Cursor. **Never dispatch the Scout or Verifier at this tier** — the Implementation Map and Found/Not-Found verdicts do not benefit from the additional cost, and a strong-tier model handles them reliably.
-  - **Strong tier** (default for Planning Scout and Verifier) — Claude Sonnet on Claude Code; GPT-5.6-terra on Codex; Grok 4.6 on Cursor, with Composer 2.5 as fallback.
-  - **Fast tier** (default for Execution Agent) — Claude Haiku on Claude Code; GPT-5.6-luna on Codex; Composer 2.5 or GPT-5.6-luna on Cursor.
-  - If the host exposes no model-selection parameter at all, drop the `model:` field and let the host's default carry.
-- **Profiles not listed** (e.g., `lean-agents:standard-executor`, `lean-agents:main`, `lean-agents:full-executor`) are disqualified from scout/verifier dispatch for two reasons:
-  1. **Capability mismatch** — they carry tools that exceed the role's contract: `Skill`, `Agent`, `AskUserQuestion`, `Cron*`, `LSP`, MCP, and (for `standard-executor`/`full-executor`) `WebSearch`. The read-only roles require *exactly* the read/search/network set, no more.
-  2. **Token cost** — the parent's System-tools line scales with the spawned agent's toolset. Spawning `lean-agents:full-executor` (~30–40k tokens) for a scout that needs Read+Glob+Grep+Bash wastes context budget that the parent could spend on the user's actual session.
-  For executor dispatch, these profiles *can* be used (they include Edit/Write) but `lean-agents:lean-executor` is still preferred for the same token-cost reason.
-
-The dispatch blocks further down (Stage 1, Stage 2, Checking a Task) reference this table rather than naming a profile directly, and use a `<tier>` placeholder in the `model:` field where applicable.
-
-## Session State
-
-The following variables are maintained for the persistent task list feature. They reset when this skill session ends (not persisted across sessions).
-
-**`runningTasks`** — Map of SQLite task seq numbers to TaskList metadata:
-```
-runningTasks = Map<seq: number, { taskId: string, status: TaskStatus }>
-```
-
-**`hideListRequested`** — Boolean flag; when true, stop creating new TaskList entries:
-```
-hideListRequested = false
-```
-
-**TaskStatus** — one of: `pending | scouting | executing | completed | failed`
-
-## Rules
-
-- **ALWAYS** use `$TASK_DB <command>` for every database operation.
-- **NEVER** call sqlite3 directly, construct SQL strings, or use heredocs with SQL.
-- **NEVER** reference the SQLite database file directly — let the `task-db` helper manage the path.
-- **NEVER** delete, remove, or recreate `tasks.db`. The database is persistent and contains the user's task history. If the database appears corrupted or you encounter errors, report the problem to the user — do not attempt to fix it by deleting the file.
-
-## When to Use
-
-- User says `task: <description>`, `fix: <description>`, or `todo: <description>`
-- User says `log task: <description>` or `log fix: <description>` (log only, no execution prompt)
-- User says `run task: <description>` or `run fix: <description>` (log and run immediately)
-- User asks to "list tasks", "run task #NNN", "run all tasks"
-- User asks to "complete task", "mark completed", "cancel task", "set priority", "check task", "unlink task from its plan", "remove task from plan"
-- User asks to "update changelog" or "generate changelog"
-- User says "hide list" — hide the persistent task list without cancelling tasks
-- User says `plan: <description or absolute file path>`, or asks to "list plans", "show plan PNNN", "run plan PNNN", "update plan PNNN", "close plan PNNN", "cancel plan PNNN" — see **Plans** below
-
-## Plans
-
-A **plan** is an epic: one document plus the tasks derived from it. Its body is either stored *inline* in the database or *linked* to a file on disk. Tasks joined to a plan carry a `plan_id` and a `plan_anchor` (a slug of the step heading they came from), so when the document changes the affected tasks can be found again instead of drifting.
-
-**Two ID spaces — do not mix them:**
-
-| ID | Space | Where it is used |
-|----|-------|------------------|
-| `#NNN` | task seq, project-local | `task get/update --seq`, task tables, changelog |
-| `P###` | plan seq, project-local | Everything the **user** types or reads: `plan get/status/update --seq`, plan tables |
-| plain integer | plan **global** id, cross-project | Only `task add`/`task update --plan-id` |
-
-`--plan-id` never takes a `P###` string. Resolve the global numeric `id` from `$TASK_DB plan get --project "..." --seq {plan_seq}` first, then pass that integer. A plan is global on purpose: one plan may own tasks in several repositories, which is why `plan tasks` and `plan progress` print a `project` column and why `--project` on a plan command identifies the plan's owner rather than filtering its children.
-
-**Placeholders in the examples name their space.** `{task_seq}` is a task's `#NNN`, `{plan_seq}` is a plan's `P###`, `{plan_id}` is the global integer from `plan get`, `{note_id}` is a note's id from `plan note list`, `{plan_project}` is the plan's owning project. These are rarely equal; **never copy one into another's slot**. A bare `N` is the seq of whatever command it appears on — a task seq on a `task` command, a plan seq on a `plan` command.
-
-`--seq` accepts either the display form or its bare number — `plan get --seq P002` and `plan get --seq 2` are the same call, as are `task get --seq "#004"` and `task get --seq 4`. So a `P###` or `#NNN` read straight out of any output can be handed back unchanged **to `--seq`**; other integer flags (`--task`, `--dep`, `--id`, `--plan-id`) take bare numbers and reject a prefixed one. Quote `"#004"` in shell, or `#` starts a comment. A display id from the *wrong* space is refused by name, so `plan get --seq "#004"` fails rather than silently resolving to plan 4.
-
-`--plan-id` is the exception: the global id has no display form, so it takes a bare integer only and rejects `P###` outright.
-
-Passing a wrong **bare number** still does not error — every one of these is a valid integer, so the helper finds a real row and acts on the wrong thing. Two ways that goes wrong silently: a task seq in the `--plan-id` slot moves the task to whichever plan carries that global id (it errors only when no plan does), and `plan update --seq --status completed` given a task seq closes an unrelated plan. Both exit 0. Preferring the prefixed display form is the cheapest protection against both.
-
-> **Read `references/plans.md` before ANY plan operation.** Every plan workflow — Import vs Link, `create-tasks`, the propose/apply reconciliation loop, close and cancel confirmations, notes — lives there, along with the confirmation rules that must not be guessed. Do not run a `plan` command from memory.
-
-## Prerequisites
-
-**All commands below use `$TASK_DB`. Do not use sqlite3 directly.**
-
-Run these steps at the start of **every** skill invocation, before any other operation:
-
-1. Run the Host Compatibility setup block above. If `node` or the `task-db` helper is unavailable, inform the user and stop.
-
-2. Initialize the database:
-```bash
-$TASK_DB db init
-```
-- Exit code `0` — database already existed, continue normally
-- Exit code `2` — **first-time setup**: database was just created. Show the user this tip:
-  > **First-time setup tip:** To avoid approval prompts for every task-db command, allow the helper invocation in your host's command allowlist if it supports one. On Claude Code add `"Bash(task-db *)"` to `permissions.allow` in `~/.claude/settings.json`; on hosts that run it via node, allow the equivalent `node <path>/bin/task-db *` form.
-
-3. Determine the project identifier:
-```bash
-# Resolve the walk-up boundary first: stop at git toplevel if we're in a
-# git repo, otherwise stop at the filesystem root. This prevents the loop
-# from leaking into a parent's project-tasks.json when the user
-# is in a deeply nested subdirectory of an unrelated project tree.
-WALK_BOUNDARY="/"
-if command -v git >/dev/null 2>&1; then
-  GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
-  if [ -n "$GIT_TOPLEVEL" ]; then
-    WALK_BOUNDARY="$GIT_TOPLEVEL"
-  fi
-fi
-
-# Tier 1: walk up from cwd to WALK_BOUNDARY looking for project-tasks.json
-# Loop logic: keep walking while we have a directory above us. We check
-# $dir itself for the file (so the boundary IS searched), then advance
-# via dirname. If the next dirname would cross the boundary, stop.
-dir=$(pwd)
-PROJECT=""
-while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-  for config_dir in "$PROJECT_TASKS_CONFIG_DIR" ".codex" ".claude"; do
-    if [ -f "$dir/$config_dir/project-tasks.json" ]; then
-      PROJECT=$(node -e "const j=require(process.argv[1]); const v=((j.projectName||'')+'').trim(); process.stdout.write(v)" "$dir/$config_dir/project-tasks.json" 2>/dev/null)
-      [ -n "$PROJECT" ] && break 2
-    fi
-  done
-  # Stop after checking the boundary directory itself
-  if [ "$dir" = "$WALK_BOUNDARY" ]; then break; fi
-  parent=$(dirname "$dir")
-  # If dirname didn't advance (already at root), stop
-  if [ "$parent" = "$dir" ]; then break; fi
-  dir="$parent"
-done
-
-# Tier 2: git remote URL, normalized to host/owner/repo form
-if [ -z "$PROJECT" ]; then
-  RAW_REMOTE=$(git remote get-url origin 2>/dev/null)
-  if [ -n "$RAW_REMOTE" ]; then
-    PROJECT=$(printf '%s' "$RAW_REMOTE" \
-      | sed -E 's#^git@([^:]+):#\1/#; s#^https?://##; s#\.git$##; s#/$##')
-  fi
-fi
-
-# Tier 3: git toplevel basename — fires only when the project IS a git repo.
-# In a no-git directory Tier 3 returns empty and the onboarding prompt
-# takes over; this is the only path that may use a directory basename.
-if [ -z "$PROJECT" ]; then
-  PROJECT=$(git rev-parse --show-toplevel 2>/dev/null | xargs basename 2>/dev/null)
-fi
-```
-Store this value as `$PROJECT` for use in all subsequent commands. The Tier 2 normalization (stripping the `git@host:` SSH prefix, the `https?://` prefix, any trailing `.git`, and any trailing `/`) matches the DB layer's `normalizeProject` function in the `task-db` helper, so SSH/HTTPS/with-or-without-`.git` all collapse to the same key.
-
-   **Onboarding prompt (only if `$PROJECT` is empty after all three tiers):**
-
-   The skill should ask the user to provide a project name and offer to create `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` so future invocations don't repeat this prompt. Use the host's available user-input mechanism.
-
-   > No project task config found in this directory or any parent, and no git remote is configured.
-   >
-   > Without an explicit project name, the task list can fragment across agents and worktrees.
-   >
-   > What name should this project use? (e.g. `github.com/acme/core` or just `acme`)
-
-   Then ask whether to create the file. The destination path is the git toplevel if available, else the cwd:
-
-   ```bash
-   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   ```
-
-   > Create `$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` at `$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR/project-tasks.json` with `{ "projectName": "<name>" }`?
-   >
-   > a) Yes, create and commit (recommended for shared projects)
-   > b) Yes, create but don't commit (for personal config)
-   > c) No, just use the name for this session
-
-   If the user picks (a) or (b), write the file:
-   ```bash
-   mkdir -p "$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR"
-   node -e "require('fs').writeFileSync(process.argv[2], JSON.stringify({projectName: process.argv[1]}, null, 2)+'\n')" "$PROJECT" "$PROJECT_ROOT/$PROJECT_TASKS_CONFIG_DIR/project-tasks.json"
-   ```
-   If the user picked (a), also stage it: `git -C "$PROJECT_ROOT" add "$PROJECT_TASKS_CONFIG_DIR/project-tasks.json"` (do not auto-commit — leave that for the user).
-
-## Persistent Task List Helper
-
-**`syncTaskToList(seq, phase, type, title)`** — Creates or updates TaskList entries for a task's 2-stage pipeline.
-
-**Pipeline structure:** Each task gets TWO TaskList entries:
-- **Scout entry:** Subject `"Scout: #{seq} {title}"`, status tracks scout phase
-- **Execute entry:** Subject `"Execute: #{seq} {title}"`, status tracks executor phase
-
-**Entry lifecycle:**
-| Phase | Scout Entry | Execute Entry |
-|-------|-------------|---------------|
-| pending | `○ pending` | — (not created yet) |
-| scouting | `◼ in_progress` (scouting...) | — |
-| executing | `✓ completed` | `○ pending` |
-| executing | `✓ completed` | `◼ in_progress` (executing...) |
-| completed | `✓ completed` | `✓ completed` |
-
-**Implementation:**
-
-```javascript
-// syncTaskToList(seq, phase, type, title)
-// phase: "pending" | "scouting" | "executing" | "completed" | "failed"
-
-// Scout entry key: "scout-{seq}"
-// Execute entry key: "execute-{seq}"
-
-// On "pending": Create scout entry with subject "Scout: #{seq} {title}", status "pending"
-// On "scouting": Update scout entry to "in_progress" with activeForm "scouting..."
-// On "executing": 
-//   1. Update scout entry to "completed"
-//   2. Create execute entry with subject "Execute: #{seq} {title}", status "pending"
-//   3. Update execute entry to "in_progress" with activeForm "executing..."
-// On "completed": Update execute entry to "completed"
-// On "failed": Update current entry to "failed"
-```
-
-**Never create more than one scout or one execute entry per task seq.**
-
-## Logging a Task
-
-When the user provides a task/fix/todo prefix (including `log task:`, `log fix:`, `run task:`, `run fix:`):
-
-1. **Parse the message** — extract the title (everything after the prefix), tags (any `#word` in the message), dependencies, and infer priority.
-
-   **Dependencies:** If the message contains `(depends on #NNN)` or `(depends on #NNN, #NNN)`, extract the seq numbers and remove the parenthetical from the title. If no dependencies, omit `--dep` flags.
-
-   **Priority:**
-   - `high` — bugs, crashes, data loss, security issues, broken functionality. **`fix:`, `log fix:`, and `run fix:` prefixes default to `high`.**
-   - `medium` — features, UX improvements, enhancements. **`task:`, `todo:`, `log task:`, and `run task:` default to `medium`.**
-   - `low` — cosmetic changes, nice-to-have, cleanup, documentation
-
-2. **Interpret requirements** — infer concrete action items from the description.
-
-   **Proceed directly if the description includes ANY of:**
-   - A specific file, function, variable, component, or UI element name
-   - A concrete action with a clear target (e.g. "rename X to Y", "remove the X button")
-   - Explicit step-by-step instructions from the user
-
-   **Propose an interpretation if the description:**
-   - Contains no specific code, file, or component reference
-   - Is 5 words or fewer after the prefix
-   - Uses a vague action word with no clear target
-
-   If proposing, use the host's available user-input mechanism before logging:
-
-   > Here's how I interpreted this task:
-   > - {inferred requirement 1}
-   > - {inferred requirement 2}
-   >
-   > a) Accept — log with these requirements
-   > b) Change — describe what's different
-
-   Repeat until accepted.
-
-3. **Insert the task** using `$TASK_DB task add`. Pass each requirement as a separate `--req` flag, each tag as a separate `--tag` flag, each dependency seq number as a separate `--dep` flag. All values are passed as plain strings — no escaping of any kind is needed.
-
-```bash
-$TASK_DB task add \
-  --project "git@github.com:org/repo" \
-  --type "fix" \
-  --title "Log lines shouldn't exceed one line" \
-  --priority "high" \
-  --tag "#ui" \
-  --req "Replace line breaks with space" \
-  --req "Trim leading and trailing whitespace"
-```
-
-The output is the assigned task ID (e.g. `#001`). Report it to the user.
-
-   If the task has dependencies, validate they exist:
-   ```bash
-   $TASK_DB task deps validate --project "..." --dep 3 --dep 5
-   ```
-   If any output is printed, those seq numbers don't exist — warn the user. The task is still logged.
-
-4. **Determine execution behavior** based on the prefix:
-
-   - **`todo:` prefix** — skip the execution choice entirely. Inform the user the todo was logged.
-   - **`log task:` or `log fix:` prefix** — skip the execution choice entirely (Log Only). Inform the user the task was logged.
-   - **`run task:` or `run fix:` prefix** — skip the execution choice prompt (the answer is "Run Now"). Proceed directly to the **Running a Task** pipeline starting at Step 0 (Check Dependencies). Do not ask the user whether to run.
-   - **`task:` or `fix:` prefix** — present the execution choice using the host's available user-input mechanism:
-
-```
-a) Run Now — dispatch a subagent immediately
-b) Log Only — save for later
-c) Auto-Run All — run this and all future tasks without asking
-```
-
-If the user previously chose "Auto-Run All" in this session, skip asking and dispatch immediately.
-
-## Running a Task
-
-**Core principle: The lead agent NEVER blocks on task execution.** Every task is dispatched to a subagent so the lead agent stays available.
-
-When dispatching a task (via "Run Now", "run task #NNN", or "Auto-Run All"):
-
-### Step 0: Check Dependencies
-
-```bash
-$TASK_DB task deps check --project "..." --seq N
-```
-
-If any output is printed, the task is **blocked**. Each line is `#NNN|title|status`. Report to the user and do NOT dispatch:
-> Task #005 is blocked. These dependencies must be completed first:
-> - #003 (pending): Create settings modal skeleton
-> - #004 (in_progress): Add theme support
-
-### Step 0b: Create TaskList Entry
-
-Before proceeding to isolation strategy, create the TaskList entry so the task is visible in the running tasks table:
-
-```bash
-$TASK_DB task get --project "$PROJECT" --seq N
-```
-
-Use the returned `title` and `type` to call `syncTaskToList(N, "pending", type, title)`.
-
-If `hideListRequested` is true, skip TaskList creation but show the table if `runningTasks` has entries.
-
-Once the entry is created, proceed to the isolation strategy recommendation.
-
-### Step 1: Recommend Isolation Strategy
-
-- **Dirty working tree** (unstaged/uncommitted changes) → recommend worktree
-- **Multiple pending tasks** being run together → recommend worktree
-- **Clean tree + single task** → recommend direct (current directory)
-
-Present recommendation with brief reasoning. Let user override.
-
-**Define the project path variable:**
-- If worktree: `{worktree_path}` — the newly created worktree directory
-- Otherwise: `{repo_root}` — the current working directory
-
-### Step 2: Dispatch Scout + Executor (2-stage pipeline)
-
-Read the task data:
-```bash
-$TASK_DB task get --project "..." --seq N
-```
-
-Update status to in_progress:
-```bash
-$TASK_DB task update --project "..." --seq N --status in_progress
-```
-
-If the task carries a `plan_id`, this same call promotes its plan from `pending` to `in_progress` — no separate plan command is needed.
-
-The task runs as a **2-stage pipeline**: a Planning Scout (read-only, strong-tier model) produces an Implementation Map, then an Execution Agent (write-capable, fast-tier model) follows it mechanically. Both run as background subagents so the user stays unblocked.
-
-#### Stage 1: Planning Scout (read-only)
-
-Dispatch a **background** subagent per the Sub-agent Dispatch table (Planning Scout role — read-only, strong-tier model). Extract `type`, `title`, and each element of the `reqs` JSON array:
-
-```
-Subagent tool parameters:
-  subagent_type: "<scout profile from Sub-agent Dispatch table>"
-  model: "<strong-tier model on this host — e.g. sonnet on Claude Code, GPT-5.6-terra on Codex, Grok 4.6 on Cursor (Composer 2.5 fallback)>"
-  run_in_background: true
-  description: "Scout: #{SEQ} {short_title}"
-  isolation: "worktree"
-```
-
-If the host does not expose a `model:` selection parameter, omit it and let the host default carry.
-
-If falling back to `general-purpose` (no lean-agents plugin installed), the structural read-only guarantee is lost — the scout prompt already includes "Do NOT write, edit, or create any files. Read-only." but the agent still has Edit/Write tools available. Reinforce in the prompt: "You have Edit/Write tools available; do not use them for this task."
-
-**After scouting:** Call `syncTaskToList({SEQ}, "scouting", {type}, {title})` to update the TaskList display.
-
-Scout prompt:
-
-```
-You are a codebase scout. Analyze the codebase and produce a detailed Implementation Map.
-Do NOT write, edit, or create any files. Read-only.
-You are working on the project at {worktree_path}.
-
-## Project Context
-{Read and paste the full contents of AGENTS.md or CLAUDE.md here, if either exists}
-
-## Project Overview
-{Read and paste the full contents of README.md here}
-
-## Task
-{type}: {title}
-
-### Requirements
-- {reqs[0]}
-- {reqs[1]}
-
-{If this is a retry, include:}
-## Retry Notes
-A previous attempt was rejected. User feedback: {feedback}
-
-## Your Job
-
-### Step 1: Find relevant files
-Use Glob to find all files that could be relevant to this task.
-
-### Step 2: Read and understand architecture
-Use Read to read every relevant file — including ones not explicitly mentioned
-in Requirements but logically impacted.
-
-### Step 3: Ownership analysis (CRITICAL)
-Before deciding WHERE to make changes, answer these questions:
-- **Data ownership:** If this task adds or tracks new state, which existing class/struct
-  already owns related data? Add new fields there, not as globals on the app/main class.
-- **Logic ownership:** If this task adds rendering, formatting, or business logic, does a
-  base class or shared module already have a similar method? Extend it there rather than
-  duplicating in a leaf file.
-- **Cross-file impact:** Would changes in a shared module (base class, common utilities,
-  types file) be cleaner than changes in the specific file mentioned by the task? If a
-  base class method already handles similar work, modify it instead of adding new code
-  in the subclass.
-
-Common mistake to avoid: putting new state or logic on the outermost/leaf class when it
-belongs on an inner/base class that other code also uses.
-
-### Step 4: Produce Implementation Map
-The executor will follow this map LITERALLY. Be precise — include exact line numbers,
-function names, and code snippets for every change.
-
-### Ownership Decision
-- **New state belongs on:** {class/module name} — because {reason}
-- **New logic belongs in:** {class/module name} — because {reason}
-
-### Files to Modify
-- **{relative/path/file.ext}** — {one-line summary of change}
-  - Location: `{function/class.method name}` (line ~{N})
-  - Change: {precise description with exact code snippets where possible}
-
-### Files to Create
-- **{relative/path/file.ext}** — {one-line summary}
-  - Content: {description of what the file must contain}
-
-### No Changes Needed
-- {file you read but determined needs no modification}
-
-### Test Command
-- {the command to run tests, from README, AGENTS.md, or CLAUDE.md — or "no tests found"}
-
-## Rules
-- Do NOT write, edit, or create any files. Read-only.
-- Be extremely precise. Include exact line numbers, function names, and code snippets.
-- The executor will follow your map literally — ambiguity causes errors.
-- Include every file that needs changing, even if the requirement doesn't mention it explicitly.
-- Place new state on the class that owns related data, not as globals on the app class.
-- Place new logic in the module that owns similar logic, even if the task description only names a different file.
-```
-
-**Before dispatching executor:** Call `syncTaskToList({SEQ}, "executing", {type}, {title})` to update the TaskList display.
-
-#### Stage 2: Execution Agent
-
-When the scout completes, dispatch the executor as another **background** subagent per the Sub-agent Dispatch table (Execution Agent role — write-capable, fast-tier model). Pass the scout's **full Implementation Map** verbatim.
-
-```
-Subagent tool parameters:
-  subagent_type: "<executor profile from Sub-agent Dispatch table>"
-  model: "<fast-tier model on this host — e.g. haiku on Claude Code, GPT-5.6-luna on Codex, Composer 2.5 or GPT-5.6-luna on Cursor>"
-  run_in_background: true
-  description: "Execute: #{SEQ} {short_title}"
-  isolation: "worktree"
-```
-
-If the host does not expose a `model:` selection parameter, omit it and let the host default carry.
-
-The executor is *meant* to write, so a fallback to `general-purpose` does not lose any capability contract — it just pays a higher System-tools token cost. No prompt-level fallback reminder is needed here, unlike the read-only roles.
-
-Executor prompt:
-
-```
-You are a task executor. Follow the Implementation Map below exactly. Do not deviate.
-You are working on the project at {worktree_path}.
-
-## Task
-{type}: {title}
-
-## Implementation Map
-{Paste the FULL Implementation Map returned by the scout — including Ownership Decision,
-Files to Modify, Files to Create, and Test Command sections}
-
-## Instructions
-1. For each file under "Files to Modify":
-   a. Use Read to read the file.
-   b. Use Edit to make exactly the change described. Match the Location and Change precisely.
-2. For each file under "Files to Create":
-   a. Use Write to create the file with the described content.
-3. Run the Test Command from the Implementation Map (if any).
-4. Output a structured report:
-   - **Files changed:** list each file and what was done
-   - **Tests:** passed / failed / none found
-   - **Commit:** none yet (pending Accept)
-   - **Issues:** any problems encountered
-
-## Rules
-- Follow the Implementation Map literally. Do not interpret, improve, or add to it.
-- Do not ask questions.
-- Do not add features, refactor unrelated code, or make changes not in the map.
-- If a described location doesn't match (wrong line number, missing function), report it
-  as an Issue and make your best effort to apply the intended change nearby.
-```
-
-**After dispatching the scout, immediately inform the user** the task is running and that they can continue issuing commands. When the scout completes, chain the executor automatically — do not ask the user between stages.
-
-**Model selection (resolved per host):**
-- Default: strong-tier Planning Scout → fast-tier Execution Agent (2-stage)
-- Retry (same approach): same tier mapping (2-stage)
-- Retry with most-capable model: single combined scout+execute agent using a top-tier model (no 2-stage — collapse the pipeline)
-
-### Step 3: Handle Completion
-
-When a task runner subagent completes, report results and present review choice using the host's available user-input mechanism:
-
-```
+Generate a fresh opaque `executionGeneration` before the initial Scout and
+before every confirmed repair or restart pipeline. Each dispatch record contains
+that generation, a stage, and the host dispatch ID. A callback may mutate state
+only when all three still match and cancellation was not requested.
+
+`ownedPaths` is a deduplicated list of normalized repository-relative POSIX
+paths currently attributable to the task. The parent recomputes it from the
+recorded baseline after every Executor and revalidates it before staging,
+selective restore, or removal. It is evidence for acceptance and cleanup, not a
+write-authorization list: Executors may make any repository changes required by
+their Implementation Map. Workers report changes but never decide ownership.
+
+## Task-list lifecycle
+
+Use stable entry IDs `scout-{seq}` and `execute-{seq}`. Never create duplicate
+entries for validation, repair, or restart.
+
+| Phase | Scout entry | Execute entry |
+|---|---|---|
+| pending | pending | absent |
+| scouting | in progress | pending if already present |
+| executing | completed | in progress |
+| awaiting_decision | preserve honest Scout result | awaiting decision |
+| validating | preserve honest Scout result | validating |
+| completed | completed | completed |
+| cancelled/failed | clear or mark terminal, never completed |
+
+Every synchronization updates `runningTasks[seq].status` first. If the user has
+hidden the list, update only in-memory state and do not create, update, or show
+task-list entries.
+
+The persistent task-list UI is optional. When the host does not expose one,
+maintain the same `runningTasks` lifecycle in memory and report phase changes in
+normal progress messages; do not treat the missing UI as an execution blocker.
+
+At session start, query `in_progress` tasks. A task without live session context
+is recovered into `awaiting_decision` with `recoveryRequired: true`. Do not
+accept, repair, restart, revert, delete, or dispatch from that entry. Offer to
+leave it for manual recovery or explicitly adopt the current checkout as a new
+baseline. Adoption requires no active worker, clears previous ownership and
+validation state, creates a fresh generation, and starts a new initial Scout.
+
+## Completion decision
+
+After an Executor returns and ownership has been derived, keep the database task
+`in_progress`, set the task-list phase to `awaiting_decision`, and present:
+
+```text
 a) Accept — mark complete and update changelog
-b) Retry — revert and re-run with the same tier mapping (provide feedback to guide the retry)
-c) Retry with most-capable model — revert and re-run with the host's most-capable available model (for harder tasks)
+b) Validate with Strong tier — run a read-only verifier
+c) Validate with Top tier — run a read-only verifier
+d) Reject / Cancel — cancel the task and choose what happens to the work
 ```
 
-After presenting the choice (a) Accept / b) Retry / c) Retry with most-capable model, do not re-render the table — Step 4's sync calls handle updates.
-
-### Step 4: Accept or Retry
-
-**If accepted:**
-
-1. Commit the changes first, so the completion record can cite the commit:
-   `git add -A && git commit -m "{type}: {task title}"`
-
-2. Capture the commit sha and the completion timestamp, then close the task out with both:
-
-```bash
-# Substitute the real values for the examples below:
-#   sha       = git rev-parse HEAD
-#   timestamp = date '+%Y-%m-%d %H:%M'
-$TASK_DB task update --project "..." --seq N --status completed \
-  --completed-at "2026-08-09 14:32" --commit-sha 4f2a9c1
-```
-
-`--completed-at` takes `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `YYYY-MM-DD HH:MM:SS`; `--commit-sha` takes 7–40 hex characters.
-
-Always pass `--completed-at`. The helper stamps `completed_at` itself when a task reaches `completed`, so this is about accuracy rather than presence: the stamp records when the helper was told, which is only the same as when the work finished if you close the task out promptly. Pass the real time whenever they differ. Pass `--commit-sha` **whenever the work produced a commit** — which is every task that reached this step, since the commit happens first. Only a task completed with no commit at all (see "Completing a Task Manually") legitimately omits it. Never pass a sha that is not the commit for *this* task: an unrelated `HEAD` looks authoritative in the changelog and points a future reader at the wrong change.
-
-3. Check if any tasks were unblocked:
-```bash
-$TASK_DB task deps unblocked --project "..." --seq N
-```
-Each output line is `#NNN|title`. If any lines are returned, inform the user:
-`Unblocked: #003 "Create settings modal skeleton" is now ready to run.`
-
-4. **If the task belongs to a plan**, check the plan's remaining work. The `task get` output already carries the plan's `plan_seq` (the string `"P002"`) and `plan_project` — pass both through unchanged; `--seq` accepts the `P###` form, so no stripping is needed and there is no reason to look the plan up again. Pass `plan_project` as `--project`, since a plan may be owned by a different repository than the task. Note both flags below take the PLAN's values, not the task's — the task seq you have been using for the last three steps does not belong in either slot:
-```bash
-$TASK_DB plan progress --project "{plan_project}" --seq {plan_seq} --counts
-```
-The output is `total|pending|in_progress|completed|cancelled|blocked`. Offer to close the plan only when `total` is greater than `0` **and** `pending`, `in_progress` and `blocked` are all `0`. The `total > 0` check matters: a childless plan — or a lookup that hit the wrong plan — also reports all-zero, and without it the mistake produces the close offer instead of an error.
-> All tasks under P00N are complete. Close the plan?
-
-Only on an affirmative answer run `$TASK_DB plan update --project "{plan_project}" --seq {plan_seq} --status completed`. If any sibling is still incomplete, say so and do not offer to close. Never pass `--force-complete` here — see `references/plans.md`.
-
-5. Auto-update `CHANGELOG.md` — see Changelog section below.
-
-6. Update both TaskList entries to completed: `syncTaskToList({SEQ}, "completed", {type}, {title})`
-7. Re-render the table to show completed status before removal.
-
-**If retry:**
-
-1. Revert changes:
-   - Worktree isolation: discard the worktree
-   - Direct: run `git checkout .` to restore modified files
-
-2. Ask for optional feedback using the host's available user-input mechanism: "What was wrong with the result? (optional — press Enter to skip)"
-
-3. Re-dispatch using the 2-stage pipeline (strong-tier Planning Scout → fast-tier Execution Agent) with `## Retry Notes` included in the scout prompt. If the user chose "Retry with most-capable model", dispatch a single combined scout+execute agent using a top-tier model instead. Update status back to `in_progress`.
-
-4. Determine retry status:
-   - If the user chose "Retry with most-capable model": call `syncTaskToList({SEQ}, "executing", {type}, {title})` (combined scout+execute goes straight to executing)
-   - If the user chose regular Retry: if the task was in scouting phase, use "scouting"; if in executing phase, use "executing". Call `syncTaskToList({SEQ}, retryStatus, {type}, {title})` to update the TaskList entry.
-
-5. Return to accepting commands — don't block waiting for the retry.
-
-## Hiding the Task List
-
-When user says "hide list":
-
-1. Set `hideListRequested = true`
-2. Mark all pending TaskList entries as completed (both scout and execute entries): `syncTaskToList({SEQ}, "completed", {type}, {title})`
-3. Confirm to user: `Task list hidden. Running tasks will complete silently.`
-
-If no tasks are currently running, confirm: `No running tasks to hide.`
-
-## Listing Tasks
-
-```bash
-$TASK_DB task list --project "..."
-# Filtered:
-$TASK_DB task list --project "..." --status pending
-```
-
-Get blocked task seq numbers:
-```bash
-$TASK_DB task deps blocked --project "..."
-```
-
-Render output as a markdown table. Each row is pipe-separated: `#NNN|type|title|priority|status|tags|depends_on|plan`. The trailing `plan` column is a `P###` display id, empty for tasks that belong to no plan; when the plan belongs to a different project it also carries that project's name.
-
-```
-| ID   | Type | Title                                    | Priority | Status  | Tags         | Deps       |
-|------|------|------------------------------------------|----------|---------|--------------|------------|
-| #007 | task | Add keyboard shortcut to pause all panes | medium   | pending | #keybindings | #003, #004 |
-| #005 | fix  | Log lines should never exceed one line   | high     | blocked | #ui          | #003       |
-```
-
-- Parse `tags` JSON: `["#ui","#layout"]` → `#ui, #layout`. Display `—` if empty.
-- Parse `depends_on` JSON: `[3,5]` → `#003, #005`. Display `—` if empty.
-- If a pending task's seq appears in the `task deps blocked` output, show status as **blocked**.
-
-## Completing a Task Manually
-
-```bash
-$TASK_DB task update --project "..." --seq N --status completed \
-  --completed-at "2026-08-09 14:32"
-```
-
-Substitute the real timestamp from `date '+%Y-%m-%d %H:%M'`. Add `--commit-sha <sha>` when a commit exists for the work.
-
-Check for unblocked tasks:
-```bash
-$TASK_DB task deps unblocked --project "..." --seq N
-```
-
-Then auto-update `CHANGELOG.md`, commit, and confirm to the user.
-
-## Cancelling a Task
-
-```bash
-$TASK_DB task update --project "..." --seq N --status cancelled
-```
-
-Confirm: `Task #NNN cancelled.`
-
-## Removing a Task's Plan Link
-
-1. Read the task first, before clearing — its `plan_seq` and `plan_project` are gone
-   once `--clear-plan` runs, and step 3 below needs both (a plan may be owned by a
-   different repository than the task, so `plan_project` is not interchangeable with
-   the task's own project):
-```bash
-$TASK_DB task get --project "..." --seq N
-```
-
-2. Clear the link:
-```bash
-$TASK_DB task update --project "..." --seq N --clear-plan
-```
-
-Confirm: `Task #NNN is no longer linked to a plan.`
-
-The task, its status, and its history are untouched — only the plan link and anchor
-are cleared. It just drops out of that plan's `plan tasks` / `plan progress` counts,
-and if the plan's source document still contains the step this task came from, the
-next `update plan PNNN` will re-propose it as a new task — unlinking removes the
-task's membership, not the heading from the document.
-
-3. If step 1's `task get` returned a `plan_seq`, re-check that plan now, using the
-   same rule Step 4 of Running a Task uses. Pass the `plan_seq`/`plan_project` from
-   step 1 unchanged (do not look the plan up again):
-```bash
-$TASK_DB plan progress --project "{plan_project}" --seq {plan_seq} --counts
-```
-If this now shows `total` > 0 and `pending`/`in_progress`/`blocked` all `0`, ask:
-
-> P00N now shows all remaining tasks complete because #NNN was unlinked, not finished.
-> Close it if that's accurate, or leave it open?
-
-Only on an affirmative answer run `$TASK_DB plan update --project "{plan_project}" --seq {plan_seq} --status completed` — same as Step 4.
-
-## Setting Task Priority
-
-```bash
-$TASK_DB task update --project "..." --seq N --priority high
-```
-
-Confirm: `Task #NNN priority set to {priority}.`
-
-## Checking a Task
-
-When user says "check task #NNN":
-
-1. Read the task:
-```bash
-$TASK_DB task get --project "..." --seq N
-```
-
-2. Dispatch a **read-only subagent** per the Sub-agent Dispatch table (Verifier role — strong-tier model, structurally read-only). Extract requirements from the `reqs` JSON array. Pass this prompt:
-
-```
-You are a read-only task verifier. Do NOT modify any files.
-You are working on the project at {worktree_path}.
-
-## Task to Verify
-{type}: {title}
-ID: #{NNN}
-
-### Requirements
-- {reqs[0]}
-- {reqs[1]}
-
-## Verification Pipeline
-
-### Step 1: Search git log
-- `git log --oneline --grep="#{NNN}"`
-- `git log --oneline --grep="{title}"`
-
-### Step 2: Extract keywords
-From the requirements, identify specific searchable terms: filenames, function names,
-variable names, class names, config keys, CLI flags. Ignore generic words.
-
-### Step 3: Search the codebase
-For each keyword, search with Bash and use Read to inspect promising matches:
-- Content: `rg -n 'keyword' .` — add `-l` when you only need which files match.
-- Filenames: `rg --files -g '**/*keyword*'`, or `find . -name '*keyword*'`.
-Keep output small: `rg` respects `.gitignore`, so prefer it over `grep`; append `| head -n 50`
-for keywords likely to match widely. If you must use `grep`/`find`, exclude vendored trees
-(`--exclude-dir={node_modules,.git}` / `-path ./node_modules -prune -o`).
-
-### Step 4: Verdict per requirement
-- **Found** — clear evidence in code (file:line) or git (commit hash)
-- **Partial** — some evidence but only partly addressed
-- **Not Found** — searched thoroughly, no evidence
-- **Cannot Verify** — too abstract to search for
-
-### Step 5: Return structured report
-
-## Verification Report: #{NNN} {title}
-
-### Commits referencing this task
-{list commits found, or "None found"}
-
-### Per-requirement verdicts
-- [ ] {requirement 1} — **{verdict}**
-  Evidence: {file:line, commit hash, or "none"}
-
-### Keywords searched
-{comma-separated list}
-
-## Rules
-- Do NOT write, edit, or delete any files.
-- Read-only commands only: `git log`, `rg`, `find`, and the Read tool. No commands that
-  modify the repo, the index, or anything outside it — no `git add`/`commit`/`checkout`,
-  no installs, no writes or redirects.
-```
-
-If falling back to `general-purpose` (no lean-agents plugin installed), the verifier prompt must explicitly say: "You have Edit/Write tools available; do not use them for this verification. Do not run commands that mutate the repo, the index, or the filesystem." The verification rules block in the prompt body already lists allowed commands (`git log`, `rg`, `find`, Read) — keep it, and append the fallback reminder when needed.
-
-3. Present the report with an overall confidence summary:
-   - **High** — all requirements Found or Cannot Verify, with at least one Found
-   - **Medium** — mix of Found and Partial
-   - **Low** — one or more Not Found
-   - **Inconclusive** — all Cannot Verify or Not Found with no git evidence
-
-4. Do NOT change the task's status. This is purely informational.
-
-## Running All Tasks
-
-When user says "run all tasks":
-
-1. List all pending tasks:
-```bash
-$TASK_DB task list --project "..." --status pending
-$TASK_DB task deps blocked --project "..."
-```
-
-2. Present them to the user. Mark blocked tasks. Recommend worktree isolation (multiple tasks = always recommend worktree).
-
-3. **Only dispatch unblocked tasks.** Skip blocked tasks and inform the user which were skipped and why.
-
-4. For each unblocked task, call `syncTaskToList({SEQ}, "pending", {type}, {title})` to create scout TaskList entries, then show the running tasks table.
-
-5. Dispatch based on isolation strategy:
-   - **Worktree:** Dispatch all unblocked tasks as separate subagents simultaneously (parallel).
-   - **No worktree (user override):** Dispatch the first unblocked task only. After acceptance, re-check and dispatch the next unblocked task.
-
-6. Return to accepting commands immediately after dispatching.
-
-## Generating Changelog
-
-When user says "update changelog" or "generate changelog", OR automatically after any task completion:
-
-**Auto-update** (after each task completion):
-```bash
-$TASK_DB task changelog list --project "..." --new-only
-```
-
-After writing entries to `CHANGELOG.md`, mark them:
-```bash
-$TASK_DB task changelog mark --project "..." --seq 1 --seq 2
-```
-
-**Regenerate** (on explicit "generate changelog"):
-```bash
-$TASK_DB task changelog list --project "..."
-$TASK_DB task changelog mark --project "..." --all
-```
-
-Each output row is pipe-separated: `seq|date|type|title|tags|plan`.
-
-Write `CHANGELOG.md` in **this exact format**:
-
-```markdown
-# Changelog
-
-## {YYYY-MM-DD}
-
-### {Plan title} (P00N)
-- {title} ({#tag1, #tag2})
-
-### Fixes
-- {title} ({#tag1, #tag2})
-
-### Tasks
-- {title} ({#tag1, #tag2})
-
-### Todos
-- {title} ({#tag1, #tag2})
-```
-
-**Format rules:**
-- Group by completion date, newest first
-- Within each date, plan groups come **first** — one `### {Plan title} (P00N)` heading per plan, holding every completed child task regardless of its type. Rows with an empty `plan` column then fall through to the flat type sections below.
-- After the plan groups, group the remaining rows by type: **Fixes**, then **Tasks**, then **Todos**
-- Within each type, newest first
-- Omit empty type sections
-- Parse tags JSON: `["#ui","#layout"]` → `(#ui, #layout)`. No parenthetical if tags is `[]`.
-- No boilerplate, no `[Unreleased]`, no `---` separators
-
-## Task History as Context
-
-When starting a new conversation in a project:
-```bash
-$TASK_DB task recent --project "..."
-```
-
-This helps avoid re-implementing completed work and understand the project trajectory.
-
-## Quick Reference
-
-| Command | Action |
-|---------|--------|
-| `task: description #tags` | Log new task (asks Run Now / Log Only) |
-| `task: description (depends on #NNN, #NNN)` | Log task with dependencies |
-| `fix: description #tags` | Log new fix (asks Run Now / Log Only) |
-| `todo: description #tags` | Log new todo (always Log Only, never runs) |
-| `log task: description #tags` | Log new task, Log Only — no execution prompt |
-| `log fix: description #tags` | Log new fix, Log Only — no execution prompt |
-| `run task: description #tags` | Log new task and run immediately |
-| `run fix: description #tags` | Log new fix and run immediately |
-| `list tasks` | Show all tasks (except cancelled) |
-| `list tasks pending` | Filter by status |
-| `run task #NNN` | Execute specific task by ID |
-| `run all tasks` | Execute all pending tasks |
-| `complete task #NNN` | Manually mark completed + update changelog |
-| `cancel task #NNN` | Cancel a pending task |
-| `unlink task #NNN from its plan` | Clear the task's plan link (task and history stay; drops from that plan's progress) |
-| `set priority of #NNN to high` | Change priority |
-| `check task #NNN` | Verify task in codebase (read-only) |
-| `hide list` | Hide persistent task list (running tasks continue) |
-| `update changelog` | Regenerate changelog from completed tasks |
-| `plan: description` | Create an inline plan (`references/plans.md`) |
-| `plan: /abs/path.md` | Create a plan from a file — asks Import or Link |
-| `list plans` | Show all plans with done/total and drift |
-| `show plan PNNN` | Annotated plan body (`plan status`) + progress table |
-| `run plan PNNN` | Dispatch that plan's unblocked pending tasks |
-| `update plan PNNN` | Re-read the source, propose a diff, reconcile tasks |
-| `close plan PNNN` | Mark the plan completed (confirms if children remain) |
-| `cancel plan PNNN` | Cancel the plan; confirms before cascading to children |
+There is no Retry choice. Validation never mutates work. Repair preserves the
+current implementation; restart is the only validation outcome that discards
+task-owned implementation work, and it requires confirmation.
+
+## Quick reference
+
+| User request | Action |
+|---|---|
+| `task:` / `fix:` | Log and ask Run Now / Log Only / Auto-Run All |
+| `todo:` | Log only |
+| `log task:` / `log fix:` | Log only |
+| `run task:` / `run fix:` | Log and run immediately |
+| `run task #NNN` | Run one pending task |
+| runner completion | Accept, Validate Strong/Top, or Reject / Cancel |
+| `check task #NNN` | Read-only verification; no status change |
+| `run all tasks` | Run all unblocked pending tasks |
+| `hide list` | Hide task-list entries; workers continue |
+| `generate changelog` | Rebuild from completed tasks |
+| any `plan` request | Read `references/plans.md` first |

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.73 - 2026-09-17
+
+### Changes
+- **project-tasks**: replace retry completion with tiered validation, repair-in-place/restart recovery, and explicit cancellation dispositions with task-owned safety checks.
+- **project-tasks**: use one agent-neutral, platform-native shared database by default; detect legacy stores without touching them and require a dry-run plus approval before cross-store migration.
+
 ## 2026-09-07
 
 ### Add

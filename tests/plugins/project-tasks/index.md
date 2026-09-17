@@ -19,7 +19,7 @@ Located at `plugins/project-tasks/`:
 
 | File | Purpose |
 |------|---------|
-| `task-db.test.mts` | Normalization, registry/parser behavior, and hard-cutover call-site lint |
+| `task-db.test.mts` | Platform-native storage, normalization, registry/parser behavior, and hard-cutover call-site lint |
 | `task-db.integration.test.mts` | CLI dispatch, migrations, schema/FKs, handlers, transactions, and concurrency |
 | `task-db.plan-read.test.mts` | Plan tasks, status, and progress |
 | `task-db.plan-sync.test.mts` | Plan reconciliation and lifecycle mutations |

@@ -30,7 +30,7 @@ Module ownership is split as follows:
 
 | File | Covers |
 |------|--------|
-| `plugins/project-tasks/task-db.test.mts` | Normalization, registry/parser behavior, and hard-cutover call-site lint |
+| `plugins/project-tasks/task-db.test.mts` | Platform-native storage, normalization, registry/parser behavior, and hard-cutover call-site lint |
 | `plugins/project-tasks/task-db.integration.test.mts` | Dispatch, migrations, schema/FKs, task/plan/note handlers, transactions, and concurrency |
 | `plugins/project-tasks/task-db.plan-read.test.mts` | Plan tasks, status, and progress |
 | `plugins/project-tasks/task-db.plan-sync.test.mts` | Propose/apply/discard, attach/detach, lifecycle updates, and atomic rollback |
