@@ -75,6 +75,6 @@ export interface PackageDescriptor {
 export interface InstallResult {
     packageId: string;
     itemName: string;
-    status: "created" | "updated" | "already-exists" | "removed" | "error";
+    status: "created" | "updated" | "already-exists" | "removed" | "warning" | "error";
     message: string;
 }

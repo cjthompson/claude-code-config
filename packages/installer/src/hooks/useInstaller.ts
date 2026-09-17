@@ -1,6 +1,11 @@
 import { useState, useCallback } from "react";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { installPackage, removePackage } from "../lib/install.ts";
+import { runOutputStyleCheck } from "../lib/output-style-check.ts";
 import type { PackageDescriptor, InstallResult } from "../lib/types.ts";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
 export type Phase = "selecting" | "installing" | "done";
 
@@ -66,6 +71,14 @@ export function useInstaller() {
                     status: "already-exists",
                     message: "Nothing to do — no items selected.",
                 });
+                setResults([...allResults]);
+            }
+
+            // Read-only advisory, appended after the "nothing to do" fallback so
+            // a warning cannot suppress that message.
+            const styleWarnings = await runOutputStyleCheck(repoRoot);
+            if (styleWarnings.length > 0) {
+                allResults.push(...styleWarnings);
                 setResults([...allResults]);
             }
 

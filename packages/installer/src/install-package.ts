@@ -2,6 +2,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverPackages } from "./lib/discover.ts";
 import { installPackage } from "./lib/install.ts";
+import { runOutputStyleCheck } from "./lib/output-style-check.ts";
 import type { PackageDescriptor } from "./lib/types.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -103,6 +104,17 @@ async function main() {
         } catch (err) {
             console.error(`  ERROR  ${pkg.label}: ${(err as Error).message}`);
             hasError = true;
+        }
+        console.log();
+    }
+
+    // Advisory only — printed in its own block so it never reaches the
+    // `status === "error"` gate above and never flips the exit code.
+    const styleWarnings = await runOutputStyleCheck(repoRoot);
+    if (styleWarnings.length > 0) {
+        console.log("[Output style]");
+        for (const warning of styleWarnings) {
+            console.log(`  WARN   ${warning.message}`);
         }
         console.log();
     }

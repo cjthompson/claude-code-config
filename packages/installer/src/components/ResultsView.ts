@@ -15,12 +15,16 @@ export function ResultsView({ results }: ResultsViewProps) {
                 r.status === "created" ? "\u2713" :
                 r.status === "updated" ? "\u2191" :
                 r.status === "removed" ? "\u2717" :
-                r.status === "already-exists" ? "\u2013" : "\u2717";
+                r.status === "already-exists" ? "\u2013" :
+                r.status === "warning" ? "\u26a0" : "\u2717";
+            // Both chains fall through to the error rendering, so a status
+            // without its own branch here renders as a failure.
             const color =
                 r.status === "created" ? "green" :
                 r.status === "updated" ? "green" :
                 r.status === "removed" ? "red" :
-                r.status === "already-exists" ? "yellow" : "red";
+                r.status === "already-exists" ? "yellow" :
+                r.status === "warning" ? "yellow" : "red";
 
             return h(Text, { key: i },
                 h(Text, { color }, ` ${icon}`),
