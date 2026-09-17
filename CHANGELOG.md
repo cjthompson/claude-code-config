@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.75 - 2026-09-17
+
+### Changes
+- **output-styles**: the styles are plugin-provided, so their names are namespaced — `output-styles:Terse` and `output-styles:Concise`. A bare `Terse` matches no style, and Claude Code silently falls back to default behavior instead of reporting an error, so a dangling value disables the style with no symptom. The README documented the unprefixed names and a `npm run install-package output-styles` route that copied files into `~/.claude/output-styles/`; both are gone, and the prefix requirement plus the project-local write behavior of `/output-style` are now documented.
+- **installer**: plugins are installed by shelling out to `claude plugin install` instead of copying their files into `~/.claude/`. The file-copy route is what manufactured the duplicate unprefixed style identifier. Adds `npm run install-plugins`, reads versions from `.claude-plugin/marketplace.json` (8 of 11 `plugin.json` files carry no `version`), dedupes `claude plugin list` by scope, and is idempotent — a plugin already at the target version runs no subprocess beyond the read-only probes. Never falls back to copying when the `claude` binary is missing; it reports the manual recovery commands instead.
+- **installer**: `plugins/output-styles/manifest.json` is deleted. Its `files[]` key was the only thing driving the copy, and plugin discovery now gates on `.claude-plugin/plugin.json` so the descriptor survives without it.
+- **installer**: warns after an install when a configured `outputStyle` matches no available style, naming the file and suggesting the prefixed name. Distinguishes a genuinely unresolvable value from one that resolves to a built-in while a namespaced style of the same name also exists, so a working `Concise` is not reported as broken. Also warns about stale style copies left in `~/.claude/output-styles/` by the old route. The check never writes, and a warning does not change the exit code.
+
 ## v0.0.74 - 2026-09-17
 
 ### Changes
