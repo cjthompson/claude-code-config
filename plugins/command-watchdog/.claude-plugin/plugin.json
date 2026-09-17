@@ -1,10 +1,18 @@
 {
-    "name": "command-watchdog",
-    "description": "PreToolUse hook that runs every Bash command under a watchdog (kills it if output and CPU progress both go flat for a sustained window, if a hard wall-clock cap is exceeded, or if the watchdog's own parent process has exited — orphaned children are killed within ~1-2s instead of running unsupervised), and runs rtk's own token-saving rewrite decision under the same supervision so rtk itself can never hang unsupervised.",
-    "author": {
-        "name": "cjthompson"
-    },
-    "keywords": ["hooks", "bash", "watchdog", "idle-detection", "orphan-detection", "rspec", "rtk"],
-    "license": "MIT",
-    "version": "1.2.0"
+  "name": "command-watchdog",
+  "description": "PreToolUse hook that runs every Bash command under a watchdog (kills it if output and CPU progress both go flat for a sustained window, if a hard wall-clock cap is exceeded, or if the watchdog's own parent process has exited — orphaned children are killed within ~1-2s instead of running unsupervised), and runs rtk's own token-saving rewrite decision under the same supervision so rtk itself can never hang unsupervised.",
+  "author": {
+    "name": "cjthompson"
+  },
+  "keywords": [
+    "hooks",
+    "bash",
+    "watchdog",
+    "idle-detection",
+    "orphan-detection",
+    "rspec",
+    "rtk"
+  ],
+  "license": "MIT",
+  "version": "1.3.0"
 }

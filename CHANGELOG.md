@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.74 - 2026-09-17
+
+### Changes
+- **command-watchdog**: synchronize the plugin manifest and Claude marketplace entry at version 1.3.0.
+
 ## v0.0.73 - 2026-09-17
 
 ### Changes
