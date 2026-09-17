@@ -15,7 +15,11 @@ export interface PackageItem {
     /** Whether this installed item is queued for removal */
     markedForRemoval?: boolean;
     /** For plugin descriptors: distinguishes how the item is installed */
-    itemType?: "skill" | "file" | "agent";
+    itemType?: "skill" | "file" | "agent" | "plugin";
+    /** For itemType "plugin": the `<name>@<marketplace>` id the CLI installs by */
+    pluginId?: string;
+    /** For itemType "plugin": version declared in marketplace.json (or plugin.json) */
+    pluginVersion?: string;
 }
 
 /**
@@ -62,6 +66,10 @@ export interface PackageDescriptor {
     packageDir: string;
     /** Original manifest data */
     manifest: PackageManifest;
+    /** For type "plugin": marketplace name from .claude-plugin/marketplace.json */
+    marketplaceName?: string;
+    /** For type "plugin": marketplace source to name in recovery instructions */
+    marketplaceSource?: string;
 }
 
 export interface InstallResult {

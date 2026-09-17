@@ -1,14 +1,20 @@
 import { readdir, stat, readFile, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileHash } from "./hash.ts";
+import { claudeDir, skillsInstallDir } from "./paths.ts";
+import {
+    claudeBin,
+    compareVersions,
+    parsePluginList,
+    pluginListArgv,
+    realSpawn,
+    type Spawn,
+} from "./plugin-cli.ts";
 import type { DetectSpec, PackageDescriptor, PackageItem, PackageManifest } from "./types.ts";
-
-const CLAUDE_DIR = join(process.env.HOME!, ".claude");
-const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
-const AGENTS_INSTALL_DIR = join(CLAUDE_DIR, "agents");
 
 export async function discoverPackages(
     repoRoot: string,
+    spawn: Spawn = realSpawn,
 ): Promise<PackageDescriptor[]> {
     const packages: PackageDescriptor[] = [];
 
@@ -36,7 +42,7 @@ export async function discoverPackages(
     }
 
     // Discover skills, files, and agents from plugins/ (Claude Code plugin format)
-    const pluginPkgs = await discoverPlugins(repoRoot);
+    const pluginPkgs = await discoverPlugins(repoRoot, spawn);
     packages.push(...pluginPkgs);
 
     packages.sort((a, b) => a.label.localeCompare(b.label));
@@ -167,17 +173,36 @@ async function discoverFilesPackage(
 
 /**
  * Discover plugins/ directory (Claude Code plugin format).
- * Each plugin at plugins/<name>/ may contain:
- *   - skills/<skillName>/SKILL.md   → skill items (symlinked to ~/.claude/skills/)
- *   - manifest.json files[]         → file items (copied to ~/.claude/)
- *   - agents/<name>.md              → agent items (symlinked to ~/.claude/agents/)
- * Returns one PackageDescriptor per plugin.
+ *
+ * A plugin is one atomic unit — that is what `claude plugin install` operates
+ * on — so each plugins/<name>/ with a .claude-plugin/plugin.json yields exactly
+ * one PackageDescriptor holding one itemType "plugin" item.
+ *
+ * Its skills/ and agents/ are scanned only to build a human-readable
+ * description. They are deliberately NOT emitted as installable items: copying
+ * or symlinking them into ~/.claude/ would publish the same asset under a
+ * second, unprefixed name alongside the plugin's own `<plugin>:<name>`.
+ * `manifest.json` files[] is no longer read at all, for the same reason.
  */
 async function discoverPlugins(
     repoRoot: string,
+    spawn: Spawn = realSpawn,
 ): Promise<PackageDescriptor[]> {
     const pluginsDir = join(repoRoot, "plugins");
     if (!(await exists(pluginsDir))) return [];
+
+    const { name: marketplaceName, source: marketplaceSource, versions } =
+        await readMarketplace(repoRoot);
+
+    // One CLI probe for every plugin. Discovery must stay usable when the binary
+    // is absent, so a failure degrades to "nothing installed".
+    let installed = new Map<string, { version: string; enabled: boolean }>();
+    try {
+        const listed = await spawn(claudeBin(), pluginListArgv());
+        installed = parsePluginList(listed.stdout);
+    } catch {
+        // claude not on PATH, or unparseable output.
+    }
 
     const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
     const descriptors: PackageDescriptor[] = [];
@@ -185,113 +210,156 @@ async function discoverPlugins(
     for (const pluginEntry of pluginEntries) {
         if (!pluginEntry.isDirectory()) continue;
         const pluginDir = join(pluginsDir, pluginEntry.name);
-        const items: PackageItem[] = [];
 
-        // Skills
-        const skillsDir = join(pluginDir, "skills");
-        if (await exists(skillsDir)) {
-            const skillEntries = await readdir(skillsDir, { withFileTypes: true });
-            for (const skillEntry of skillEntries) {
-                if (!skillEntry.isDirectory()) continue;
-                const skillPath = join(skillsDir, skillEntry.name);
-                const skillMd = join(skillPath, "SKILL.md");
-                if (!(await exists(skillMd))) continue;
-                const installed = await isSkillInstalled(skillEntry.name);
-                const description = await extractSkillDescription(skillMd);
-                items.push({
-                    name: skillEntry.name,
-                    sourcePath: skillPath,
-                    enabled: !installed,
-                    alreadyInstalled: installed,
-                    description,
-                    typeLabel: "Skill",
-                    itemType: "skill",
-                });
-            }
-        }
-
-        // Files from manifest.json
-        const manifestPath = join(pluginDir, "manifest.json");
-        if (await exists(manifestPath)) {
-            const manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as { files?: string[]; description?: string };
-            for (const file of manifest.files ?? []) {
-                const dest = join(CLAUDE_DIR, file);
-                const src = join(pluginDir, file);
-                const installed = await exists(dest);
-                let needsUpgrade = false;
-                if (installed && !(await isSymlinkIntoRepo(dest, repoRoot))) {
-                    needsUpgrade = (await fileHash(src)) !== (await fileHash(dest));
-                }
-                items.push({
-                    name: file,
-                    sourcePath: src,
-                    enabled: !installed || needsUpgrade,
-                    alreadyInstalled: installed && !needsUpgrade,
-                    needsUpgrade,
-                    description: manifest.description ?? `File: ${file}`,
-                    typeLabel: "File",
-                    itemType: "file",
-                });
-            }
-        }
-
-        // Agents
-        const agentsDir = join(pluginDir, "agents");
-        if (await exists(agentsDir)) {
-            const agentEntries = await readdir(agentsDir, { withFileTypes: true });
-            for (const agentEntry of agentEntries) {
-                if (!agentEntry.isFile() || !agentEntry.name.endsWith(".md")) continue;
-                const agentPath = join(agentsDir, agentEntry.name);
-                const installed = await exists(join(AGENTS_INSTALL_DIR, agentEntry.name));
-                items.push({
-                    name: agentEntry.name,
-                    sourcePath: agentPath,
-                    enabled: !installed,
-                    alreadyInstalled: installed,
-                    description: `Custom agent type: ${agentEntry.name.replace(".md", "")}`,
-                    typeLabel: "Agent",
-                    itemType: "agent",
-                });
-            }
-        }
-
-        if (items.length === 0) continue;
-        items.sort((a, b) => a.name.localeCompare(b.name));
-
-        // Read plugin.json for label and description
+        // Gate on plugin.json, not on item count: a plugin with no skills and no
+        // agents is still installable, and gating on items would silently drop it.
         const pluginJsonPath = join(pluginDir, ".claude-plugin", "plugin.json");
-        let label = pluginEntry.name;
-        let description = "";
-        if (await exists(pluginJsonPath)) {
-            const pluginJson = JSON.parse(await readFile(pluginJsonPath, "utf-8")) as { name?: string; description?: string };
-            label = pluginJson.name ?? label;
-            description = pluginJson.description ?? "";
-        }
+        if (!(await exists(pluginJsonPath))) continue;
+
+        const pluginJson = JSON.parse(await readFile(pluginJsonPath, "utf-8")) as {
+            name?: string;
+            description?: string;
+            version?: string;
+        };
+        const name = pluginJson.name ?? pluginEntry.name;
+        const description = pluginJson.description ?? "";
+
+        // marketplace.json is the authoritative version: plugin.json omits the
+        // field for most plugins (stripped in ce06e08).
+        const version = versions.get(pluginEntry.name) ?? pluginJson.version ?? "";
+
+        const id = marketplaceName ? `${name}@${marketplaceName}` : name;
+        const current = installed.get(id);
+        const upToDate = Boolean(
+            current && version && compareVersions(version, current.version) <= 0,
+        );
+        const needsUpgrade = Boolean(current) && !upToDate;
+
+        const inventory = await describePluginContents(pluginDir);
+        const detail = [
+            description,
+            inventory,
+            `Installs via: claude plugin install ${id}`,
+            "Source: the marketplace's published catalog, not this working tree.",
+            "A restart (or /reload-plugins) is needed for changes to take effect.",
+        ]
+            .filter(Boolean)
+            .join("\n\n");
 
         descriptors.push({
             id: `plugin:${pluginEntry.name}`,
-            label,
+            label: name,
             description,
             type: "plugin",
-            enabled: items.some((i) => i.enabled),
-            items,
+            enabled: !current || needsUpgrade,
+            items: [
+                {
+                    name,
+                    sourcePath: pluginDir,
+                    enabled: !current || needsUpgrade,
+                    alreadyInstalled: upToDate,
+                    needsUpgrade,
+                    isCurrent: upToDate,
+                    description: detail,
+                    typeLabel: "Plugin",
+                    itemType: "plugin",
+                    pluginId: id,
+                    pluginVersion: version,
+                },
+            ],
             packageDir: pluginDir,
-            manifest: { label, description, type: "skills" },
+            manifest: { label: name, description, type: "skills" },
+            marketplaceName,
+            marketplaceSource,
         });
     }
 
     return descriptors;
 }
 
+/** Read the repo's marketplace name, source hint, and per-plugin versions. */
+async function readMarketplace(repoRoot: string): Promise<{
+    name: string;
+    source: string;
+    versions: Map<string, string>;
+}> {
+    const versions = new Map<string, string>();
+    const marketplacePath = join(repoRoot, ".claude-plugin", "marketplace.json");
+    try {
+        const parsed = JSON.parse(await readFile(marketplacePath, "utf-8")) as {
+            name?: string;
+            owner?: { name?: string };
+            plugins?: { name?: string; source?: string; version?: string }[];
+        };
+        for (const entry of parsed.plugins ?? []) {
+            // source is "./plugins/<dir>"; key by directory so it matches the scan.
+            const dir = entry.source?.replace(/^\.\/plugins\//, "") ?? entry.name;
+            if (dir && entry.version) versions.set(dir, entry.version);
+        }
+        const name = parsed.name ?? "";
+        const owner = parsed.owner?.name ?? "";
+        // What a user would pass to `marketplace add`. Derived from the manifest,
+        // never from repoRoot's basename — in a git worktree that directory is
+        // named after the branch, which would print a nonexistent repo.
+        // Marketplace names follow "<owner>-<repo>", so strip the owner prefix.
+        const repo = owner && name.startsWith(`${owner}-`)
+            ? name.slice(owner.length + 1)
+            : name;
+        const source = owner && repo ? `${owner}/${repo}` : name;
+        return { name, source, versions };
+    } catch {
+        return { name: "", source: "", versions };
+    }
+}
+
+/** Summarize a plugin's components for the info overlay. Not installable items. */
+async function describePluginContents(pluginDir: string): Promise<string> {
+    const parts: string[] = [];
+
+    const skillsDir = join(pluginDir, "skills");
+    if (await exists(skillsDir)) {
+        const entries = await readdir(skillsDir, { withFileTypes: true });
+        const names: string[] = [];
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (!(await exists(join(skillsDir, entry.name, "SKILL.md")))) continue;
+            names.push(entry.name);
+        }
+        if (names.length > 0) parts.push(`Skills: ${names.sort().join(", ")}`);
+    }
+
+    const agentsDir = join(pluginDir, "agents");
+    if (await exists(agentsDir)) {
+        const entries = await readdir(agentsDir, { withFileTypes: true });
+        const names = entries
+            .filter((e) => e.isFile() && e.name.endsWith(".md"))
+            .map((e) => e.name.replace(/\.md$/, ""))
+            .sort();
+        if (names.length > 0) parts.push(`Agents: ${names.join(", ")}`);
+    }
+
+    const stylesDir = join(pluginDir, "output-styles");
+    if (await exists(stylesDir)) {
+        const entries = await readdir(stylesDir, { withFileTypes: true });
+        const names = entries
+            .filter((e) => e.isFile() && e.name.endsWith(".md"))
+            .map((e) => e.name.replace(/\.md$/, ""))
+            .sort();
+        if (names.length > 0) parts.push(`Output styles: ${names.join(", ")}`);
+    }
+
+    return parts.join(" · ");
+}
+
 /** Resolve a files-package destination dir, expanding a leading ~. Defaults to ~/.claude/. */
 function resolveDestDir(manifest: PackageManifest): string {
-    if (!manifest.destDir) return CLAUDE_DIR;
+    if (!manifest.destDir) return claudeDir();
     return manifest.destDir.replace(/^~/, process.env.HOME!);
 }
 
 /** Check if a skill is installed: exists in ~/.claude/skills/ (any symlink or directory). */
 async function isSkillInstalled(name: string): Promise<boolean> {
-    return exists(join(SKILLS_INSTALL_DIR, name));
+    return exists(join(skillsInstallDir(), name));
 }
 
 /** Run a DetectSpec: all checks must pass. */
@@ -303,7 +371,7 @@ async function checkDetect(spec: DetectSpec): Promise<boolean> {
         }
     }
     if (spec.settings) {
-        const settingsPath = join(CLAUDE_DIR, "settings.json");
+        const settingsPath = join(claudeDir(), "settings.json");
         try {
             const raw = await readFile(settingsPath, "utf-8");
             const json = JSON.parse(raw) as Record<string, unknown>;

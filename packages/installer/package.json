@@ -8,6 +8,7 @@
     "scripts": {
         "start": "node --experimental-strip-types src/index.ts",
         "reinstall": "node --experimental-strip-types src/reinstall.ts",
+        "install-plugins": "node --experimental-strip-types src/install-plugins.ts",
         "install-package": "node --experimental-strip-types src/install-package.ts"
     },
     "dependencies": {

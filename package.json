@@ -10,6 +10,7 @@
   "scripts": {
     "install-packages": "npm -w @cjthompson/claude-code-config-installer start",
     "reinstall": "npm -w @cjthompson/claude-code-config-installer run reinstall",
+    "install-plugins": "npm -w @cjthompson/claude-code-config-installer run install-plugins",
     "install-package": "npm -w @cjthompson/claude-code-config-installer run install-package --",
     "test": "node --test tests/**/*.test.mjs",
     "typecheck": "tsc --noEmit -p packages/installer/tsconfig.json"

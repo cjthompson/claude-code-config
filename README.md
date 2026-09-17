@@ -51,6 +51,23 @@ npm run install-package statusline
 
 Names are matched case-insensitively against package IDs, package labels, and individual item names. Exits non-zero if any name is not found or if any install fails.
 
+### Installing plugins
+
+Plugins are installed by invoking the Claude Code CLI, never by copying their files into `~/.claude/`:
+
+```bash
+npm run install-plugins
+```
+
+This runs `claude plugin install <plugin>@cjthompson-claude-code-config --scope user` for every plugin under `plugins/`. It is idempotent — a plugin already at the version declared in `.claude-plugin/marketplace.json` runs no command and reports `Already installed`.
+
+Two things to know:
+
+- **It installs the marketplace's published catalog, not your working tree.** The marketplace resolves to the GitHub repo, so local uncommitted plugin edits are not what gets installed. Commit and publish first, or run `claude plugin marketplace update cjthompson-claude-code-config`.
+- **A restart (or `/reload-plugins`) is required** before a plugin change takes effect.
+
+If the `claude` binary is not on `PATH`, the installer reports the manual `/plugin marketplace add` and `/plugin install` commands and installs nothing — it never falls back to copying files, because a copy publishes the plugin's assets a second time under unprefixed names (a plugin style `output-styles:Terse` would also appear as a bare `Terse`).
+
 ## Skills
 
 Custom skills for Claude Code, located in `plugins/<name>/skills/`. Each skill is a standalone Claude Code plugin with its own `.claude-plugin/plugin.json`.

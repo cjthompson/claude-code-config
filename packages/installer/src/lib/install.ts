@@ -1,23 +1,38 @@
 import { mkdir, symlink, readlink, readFile, writeFile, copyFile, unlink, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileHash } from "./hash.ts";
+import { agentsInstallDir, claudeDir, skillsInstallDir } from "./paths.ts";
+import {
+    claudeBin,
+    compareVersions,
+    describeFailure,
+    isMissingBinary,
+    marketplaceListArgv,
+    missingBinaryMessage,
+    parseMarketplaceList,
+    parsePluginList,
+    pluginInstallArgv,
+    pluginListArgv,
+    pluginUninstallArgv,
+    pluginUpdateArgv,
+    realSpawn,
+    versionArgv,
+    type Spawn,
+} from "./plugin-cli.ts";
 import type { InstallResult, PackageDescriptor, PackageManifest } from "./types.ts";
-
-const CLAUDE_DIR = join(process.env.HOME!, ".claude");
-const SKILLS_INSTALL_DIR = join(CLAUDE_DIR, "skills");
-const AGENTS_INSTALL_DIR = join(CLAUDE_DIR, "agents");
 
 /** Resolve a files-package destination dir, expanding a leading ~. Defaults to ~/.claude/. */
 function resolveDestDir(manifest: PackageManifest): string {
-    if (!manifest.destDir) return CLAUDE_DIR;
+    if (!manifest.destDir) return claudeDir();
     return manifest.destDir.replace(/^~/, process.env.HOME!);
 }
 
 export async function installPackage(
     pkg: PackageDescriptor,
+    spawn: Spawn = realSpawn,
 ): Promise<InstallResult[]> {
     if (pkg.type === "plugin") {
-        return installPlugin(pkg);
+        return installPlugin(pkg, spawn);
     }
     if (pkg.type === "skills") {
         return installSkills(pkg);
@@ -27,9 +42,10 @@ export async function installPackage(
 
 export async function removePackage(
     pkg: PackageDescriptor,
+    spawn: Spawn = realSpawn,
 ): Promise<InstallResult[]> {
     if (pkg.type === "plugin") {
-        return removePlugin(pkg);
+        return removePlugin(pkg, spawn);
     }
     if (pkg.type === "skills") {
         return removeSkills(pkg);
@@ -37,60 +53,178 @@ export async function removePackage(
     return removeFiles(pkg);
 }
 
+/**
+ * Install a plugin by invoking the Claude Code CLI.
+ *
+ * Never copies the plugin's files. Copying a plugin's output-styles/, skills/ or
+ * agents/ into ~/.claude/ makes the same asset discoverable under a second,
+ * unprefixed name, so `output-styles:Terse` also appears as a bare `Terse` that
+ * no plugin owns. That duplicate identity is the bug this function replaced.
+ *
+ * Note for callers surfacing these results: a plugin change needs a Claude Code
+ * restart (or /reload-plugins) before it takes effect, and the install resolves
+ * against the marketplace's published source rather than this working tree.
+ */
 async function installPlugin(
     pkg: PackageDescriptor,
+    spawn: Spawn = realSpawn,
 ): Promise<InstallResult[]> {
-    await mkdir(SKILLS_INSTALL_DIR, { recursive: true });
-    await mkdir(AGENTS_INSTALL_DIR, { recursive: true });
     const results: InstallResult[] = [];
+    const targets = pkg.items.filter(
+        (item) => item.enabled && item.itemType === "plugin" && item.pluginId,
+    );
+    if (targets.length === 0) return results;
 
-    for (const item of pkg.items) {
-        if (!item.enabled || !item.sourcePath) continue;
+    const marketplaceSource = pkg.marketplaceSource ?? "";
+
+    // 1. Binary present? A missing CLI is reported, never worked around.
+    try {
+        await spawn(claudeBin(), versionArgv());
+    } catch (err) {
+        if (isMissingBinary(err)) {
+            for (const item of targets) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "error",
+                    message: missingBinaryMessage(item.pluginId!, marketplaceSource),
+                });
+            }
+            return results;
+        }
+    }
+
+    // 2. Marketplace registered? Never auto-add it: the name is already bound to
+    //    a published source, and rebinding it to a local path would clobber a
+    //    working registry entry.
+    const marketplaceName = pkg.marketplaceName;
+    if (marketplaceName) {
+        try {
+            const listed = await spawn(claudeBin(), marketplaceListArgv());
+            const known = parseMarketplaceList(listed.stdout);
+            if (known.size > 0 && !known.has(marketplaceName)) {
+                for (const item of targets) {
+                    results.push({
+                        packageId: pkg.id,
+                        itemName: item.name,
+                        status: "error",
+                        message:
+                            `Marketplace "${marketplaceName}" is not registered — ` +
+                            `run \`claude plugin marketplace add ${marketplaceSource}\` first.`,
+                    });
+                }
+                return results;
+            }
+        } catch {
+            // Probe failed for a non-ENOENT reason; fall through and let the
+            // install itself report the real error.
+        }
+    }
+
+    // 3. What's installed already?
+    let installed = new Map<string, { version: string; enabled: boolean }>();
+    try {
+        const listed = await spawn(claudeBin(), pluginListArgv());
+        installed = parsePluginList(listed.stdout);
+    } catch {
+        // Treat an unreadable list as "nothing installed" and let install decide.
+    }
+
+    for (const item of targets) {
+        const id = item.pluginId!;
+        const current = installed.get(id);
+        const expected = item.pluginVersion ?? "";
 
         try {
-            if (item.itemType === "skill") {
-                const target = join(SKILLS_INSTALL_DIR, item.name);
-                await symlinkItem(item.sourcePath, target);
-                results.push({ packageId: pkg.id, itemName: item.name, status: "created", message: `Linked: ${item.name}` });
-            } else if (item.itemType === "agent") {
-                const target = join(AGENTS_INSTALL_DIR, item.name);
-                await symlinkItem(item.sourcePath, target);
-                results.push({ packageId: pkg.id, itemName: item.name, status: "created", message: `Linked agent: ${item.name}` });
-            } else {
-                // file
-                const dest = join(CLAUDE_DIR, item.name);
-                const existed = await stat(dest).then(() => true, () => false);
-                await mkdir(dirname(dest), { recursive: true });
-                await copyFile(item.sourcePath, dest);
-                results.push({ packageId: pkg.id, itemName: item.name, status: existed ? "updated" : "created", message: existed ? `Updated: ${item.name}` : `Copied: ${item.name}` });
+            // Up to date: run nothing at all.
+            if (current && expected && compareVersions(expected, current.version) <= 0) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "already-exists",
+                    message: current.enabled
+                        ? `Already installed: ${id} v${current.version}`
+                        : `Already installed: ${id} v${current.version} — disabled; ` +
+                          `run \`claude plugin enable ${id}\` to turn it on`,
+                });
+                continue;
             }
+
+            const upgrading = Boolean(current);
+            const argv = upgrading ? pluginUpdateArgv(id) : pluginInstallArgv(id);
+            const run = await spawn(claudeBin(), argv);
+
+            if (run.code !== 0) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "error",
+                    message: `${id}: ${describeFailure(run)}`,
+                });
+                continue;
+            }
+
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: upgrading ? "updated" : "created",
+                message: upgrading
+                    ? `Updated: ${id}${expected ? ` → v${expected}` : ""} (restart Claude Code to apply)`
+                    : `Installed: ${id}${expected ? ` v${expected}` : ""} (restart Claude Code to apply)`,
+            });
         } catch (err) {
-            results.push({ packageId: pkg.id, itemName: item.name, status: "error", message: `${item.name}: ${(err as Error).message}` });
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: "error",
+                message: isMissingBinary(err)
+                    ? missingBinaryMessage(id, marketplaceSource)
+                    : `${id}: ${(err as Error).message}`,
+            });
         }
     }
 
     return results;
 }
 
+/** Uninstall a plugin through the CLI, mirroring installPlugin. */
 async function removePlugin(
     pkg: PackageDescriptor,
+    spawn: Spawn = realSpawn,
 ): Promise<InstallResult[]> {
     const results: InstallResult[] = [];
 
     for (const item of pkg.items) {
         if (!item.markedForRemoval) continue;
+        if (item.itemType !== "plugin" || !item.pluginId) continue;
 
+        const id = item.pluginId;
         try {
-            if (item.itemType === "skill") {
-                await unlink(join(SKILLS_INSTALL_DIR, item.name));
-            } else if (item.itemType === "agent") {
-                await unlink(join(AGENTS_INSTALL_DIR, item.name));
-            } else {
-                await unlink(join(CLAUDE_DIR, item.name));
+            const run = await spawn(claudeBin(), pluginUninstallArgv(id));
+            if (run.code !== 0) {
+                results.push({
+                    packageId: pkg.id,
+                    itemName: item.name,
+                    status: "error",
+                    message: `${id}: ${describeFailure(run)}`,
+                });
+                continue;
             }
-            results.push({ packageId: pkg.id, itemName: item.name, status: "removed", message: `Removed: ${item.name}` });
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: "removed",
+                message: `Uninstalled: ${id} (restart Claude Code to apply)`,
+            });
         } catch (err) {
-            results.push({ packageId: pkg.id, itemName: item.name, status: "error", message: `${item.name}: ${(err as Error).message}` });
+            results.push({
+                packageId: pkg.id,
+                itemName: item.name,
+                status: "error",
+                message: isMissingBinary(err)
+                    ? missingBinaryMessage(id, pkg.marketplaceSource ?? "")
+                    : `${id}: ${(err as Error).message}`,
+            });
         }
     }
 
@@ -117,7 +251,7 @@ async function removeSkills(
     for (const item of pkg.items) {
         if (!item.markedForRemoval) continue;
 
-        const target = join(SKILLS_INSTALL_DIR, item.name);
+        const target = join(skillsInstallDir(), item.name);
         try {
             await unlink(target);
             results.push({
@@ -151,7 +285,7 @@ async function removeFiles(
         if (!item.markedForRemoval) continue;
 
         if (item.name === "settings.json config" && manifest.settings) {
-            const settingsPath = join(CLAUDE_DIR, "settings.json");
+            const settingsPath = join(claudeDir(), "settings.json");
             try {
                 const raw = await readFile(settingsPath, "utf-8");
                 const settings = JSON.parse(raw) as Record<string, unknown>;
@@ -201,17 +335,17 @@ async function removeFiles(
 async function installSkills(
     pkg: PackageDescriptor,
 ): Promise<InstallResult[]> {
-    await mkdir(SKILLS_INSTALL_DIR, { recursive: true });
+    await mkdir(skillsInstallDir(), { recursive: true });
     const results: InstallResult[] = [];
 
     for (const item of pkg.items) {
         if (!item.enabled || !item.sourcePath) continue;
 
-        const target = join(SKILLS_INSTALL_DIR, item.name);
+        const target = join(skillsInstallDir(), item.name);
         try {
             try {
                 const linkTarget = await readlink(target);
-                const resolvedLink = resolve(SKILLS_INSTALL_DIR, linkTarget);
+                const resolvedLink = resolve(skillsInstallDir(), linkTarget);
                 if (resolvedLink === resolve(item.sourcePath)) {
                     results.push({
                         packageId: pkg.id,
@@ -295,7 +429,7 @@ async function installFiles(
 
     // Merge settings.json if manifest specifies settings
     if (manifest.settings) {
-        const settingsPath = join(CLAUDE_DIR, "settings.json");
+        const settingsPath = join(claudeDir(), "settings.json");
         try {
             let settings: Record<string, unknown> = {};
             try {
