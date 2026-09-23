@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.0.76 - 2026-09-23
+
+### Changes
+- **claude-optin**: manage Claude Code's per-project trust flag (`projects[<key>].hasTrustDialogAccepted` in `~/.claude.json`). New `--trust [PATH]`, `--untrust [PATH]`, and `--trust-status` flags (`-g` lists every entry) use the same key Claude Code 2.1.280 does: the realpath of the git root, with a linked worktree mapped to its main checkout. `--trust-status` names the trusted ancestor that suppresses the trust dialog while the exact key stays untrusted (anthropics/claude-code#72896). Writes are strict-parse, atomic, mode-preserving, and no-op when unchanged; a malformed file is left untouched.
+- **claude-optin**: new Trust tab in the TUI. Shows the current repo's key (every entry with `-g`, current key marked), with trusted/untrusted counts in the header. `space`/`enter` asks `Trust <path>?` / `Untrust <path>?` and `y` applies it; untrusting removes the flag rather than writing `false`. `l`/right shows onboarding fields and, on the current row, the suppressing ancestor.
+- **claude-optin**: the badge-refresh timeout no longer cancels a pending confirmation, which also affected plugin delete.
+
 ## v0.0.75 - 2026-09-17
 
 ### Changes
