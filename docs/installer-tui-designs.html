@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>install-packages TUI — 5 designs</title>
+<style>
+  :root {
+    --bg:#0a0c0f; --panel:#101418; --rule:#1e242c; --fg:#d6dbe3;
+    --dim:#6a7480; --dimmer:#4a525c; --green:#7ee787; --yellow:#e3b341;
+    --orange:#ff9e3f; --red:#f85149; --cyan:#79c0ff; --magenta:#d2a8ff; --navy:#0d1b3a;
+  }
+  * { box-sizing:border-box; }
+  html,body {
+    background:var(--bg); color:var(--fg); margin:0;
+    font-family:"SF Mono","Menlo","DejaVu Sans Mono","Liberation Mono","Consolas",monospace;
+    font-size:13px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:1240px; margin:0 auto; padding:40px 24px 120px; }
+  h1 { font-size:20px; font-weight:700; margin:0 0 4px; letter-spacing:-.2px; }
+  h2 { font-size:15px; font-weight:700; margin:0; color:var(--cyan); }
+  h3 { font-size:11px; font-weight:700; margin:30px 0 8px; color:var(--dim);
+       text-transform:uppercase; letter-spacing:1.2px; }
+  p { margin:0 0 10px; max-width:80ch; }
+  code { color:var(--fg); }
+  .sub { color:var(--dim); margin-bottom:34px; }
+  .brief { border:1px solid var(--rule); background:var(--panel); padding:18px 22px; margin:0 0 40px; }
+  .brief ol { margin:10px 0 0; padding-left:22px; }
+  .brief li { margin-bottom:7px; max-width:86ch; }
+  .brief .lbl { color:var(--cyan); font-weight:700; }
+  .card { margin:0 0 58px; border-top:1px solid var(--rule); padding-top:22px; }
+  .card.rec { border-top:2px solid var(--green); }
+  .hdr { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
+  .num { color:var(--bg); background:var(--cyan); font-weight:700; padding:1px 8px; font-size:12px; }
+  .card.rec .num { background:var(--green); }
+  .tag { font-size:10px; padding:2px 7px; border:1px solid var(--rule); color:var(--dim);
+         text-transform:uppercase; letter-spacing:.7px; }
+  .tag.fs { border-color:var(--magenta); color:var(--magenta); }
+  .tag.inl { border-color:var(--green); color:var(--green); }
+  .tag.win { border-color:var(--green); color:var(--green); background:rgba(126,231,135,.08); }
+  .pitch { margin:10px 0 16px; max-width:88ch; }
+  .term { background:#05070a; border:1px solid var(--rule); padding:14px 16px;
+          overflow-x:auto; margin:0 0 12px; }
+  .term pre { margin:0; white-space:pre; font:inherit; }
+  .caption { color:var(--dimmer); font-size:11px; margin:-4px 0 20px; max-width:90ch; }
+  .g{color:var(--green)} .y{color:var(--yellow)} .o{color:var(--orange)} .r{color:var(--red)}
+  .c{color:var(--cyan)} .m{color:var(--magenta)} .d{color:var(--dim)} .dd{color:var(--dimmer)}
+  .b{font-weight:700} .u{text-decoration:underline}
+  .rev{background:#1c2430; color:#eef2f7}
+  .rev.g{color:#7ee787} .rev.y{color:#e3b341} .rev.r{color:#f85149} .rev.d{color:#8b95a1}
+  .bar{background:#d6dbe3; color:#05070a}
+  .lgnd{background:var(--navy); color:#eef2f7}
+  .lgnd.g{color:#8ff09a} .lgnd.y{color:#f2c75c} .lgnd.r{color:#ff736b} .lgnd.c{color:#9ed0ff}
+  .badge{background:var(--green); color:#05070a; font-weight:700}
+  .badgeo{background:var(--orange); color:#05070a; font-weight:700}
+  .notes { border-left:2px solid var(--rule); padding-left:16px; margin-top:16px; }
+  .notes div { margin-bottom:6px; max-width:88ch; }
+  .notes .k { color:var(--cyan); font-weight:700; }
+  .notes .pro::before { content:"+ "; color:var(--green); font-weight:700; }
+  .notes .con::before { content:"\2212 "; color:var(--red); font-weight:700; }
+  .notes .neu::before { content:"\00b7 "; color:var(--dim); font-weight:700; }
+  table { border-collapse:collapse; width:100%; font-size:12px; margin:12px 0 0; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { color:var(--dim); font-weight:700; text-transform:uppercase; font-size:10px; letter-spacing:.9px; }
+  .sw { display:inline-block; width:10px; height:10px; margin-right:7px; vertical-align:-1px; }
+  hr.sep { border:0; border-top:1px solid var(--rule); margin:56px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>install-packages &mdash; five TUI designs</h1>
+<div class="sub">same fixture in all five &middot; render mode labelled per design &middot; every grid verified at its stated column width</div>
+
+<div class="brief">
+  <h2>Design brief &mdash; what this TUI is for</h2>
+  <ol>
+    <li><span class="lbl">Reconcile.</span> Show what this repo offers against what is on the machine &mdash; <code>~/.claude/</code>, <code>~/.local/bin</code>, <code>settings.json</code> keys, the plugin cache &mdash; and whether each is current. Files compare by content hash; plugins compare by <code>marketplace.json</code> version. A symlink pointing back into the repo counts as always-current.</li>
+    <li><span class="lbl">Select a subset and apply as one batch.</span> Installs, upgrades and removals commit together on a single keypress.</li>
+    <li><span class="lbl">Explain before deciding.</span> Any row can show its description, and some packages carry sample output.</li>
+    <li><span class="lbl">Report per-item outcome.</span> created / updated / removed / already-exists / warning / error, streamed as each item finishes rather than all at the end.</li>
+  </ol>
+  <p style="margin:15px 0 0;color:var(--dim)">The failure these five are scored against: <span class="c">does the design keep <em>current state</em> and <em>queued action</em> in separate visual channels?</span> Collapsing both into one glyph column is what makes a list like this unreadable &mdash; a tick that means &ldquo;installed&rdquo;, &ldquo;current&rdquo; <em>and</em> &ldquo;will install&rdquo; teaches you nothing.</p>
+</div>
+
+<h3>Fixture &mdash; identical across all five</h3>
+<table>
+  <tr><th>row</th><th>kind</th><th>state</th><th>why it is in the set</th></tr>
+  <tr><td><code>Statusline</code></td><td>package</td><td class="g">current</td><td>2 files plus a <code>settings.json</code> sub-item &mdash; the only multi-item row, so it stresses grouping</td></tr>
+  <tr><td><code>Git Utils</code></td><td>package</td><td class="y">outdated</td><td><code>repos</code> hash differs from the repo copy</td></tr>
+  <tr><td><code>Skill Testing</code></td><td>package</td><td class="d">absent</td><td>never installed</td></tr>
+  <tr><td><code>claude-optin</code></td><td>package</td><td class="r">current, queued for removal</td><td>the destructive case</td></tr>
+  <tr><td><code>project-tasks</code></td><td>plugin</td><td class="y">outdated</td><td>2.1.0 on disk, 2.2.0 in the marketplace</td></tr>
+  <tr><td><code>command-watchdog</code></td><td>plugin</td><td class="d">absent</td><td>1.3.0 available</td></tr>
+  <tr><td><code>lean-agents</code> and 8 more</td><td>plugin</td><td class="g">current</td><td>the realistic majority-current tail</td></tr>
+</table>
+<p class="caption" style="margin-top:10px">15 rows: 11 current, 2 outdated, 2 absent. One of the current rows (<code>claude-optin</code>) is queued for removal, so a full apply is <strong>5 changes &mdash; 2 installs, 2 updates, 1 removal &mdash; against 10 untouched rows</strong>. Every design below uses exactly these numbers. Plugins are included because they already carry real version state; if they should stay out of the TUI, every design below loses 11 rows and nothing else changes.</p>
+
+<hr class="sep">
+
+<div class="card">
+  <div class="hdr"><span class="num">1</span><h2>claude-optin house style</h2>
+    <span class="tag fs">fullscreen</span><span class="tag">80 cols</span></div>
+  <p class="pitch">Your existing TUI&rsquo;s shape applied here: pinned title / stats / tab bars, a fixed column grid, right-aligned metadata, full-row reverse video for the cursor, and a legend strip that teaches the glyph vocabulary. The <span class="y">yellow</span> tag is the borrowed trick &mdash; in <code>claude-optin</code> yellow marks the settings layer your keypress writes to; here it marks the rows that will actually change.</p>
+  <div class="term"><pre><span class="b"> install-packages — ~/dev/claude-code-config</span><span class="b">                  </span><span class="d">sort: </span><span class="b">default</span>
+<span class="d"> </span><span class="b">15</span><span class="d"> items (</span><span class="b">11</span><span class="d"> current, </span><span class="b">2</span><span class="d"> outdated, </span><span class="b">2</span><span class="d"> absent) · </span><span class="b">5</span><span class="d"> queued · writes </span><span class="b">~/.claude</span>
+<span class="b u"> Packages</span><span class="d"> | </span><span class="d">Plugins</span><span class="d"> | </span><span class="d">All</span>
+<span class="d">              ITEM                        REPO / DISK    DESTINATION           </span>
+<span class="rev"> </span><span class="rev y b">↑</span><span class="rev"> </span><span class="rev y">outdated</span><span class="rev"> </span><span class="rev">▸ Git Utils                   </span><span class="rev d">1 file         ~/.local/bin          </span>
+ <span class="d b">·</span> <span class="d">absent  </span> <span class="d">▸ Skill Testing               </span><span class="d">1 file         ~/.claude/skills      </span>
+ <span class="r b">✗</span> <span class="r">remove  </span> <span class="r">▸ claude-optin                </span><span class="d">1 file         ~/.local/bin          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▾ Statusline                  </span><span class="d">2 files        ~/.claude             </span>
+<span class="dd">   · file  statusline.sh                                                       </span>
+<span class="dd">   · file  statusline-render.mts                                               </span>
+<span class="dd">   · cfg   statusLine → ~/.claude/settings.json                                </span>
+ <span class="y b">↑</span> <span class="y">outdated</span> <span class="y">▸ project-tasks@cjthompson    </span><span class="d">2.1.0 → 2.2.0  plugin cache          </span>
+ <span class="d b">·</span> <span class="d">absent  </span> <span class="d">▸ command-watchdog@cjthompson </span><span class="d">— → 1.3.0      plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ lean-agents@cjthompson      </span><span class="d">1.0.2          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ output-styles@cjthompson    </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ orchestration-strategy@cjt… </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ agent-team-development@cjt… </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ rust-coding@cjthompson      </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ textual@cjthompson          </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ python-scripting@cjthompson </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ python-development@cjthomp… </span><span class="d">1.0.1          plugin cache          </span>
+ <span class="g b">✓</span> <span class="d">current </span> <span class="g">▸ typescript-development@cjt… </span><span class="d">1.0.1          plugin cache          </span>
+<span class="lgnd"> </span><span class="lgnd g b">✓</span><span class="lgnd"> current  </span><span class="lgnd y b">↑</span><span class="lgnd"> outdated  </span><span class="lgnd">·</span><span class="lgnd"> absent  </span><span class="lgnd r b">✗</span><span class="lgnd"> remove   </span><span class="lgnd y b">yellow</span><span class="lgnd"> = will change on apply</span><span class="lgnd">     </span>
+<span class="bar"> </span><span class="bar b">tab</span><span class="bar">:section  </span><span class="bar b">space</span><span class="bar">:cycle  </span><span class="bar b">l</span><span class="bar">:expand  </span><span class="bar b">i</span><span class="bar">:info  </span><span class="bar b">↵</span><span class="bar">:apply  </span><span class="bar b">q</span><span class="bar">:quit</span><span class="bar">         </span><span class="badge"> 5 QUEUED </span></pre></div>
+  <p class="caption">Rows sorted actionable-first. <code>Git Utils</code> is the cursor. Sub-items appear only when a row is expanded with <code>l</code>.</p>
+  <div class="notes">
+    <div class="pro">Consistent with a tool you already use daily &mdash; no new muscle memory.</div>
+    <div class="pro">Densest of the five: 15 rows, three chrome bars and a legend inside 23 lines.</div>
+    <div class="pro">The metadata columns carry version and destination without a second screen.</div>
+    <div class="con">Needs a fullscreen render. <code>index.ts</code> is a bare <code>render()</code> today, so Ink needs an alternate-screen wrapper &mdash; and quitting wipes the screen from scrollback.</div>
+    <div class="con">Largest symbol vocabulary here: four glyphs, four state words, plus colour carrying meaning. The legend strip exists because it has to.</div>
+    <div class="con"><span class="b">The glyph and the state word are redundant with each other</span>, and the queued action is still inferred from colour rather than stated. Two channels saying one thing, zero channels saying the other.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="hdr"><span class="num">2</span><h2>Plan-then-apply diff</h2>
+    <span class="tag inl">inline</span><span class="tag">80 cols</span></div>
+  <p class="pitch">The list <em>is</em> the plan. Each row carries a <code>+</code> / <code>~</code> / <code>-</code> sigil, a totals line states the whole transaction in one sentence, and nothing is written until you confirm. Borrowed from <code>terraform plan</code> and <code>nix-env --dry-run</code>; the unchanged majority folds into a summary so the plan is only as long as the change.</p>
+  <div class="term"><pre><span class="b">install-packages</span><span class="d"> · ~/dev/claude-code-config</span>
+
+<span class="d">Reconciled 15 items against your machine. Nothing has been written yet.</span>
+
+  <span class="y b">~</span> <span class="b">Git Utils           </span><span class="d">repos                  </span><span class="d">→ </span><span class="d">~/.local/bin</span>
+<span class="dd">      content differs from the repo copy — will overwrite</span>
+  <span class="g b">+</span> <span class="b">Skill Testing       </span><span class="d">SKILL.md               </span><span class="d">→ </span><span class="d">~/.claude/skills</span>
+  <span class="r b">-</span> <span class="b">claude-optin        </span><span class="d">claude-optin           </span><span class="d">→ </span><span class="d">~/.local/bin</span>
+      <span class="r">will be unlinked — this is the only destructive step</span>
+  <span class="y b">~</span> <span class="b">project-tasks       </span><span class="d">2.1.0 → 2.2.0          </span><span class="d">→ </span><span class="d">plugin cache</span>
+  <span class="g b">+</span> <span class="b">command-watchdog    </span><span class="d">1.3.0 (new)            </span><span class="d">→ </span><span class="d">plugin cache</span>
+
+<span class="d">  unchanged (10)</span><span class="dd">  Statusline  lean-agents  output-styles  rust-coding</span>
+<span class="dd">                  orchestration-strategy  agent-team-development</span>
+<span class="dd">                  textual  python-scripting  python-development</span>
+<span class="dd">                  typescript-development</span>
+<span class="d">                  press </span><span class="c b">a</span><span class="d"> to list them as editable rows</span>
+
+<span class="b">Plan: </span><span class="g b">2 to add</span><span class="b">, </span><span class="y b">2 to update</span><span class="b">, </span><span class="r b">1 to remove</span><span class="b">, </span><span class="d">10 unchanged</span><span class="b">.</span>
+
+  <span class="c b">space</span><span class="d"> stage/unstage   </span><span class="c b">a</span><span class="d"> show unchanged   </span><span class="c b">i</span><span class="d"> info   </span><span class="c b">↵</span><span class="d"> apply   </span><span class="c b">q</span><span class="d"> abort</span></pre></div>
+  <p class="caption">Selection screen. A staged-off row dims its sigil rather than vanishing, so the plan never silently shrinks under you.</p>
+  <div class="term"><pre><span class="b">install-packages</span><span class="d"> · applying  </span><span class="g">████████████</span><span class="dd">████████</span><span class="d">  3/5</span>
+
+  <span class="g b">✓</span> <span class="b">Git Utils           </span><span class="g">updated    </span><span class="d">repos → ~/.local/bin</span>
+  <span class="g b">✓</span> <span class="b">Skill Testing       </span><span class="g">created    </span><span class="d">SKILL.md → ~/.claude/skills</span>
+  <span class="r b">✗</span> <span class="b">claude-optin        </span><span class="r">removed    </span><span class="d">~/.local/bin/claude-optin</span>
+  <span class="c b">●</span> <span class="b">project-tasks       </span><span class="c">installing </span><span class="d">claude plugin install project…</span>
+  <span class="d b">○</span> <span class="b">command-watchdog    </span><span class="d">queued     </span><span class="d"></span>
+
+  <span class="y b">⚠</span> <span class="y">outputStyle "Terse" is set but missing from ~/.claude/output-styles</span>
+
+<span class="d">Restart Claude Code (or /reload-plugins) for plugin changes to apply.</span>
+
+  <span class="c b">q</span><span class="d"> quit   </span><span class="c b">r</span><span class="d"> re-reconcile and show the plan again</span></pre></div>
+  <p class="caption">Apply state, mid-stream. Results already arrive per package, so real progress is drawable. <code>r</code> replaces today&rsquo;s dead-end &ldquo;press q to exit&rdquo;.</p>
+  <div class="notes">
+    <div class="pro">Smallest vocabulary of any design that still shows removals: three sigils, each its own verb.</div>
+    <div class="pro">State and action cannot collide &mdash; an unchanged row has <em>no sigil at all</em>, so the sigil column is purely pending action.</div>
+    <div class="pro">Inline, so the plan and every result line stay in scrollback after it exits.</div>
+    <div class="pro">The totals line makes the destructive step impossible to miss before committing.</div>
+    <div class="con">The 10 unchanged rows are not selectable until you press <code>a</code> &mdash; an extra keystroke on a fresh machine where everything is a delta.</div>
+    <div class="con">Variable row heights: the explanatory second line appears on some rows only, so the cursor does not advance a fixed distance.</div>
+    <div class="con">No version columns &mdash; &ldquo;2.1.0 &rarr; 2.2.0&rdquo; is prose in the detail field, not an alignable column you can scan down.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="hdr"><span class="num">3</span><h2>Transaction list</h2>
+    <span class="tag fs">fullscreen</span><span class="tag">120 cols</span></div>
+  <p class="pitch"><code>aptitude</code>&rsquo;s shape. A read-only <span class="b">STATE</span> column describes the machine; a separate <span class="b">ACT</span> column holds the action you cycled onto that row. The two can never be confused because states are adjectives and actions are verbs, in different columns. Wide, because the version-versus-version comparison is what earns the horizontal space.</p>
+  <div class="term"><pre><span class="b"> install-packages</span><span class="b">                                                                   </span><span class="b">~/dev/claude-code-config · </span><span class="y b">5 queued</span>
+<span class="d"> </span><span class="b">15</span><span class="d"> items · hash-compared against ~/.claude, ~/.local/bin and the plugin cache · writes </span><span class="b">~/.claude/settings.json</span>
+
+<span class="d"> ACT  ITEM                            STATE     REPO     ON DISK   DESTINATION            ACTION ON APPLY         </span>
+<span class="dd"> ──── ──────────────────────────────  ────────  ───────  ────────  ─────────────────────  ─────────────────────── </span>
+<span class="rev"> </span><span class="rev y b">upg  </span><span class="rev b">Git Utils                       </span><span class="rev y">outdated  </span><span class="rev">1 file   1 file    </span><span class="rev d">~/.local/bin           </span><span class="rev y">overwrite repos         </span>
+ <span class="g b">ins  </span><span class="b">Skill Testing                   </span><span class="d">absent    </span>1 file   —         <span class="d">~/.claude/skills       </span><span class="d">symlink SKILL.md        </span>
+ <span class="r b">del  </span><span class="b">claude-optin                    </span><span class="g">current   </span>1 file   1 file    <span class="d">~/.local/bin           </span><span class="r">unlink the binary       </span>
+<span class="d">      Statusline                      </span><span class="g">current   </span><span class="d">2 files  2 files   ~/.claude              —                       </span>
+<span class="dd">         └─ statusline.sh, statusline-render.mts, settings.json › statusLine</span>
+ <span class="y b">upg  </span><span class="b">project-tasks@cjthompson        </span><span class="y">outdated  </span>2.2.0    2.1.0     <span class="d">plugin cache           </span><span class="d">claude plugin install   </span>
+ <span class="g b">ins  </span><span class="b">command-watchdog@cjthompson     </span><span class="d">absent    </span>1.3.0    —         <span class="d">plugin cache           </span><span class="d">claude plugin install   </span>
+<span class="d">      lean-agents@cjthompson          </span><span class="g">current   </span><span class="d">1.0.2    1.0.2     plugin cache           —                       </span>
+<span class="d">      output-styles@cjthompson        </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      orchestration-strategy@cjthomp… </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      agent-team-development@cjthomp… </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      rust-coding@cjthompson          </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      textual@cjthompson              </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      python-scripting@cjthompson     </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      python-development@cjthompson   </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+<span class="d">      typescript-development@cjthomp… </span><span class="g">current   </span><span class="d">1.0.1    1.0.1     plugin cache           —                       </span>
+
+<span class="d"> Queued: </span><span class="y b">2 upgrades</span><span class="d">, </span><span class="g b">2 installs</span><span class="d">, </span><span class="r b">1 delete</span><span class="d">.  Nothing touches disk until you press </span><span class="b">↵</span><span class="d">.</span>
+<span class="bar"> </span><span class="bar b">space</span><span class="bar">:cycle act  </span><span class="bar b">i</span><span class="bar">:install  </span><span class="bar b">u</span><span class="bar">:upgrade  </span><span class="bar b">d</span><span class="bar">:delete  </span><span class="bar b">-</span><span class="bar">:clear  </span><span class="bar b">s</span><span class="bar">:sort  </span><span class="bar b">↵</span><span class="bar">:apply  </span><span class="bar b">q</span><span class="bar">:quit</span><span class="bar">                                     </span></pre></div>
+  <p class="caption">Selection screen at 120 columns. <code>ACT</code> is blank on every untouched row, so the queue reads as a shape before you read a single word.</p>
+  <div class="term"><pre><span class="b"> install-packages</span><span class="b">                                                               </span><span class="g b">applying</span>  <span class="g">██████████</span><span class="dd">██████████████</span><span class="d">  2/5</span>
+
+<span class="d"> RESULT  ITEM                            STATUS          DETAIL</span>
+<span class="dd"> ──────  ──────────────────────────────  ──────────────  ────────────────────────────────────────</span>
+ <span class="g b">✓       </span><span class="b">Git Utils                       </span><span class="g">updated         </span><span class="d">repos → ~/.local/bin (hash now matches)</span>
+ <span class="r b">✗       </span><span class="b">claude-optin                    </span><span class="r">removed         </span><span class="d">unlinked ~/.local/bin/claude-optin</span>
+ <span class="c b">●       </span><span class="b">project-tasks@cjthompson        </span><span class="c">installing…     </span><span class="d">claude plugin install project-tasks@cjthompson</span>
+ <span class="y b">⚠       </span><span class="b">(advisory)                      </span><span class="y">warning         </span><span class="y">outputStyle "Terse" not found in ~/.claude/output-styles</span>
+
+<span class="d"> Restart Claude Code, or run /reload-plugins, for the plugin change to take effect.</span>
+<span class="bar"> </span><span class="bar b">r</span><span class="bar">:re-reconcile  </span><span class="bar b">q</span><span class="bar">:quit</span><span class="bar">                                                                                     </span><span class="badgeo"> 1 REMOVED </span></pre></div>
+  <p class="caption">Apply state. Only rows that had a queued action appear &mdash; the 10 no-ops are not restated.</p>
+  <div class="notes">
+    <div class="pro">The only design where the queued action is spelled as a <em>word</em> in its own column. Nothing is inferred.</div>
+    <div class="pro"><code>REPO</code> beside <code>ON DISK</code> makes staleness self-evident without a glyph for it.</div>
+    <div class="pro">Direct-action keys (<code>i</code>/<code>u</code>/<code>d</code>) mean a removal is never one stray <code>space</code> away.</div>
+    <div class="con">Needs 120 columns. Below that <code>ACTION ON APPLY</code> has to drop &mdash; and that is the column carrying the design&rsquo;s whole argument.</div>
+    <div class="con">Most keys of any design here: five action keys plus navigation.</div>
+    <div class="con">Fullscreen, so nothing survives in scrollback; and <code>ACT</code> plus <code>ACTION ON APPLY</code> is arguably one column too many saying the same thing.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="hdr"><span class="num">4</span><h2>Outdated table</h2>
+    <span class="tag inl">inline</span><span class="tag">80 cols</span></div>
+  <p class="pitch"><code>brew outdated</code> / <code>npm outdated</code>: a flat aligned table, no hierarchy, almost no symbols. Staleness reads straight off the two version columns. The bet is that a table you scan in one pass beats any glyph legend &mdash; selection is a single checkbox and that is the whole interaction.</p>
+  <div class="term"><pre><span class="d">install-packages · 15 items · 2 updates, 2 missing, 1 marked for removal</span>
+
+<span class="d">      PACKAGE                         REPO     ON DISK  DESTINATION</span>
+<span class="rev">  </span><span class="rev y b b">[x]</span><span class="rev"> </span><span class="rev">Git Utils                       </span><span class="rev">1 file   </span><span class="rev y">stale    </span><span class="rev">~/.local/bin</span><span class="rev">           </span>
+  <span class="g b">[x]</span> Skill Testing                   1 file   <span class="d">—        </span>~/.claude/skills
+  <span class="d">[ ]</span> claude-optin                    1 file   1 file   ~/.local/bin
+  <span class="d">[x]</span> Statusline                      2 files  2 files  ~/.claude
+<span class="dd">      ├─ statusline.sh, statusline-render.mts</span>
+<span class="dd">      └─ settings.json › statusLine</span>
+
+<span class="d">      PLUGIN                          REPO     ON DISK  SOURCE</span>
+  <span class="y b">[x]</span> project-tasks                   2.2.0    <span class="y">2.1.0    </span>marketplace
+  <span class="g b">[x]</span> command-watchdog                1.3.0    <span class="d">—        </span>marketplace
+  <span class="d">[x]</span> lean-agents                     1.0.2    1.0.2    marketplace
+  <span class="d">[x]</span> output-styles                   1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> orchestration-strategy          1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> agent-team-development          1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> rust-coding                     1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> textual                         1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> python-scripting                1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> python-development              1.0.1    1.0.1    marketplace
+  <span class="d">[x]</span> typescript-development          1.0.1    1.0.1    marketplace
+
+<span class="d">Checked = </span><span class="b">“I want this installed”</span><span class="d">. Unchecking </span><span class="b">claude-optin</span><span class="d"> queues removal.</span>
+
+  <span class="c b">space</span><span class="d"> toggle  </span><span class="c b">A</span><span class="d">/</span><span class="c b">N</span><span class="d"> all/none  </span><span class="c b">i</span><span class="d"> info  </span><span class="c b">↵</span><span class="d"> apply  </span><span class="c b">q</span><span class="d"> quit</span></pre></div>
+  <p class="caption">The checkbox is desired state; <code>REPO</code>/<code>ON DISK</code> supply the delta. <code>claude-optin</code> shows what an unchecked but still-installed row looks like.</p>
+  <div class="notes">
+    <div class="pro">Fewest things to learn: one checkbox, two version columns, no legend at all.</div>
+    <div class="pro">Every row is the same height and every column lands in the same place &mdash; no jitter, no expand state.</div>
+    <div class="pro">Inline and copy-pasteable; the table is useful pasted into a message verbatim.</div>
+    <div class="con"><span class="b">The queued action is never shown.</span> Ten of these boxes are checked and mean &ldquo;do nothing&rdquo;; one unchecked box means &ldquo;delete a file&rdquo;. They look identical.</div>
+    <div class="con">A destructive removal is one <code>space</code> away from a row you were only reading, with no confirm.</div>
+    <div class="con">All 15 rows always render, so the common everything-is-current run is a 24-line wall that says nothing needs doing.</div>
+  </div>
+</div>
+
+<div class="card rec">
+  <div class="hdr"><span class="num">5</span><h2>Two-channel list</h2>
+    <span class="tag inl">inline</span><span class="tag">80 cols</span><span class="tag win">recommended</span></div>
+  <p class="pitch">The table&rsquo;s checkbox for intent and the plan&rsquo;s explicit delta for consequence, in two fixed columns that never share a meaning. <span class="b">Left of the name is what you want; right of the name is what will happen.</span> Current rows have an empty action column, so the queue reads as a shape from four feet away &mdash; and the everything-is-current run collapses to about six lines instead of twenty-four.</p>
+  <div class="term"><pre><span class="b">install-packages</span><span class="d">  ·  </span><span class="y b">5 changes queued</span><span class="d">  ·  10 rows unchanged</span>
+
+<span class="d">PACKAGES </span><span class="dd">───────────────────────────────────────────────────────────────────────</span>
+<span class="rev">› </span><span class="rev g b b">[x]</span><span class="rev">  </span><span class="rev">Git Utils                  </span><span class="rev y">will update    </span><span class="rev d">stale in ~/.local/bin</span><span class="rev">         </span>
+  <span class="g b">[x]</span>  Skill Testing              <span class="g">will install   </span><span class="d">→ ~/.claude/skills</span>
+  <span class="d">[ ]</span>  claude-optin               <span class="r">will REMOVE    </span><span class="d">~/.local/bin/claude-optin</span>
+  <span class="g b">[x]</span>  Statusline                                <span class="d">2 files + settings.json</span>
+<span class="dd">       ├─ </span><span class="d">[x]</span> <span class="dd">statusline.sh, statusline-render.mts     </span>
+<span class="dd">       └─ </span><span class="d">[x]</span> <span class="dd">settings.json › statusLine               </span>
+
+<span class="d">PLUGINS </span><span class="dd">────────────────────────────────────────────────────────────────────────</span>
+  <span class="g b">[x]</span>  project-tasks              <span class="y">will update    </span><span class="d">2.1.0 → 2.2.0</span>
+  <span class="g b">[x]</span>  command-watchdog           <span class="g">will install   </span><span class="d">1.3.0</span>
+  <span class="d">[x]</span>  <span class="d">9 more, all current        </span>               <span class="dd">press </span><span class="c b">a</span><span class="dd"> to list them</span>
+
+<span class="dd">────────────────────────────────────────────────────────────────────────────────</span>
+<span class="d">Applying will </span><span class="g">install 2</span><span class="d">, </span><span class="y">update 2</span><span class="d">, </span><span class="r b">remove 1</span><span class="d">. The other 10 rows are left alone.</span>
+
+  <span class="c b">space</span><span class="d"> toggle   </span><span class="c b">a</span><span class="d"> show all   </span><span class="c b">i</span><span class="d"> info   </span><span class="c b">↵</span><span class="d"> apply   </span><span class="c b">q</span><span class="d"> quit</span></pre></div>
+  <p class="caption">Default view. <code>Git Utils</code> is the cursor. Note <code>Statusline</code>: <code>[x]</code> with <em>nothing</em> in the action column &mdash; checked-and-current is visibly not a change. Its sub-items carry their own boxes, so a partially-installed package (files present, <code>settings.json</code> key absent) shows one sub-row with <span class="g">will install</span> beside it and the parent otherwise untouched &mdash; the state <code>useInstaller.ts</code> currently has no way to express.</p>
+  <div class="term"><pre><span class="b">install-packages</span><span class="d">  ·  </span><span class="r b">confirm</span>
+
+  <span class="r b">1 removal is queued.</span>
+
+    <span class="r">-</span> <span class="b">claude-optin</span><span class="d">   unlink ~/.local/bin/claude-optin</span>
+
+<span class="d">  Also: </span><span class="g">install 2</span><span class="d">, </span><span class="y">update 2</span><span class="d">.</span>
+
+<span class="d">  Type </span><span class="b">y</span><span class="d"> to apply, any other key to go back.</span></pre></div>
+  <p class="caption">A confirm step appears only when a removal is queued, borrowed from <code>claude-optin</code>&rsquo;s delete gate. An install-and-update-only batch applies straight from <code>&crarr;</code>.</p>
+  <div class="term"><pre><span class="b">install-packages</span><span class="d">  ·  applying  </span><span class="g">████████████</span><span class="dd">████████</span><span class="d">  3/5</span>
+
+  <span class="r b">removed  </span><span class="b">claude-optin        </span><span class="d">~/.local/bin/claude-optin</span>
+  <span class="g b">updated  </span><span class="b">Git Utils           </span><span class="d">repos → ~/.local/bin</span>
+  <span class="g b">created  </span><span class="b">Skill Testing       </span><span class="d">~/.claude/skills/skill-testing</span>
+  <span class="c b">working  </span><span class="b">project-tasks       </span><span class="d">claude plugin install project-tasks@…</span>
+  <span class="d b">queued   </span><span class="b">command-watchdog    </span><span class="d">1.3.0</span>
+
+  <span class="y">⚠ warning  outputStyle "Terse" not found in ~/.claude/output-styles</span>
+
+<span class="d">Restart Claude Code, or /reload-plugins, to pick up the plugin change.</span>
+
+  <span class="c b">r</span><span class="d"> re-reconcile   </span><span class="c b">q</span><span class="d"> quit</span></pre></div>
+  <p class="caption">Results, streaming. The verb leads each line and reuses the wording the selection screen promised: <code>will update</code> becomes <code>updated</code>.</p>
+  <div class="notes">
+    <div class="neu"><span class="k">Why this one.</span> The stated goal is a simpler UX, and this is the smallest vocabulary that still keeps both channels apart: a checkbox and a short sentence. No glyph legend, no state words to memorise, no colour that carries meaning on its own.</div>
+    <div class="pro">Two columns, two meanings, no overlap &mdash; <code>[x]</code> is always &ldquo;I want this&rdquo;; the right column is always &ldquo;here is the consequence&rdquo;.</div>
+    <div class="pro">The selection screen&rsquo;s wording becomes the results screen&rsquo;s wording, so the same verbs follow you through the whole flow.</div>
+    <div class="pro">Collapses to roughly 14 lines on the common re-sync run, and inline means results stay in scrollback.</div>
+    <div class="pro">A removal-only confirm keeps a delete from riding along on a batch you were not reading closely.</div>
+    <div class="con">The action column costs ~15 columns of width that design 4 spends on version numbers instead.</div>
+    <div class="con">The action column must be fixed-width to stay aligned, so a long consequence truncates rather than wraps.</div>
+    <div class="con">Collapsing the current tail behind <code>a</code> costs one extra keystroke on a fresh machine.</div>
+    <div class="con">Expanded sub-items break the fixed row rhythm, since only multi-item packages have them.</div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<h3>Colour &mdash; every value here has an emission path</h3>
+<p style="color:var(--dim)">Ink and Chalk both accept hex and 256-colour, so these are not limited to the eight the installer uses today. <code>claude-optin</code> already proves the pattern: 256-colour navy <code>17</code> and orange <code>214</code>, each with a reverse-video fallback for terminals without extended colour.</p>
+<table>
+  <tr><th>role</th><th>swatch</th><th>ANSI / 256</th><th>Ink</th><th>used for</th></tr>
+  <tr><td>current / install</td><td><span class="sw" style="background:#7ee787"></span><code>#7ee787</code></td><td><code>green</code> &middot; 256:114</td><td><code>color="green"</code></td><td>up-to-date rows, <code>+</code>, <code>created</code></td></tr>
+  <tr><td>outdated / update</td><td><span class="sw" style="background:#e3b341"></span><code>#e3b341</code></td><td><code>yellow</code> &middot; 256:179</td><td><code>color="yellow"</code></td><td><code>~</code>, <code>will update</code>, staleness, warnings</td></tr>
+  <tr><td>remove / error</td><td><span class="sw" style="background:#f85149"></span><code>#f85149</code></td><td><code>red</code> &middot; 256:203</td><td><code>color="red"</code></td><td><code>-</code>, <code>will REMOVE</code>, <code>removed</code>, failures</td></tr>
+  <tr><td>keys / in-progress</td><td><span class="sw" style="background:#79c0ff"></span><code>#79c0ff</code></td><td><code>cyan</code> &middot; 256:75</td><td><code>color="cyan"</code></td><td>keybinding letters, <code>working</code>, spinner</td></tr>
+  <tr><td>notification chip</td><td><span class="sw" style="background:#ff9e3f"></span><code>#ff9e3f</code></td><td>256:<code>214</code></td><td><code>color="#ff9e3f"</code></td><td>the <code>1 REMOVED</code> badge; falls back to yellow</td></tr>
+  <tr><td>labels</td><td><span class="sw" style="background:#6a7480"></span><code>#6a7480</code></td><td><code>dimColor</code></td><td><code>&lt;Text dimColor&gt;</code></td><td>column headers, destinations, hint lines</td></tr>
+  <tr><td>unchanged tail</td><td><span class="sw" style="background:#4a525c"></span><code>#4a525c</code></td><td><code>gray</code> + <code>dimColor</code></td><td><code>color="gray" dimColor</code></td><td>collapsed current rows, tree glyphs</td></tr>
+  <tr><td>cursor row</td><td><span class="sw" style="background:#1c2430"></span><code>#1c2430</code></td><td><code>inverse</code></td><td><code>&lt;Text inverse&gt;</code></td><td>full-row selection in designs 1, 3, 4, 5</td></tr>
+  <tr><td>footer bar</td><td><span class="sw" style="background:#d6dbe3"></span><code>#d6dbe3</code></td><td><code>inverse</code></td><td><code>&lt;Text inverse&gt;</code></td><td>the pinned keybinding strip &mdash; fullscreen only</td></tr>
+  <tr><td>legend strip</td><td><span class="sw" style="background:#0d1b3a"></span><code>#0d1b3a</code></td><td>256:<code>17</code></td><td><code>backgroundColor="#0d1b3a"</code></td><td>design 1&rsquo;s glyph legend; <code>inverse</code> fallback</td></tr>
+</table>
+
+<h3>Render mode &mdash; the structural cost</h3>
+<table>
+  <tr><th>&nbsp;</th><th>fullscreen &mdash; designs 1, 3</th><th>inline &mdash; designs 2, 4, 5</th></tr>
+  <tr><td>pinned title / footer bars</td><td class="g">yes</td><td class="r">no &mdash; chrome scrolls with content</td></tr>
+  <tr><td>fixed-height scrolling body</td><td class="g">yes, with room for a legend strip</td><td class="r">no &mdash; the list is as tall as it is</td></tr>
+  <tr><td>scrollback after exit</td><td class="r">gone &mdash; results unreadable once you quit</td><td class="g">kept &mdash; plan and results persist</td></tr>
+  <tr><td>work needed</td><td>an alternate-screen wrapper around <code>render()</code></td><td class="g">none &mdash; this is what already happens</td></tr>
+  <tr><td>resize</td><td>must re-derive column positions from live width, as <code>claude-optin</code> does</td><td>reflows naturally; truncation is the only concern</td></tr>
+</table>
+
+<h3>How the five score on the one thing that matters</h3>
+<table>
+  <tr><th>design</th><th>state and action separated?</th><th>symbols to learn</th><th>lines on a no-op run</th><th>width</th></tr>
+  <tr><td>1 &middot; claude-optin style</td><td class="y">partly &mdash; action inferred from colour</td><td class="r">4 glyphs + 4 words + colour</td><td>23</td><td>80</td></tr>
+  <tr><td>2 &middot; plan diff</td><td class="g">yes &mdash; no sigil means no change</td><td class="g">3 sigils</td><td class="g">~8</td><td>80</td></tr>
+  <tr><td>3 &middot; transaction list</td><td class="g">yes &mdash; two labelled columns</td><td class="y">3 verbs + 5 keys</td><td>22</td><td class="r">120</td></tr>
+  <tr><td>4 &middot; outdated table</td><td class="r">no &mdash; action is never shown</td><td class="g">1 checkbox</td><td class="r">24</td><td>80</td></tr>
+  <tr><td>5 &middot; two-channel list</td><td class="g">yes &mdash; checkbox vs. sentence</td><td class="g">1 checkbox + plain words</td><td class="g">~6</td><td>80</td></tr>
+</table>
+
+</div>
+</body>
+</html>
