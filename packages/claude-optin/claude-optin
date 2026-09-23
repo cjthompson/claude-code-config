@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """claude-optins — TUI to manage per-repo Claude Code opt-ins.
 
-Run from inside a repo. Manages three things that add to a session's
-startup context, in three tabs switched with TAB:
+Run from inside a repo. Manages four things that add to a session's
+startup context, in four tabs switched with TAB:
 
   • Plugins — every installed plugin (with its skills and agents), its
     effective enabled state, and where that comes from.
@@ -14,11 +14,15 @@ startup context, in three tabs switched with TAB:
   • Skills — every discovered skill (personal, project, and active-plugin),
     its effective on/name-only/user-invocable-only/off state, and its
     resident token cost. Plugin-backed skills are always on and read-only.
+  • Trust — whether the current repo (or, with --global, every entry in
+    ~/.claude.json) has accepted Claude Code's trust dialog.
 
 Keys:
-  tab           switch Plugins / MCP Servers / Skills tab
+  tab           switch Plugins / MCP Servers / Skills / Trust tab
   j/k, arrows   move          space/enter  cycle (Plugins/MCP: on<->off;
-                                            Skills: on -> name-only -> off)
+                                            Skills: on -> name-only -> off;
+                                            Trust: confirm, then trust or
+                                            untrust (clears the flag))
   l/right       expand        h/left       collapse
   a             expand/collapse all        g/G  top/bottom
   s             cycle sort: default / name / enabled / source / skills+agents / tokens
@@ -32,12 +36,15 @@ defaults in ~/.claude/settings.json instead. Run /reload-plugins inside a
 live Claude Code session, or start a new session, to pick up changes.
 """
 
+import copy
 import curses
 import json
 import os
 import re
 import shutil
+import stat
 import sys
+import tempfile
 import textwrap
 import time
 
@@ -429,6 +436,211 @@ def find_repo_root():
         d = parent
 
 
+# ---------- trust ----------
+
+DEFAULT_TRUST_ENTRY = {
+    "allowedTools": [],
+    "mcpContextUris": [],
+    "mcpServers": {},
+    "enabledMcpjsonServers": [],
+    "disabledMcpjsonServers": [],
+    "hasTrustDialogAccepted": False,
+    "hasClaudeMdExternalIncludesApproved": False,
+    "hasClaudeMdExternalIncludesWarningShown": False,
+}
+
+
+def load_json_strict(path):
+    """Load JSON from path, raising on OSError, JSONDecodeError, or non-dict top level."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    if not isinstance(doc, dict):
+        raise ValueError(f"Top level of {path} is not a dict")
+    return doc
+
+
+def _git_root(start):
+    """Nearest ancestor of start (inclusive) whose .git is a dir or file, else None.
+    Mirrors Claude's Kt/Cb: this is the worktree's *own* root, not the main checkout."""
+    d = start
+    while True:
+        g = os.path.join(d, ".git")
+        if os.path.isdir(g) or os.path.isfile(g):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _read_regular_file(path):
+    """Stripped UTF-8 text of a regular non-symlink file, else None (Claude's tR check)."""
+    if os.path.islink(path) or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def _canonical_worktree_root(root):
+    # Mirrors Claude Code v2.1.280 ve()/Bt(): a linked worktree's applied-trust key is
+    # the MAIN checkout, not the worktree path. Accepted only when root/.git is a file
+    # "gitdir: X", X/commondir (regular file) names <common>, dirname(X) is
+    # <common>/worktrees, and X/gitdir (regular file) backlinks to root/.git.
+    # Then: basename(<common>) == ".git" -> dirname(<common>); otherwise (bare repo)
+    # <common> itself unless it contains a .git entry. Any failure (submodules, stray
+    # .git files, unreadable files) keeps root. Claude returns the path unrealpath'd;
+    # we realpath it so keys match get_trust/set_trust (identical unless git wrote a
+    # symlinked gitdir path, which it does not by default).
+    try:
+        with open(os.path.join(root, ".git"), encoding="utf-8") as f:
+            content = f.read().strip()
+        if not content.startswith("gitdir:"):
+            return root
+        gitdir = os.path.normpath(os.path.join(root, content[7:].strip()))
+        common_rel = _read_regular_file(os.path.join(gitdir, "commondir"))
+        if common_rel is None:
+            return root
+        common = os.path.normpath(os.path.join(gitdir, common_rel))
+        if os.path.dirname(gitdir) != os.path.join(common, "worktrees"):
+            return root
+        backlink = _read_regular_file(os.path.join(gitdir, "gitdir"))
+        if backlink is None:
+            return root
+        if (os.path.realpath(os.path.join(gitdir, backlink))
+                != os.path.join(os.path.realpath(root), ".git")):
+            return root
+        if os.path.basename(common) != ".git":
+            inner = os.path.join(common, ".git")
+            if os.path.isdir(inner) or os.path.isfile(inner):
+                return root
+            return os.path.realpath(common)
+        return os.path.realpath(os.path.dirname(common))
+    except (OSError, ValueError):  # UnicodeDecodeError is a ValueError
+        return root
+
+
+def resolve_trust_key(start_dir=None):
+    """Claude's applied-trust key for start_dir (default cwd): realpath of the git
+    root, mapped to the main checkout for a linked worktree; realpath(start_dir)
+    outside a repo."""
+    start = os.path.realpath(start_dir or os.getcwd())
+    root = _git_root(start)
+    return start if root is None else _canonical_worktree_root(root)
+
+
+def _projects(doc):
+    """doc["projects"] when doc and it are dicts, else {} (read-only helpers only)."""
+    projects = doc.get("projects") if isinstance(doc, dict) else None
+    return projects if isinstance(projects, dict) else {}
+
+
+def _entry_trusted(entry):
+    """Applied trust (Claude's uwe): flag must be exactly true; non-dict entries have none."""
+    return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+
+
+def discover_trust_entries(user_json_path=None):
+    """Return list of dicts {path, trusted, onboarding_seen_count, has_completed_onboarding}."""
+    user_json_path = user_json_path or CLAUDE_JSON_PATH
+    doc = load_json(user_json_path)
+    projects = _projects(doc)
+    entries = []
+    for path, entry in projects.items():
+        e = entry if isinstance(entry, dict) else {}
+        entries.append({
+            "path": path,
+            "trusted": _entry_trusted(entry),
+            "flag_set": "hasTrustDialogAccepted" in e,
+            "onboarding_seen_count": e.get("projectOnboardingSeenCount"),
+            "has_completed_onboarding": e.get("hasCompletedProjectOnboarding"),
+        })
+    return sorted(entries, key=lambda e: e["path"])
+
+
+def get_trust(path, user_json_path=None):
+    """Return None if no entry, else bool of hasTrustDialogAccepted (False if missing)."""
+    projects = _projects(load_json(user_json_path or CLAUDE_JSON_PATH))
+    path = os.path.realpath(path)
+    if path not in projects:
+        return None
+    return _entry_trusted(projects[path])
+
+
+def trust_suppressor(path, user_json_path=None, *, key=None):
+    """Mirror Claude's j_/Y_ dialog walk: from realpath(path) up to and including its
+    own git root (a linked worktree's own root, NOT the main checkout; unbounded when
+    not in a repo), return the first path other than `key` whose entry has a truthy
+    hasTrustDialogAccepted, else None. `key` defaults to resolve_trust_key(path)."""
+    start = os.path.realpath(path)
+    if key is None:
+        key = resolve_trust_key(start)
+    projects = _projects(load_json(user_json_path or CLAUDE_JSON_PATH))
+    root = _git_root(start)
+    d = start
+    while True:
+        entry = projects.get(d)
+        if d != key and isinstance(entry, dict) and entry.get("hasTrustDialogAccepted"):
+            return d
+        if d == root:
+            return None
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def set_trust(path, value, user_json_path=None):
+    """Set hasTrustDialogAccepted for path (value None removes the field but
+    keeps the entry). Returns (old, new).
+    No-op if unchanged; preserves file mode; raises on malformed file."""
+    user_json_path = user_json_path or CLAUDE_JSON_PATH
+    doc = load_json_strict(user_json_path)
+    projects = doc.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        raise ValueError(f"'projects' in {user_json_path} is not an object")
+    path = os.path.realpath(path)
+    if path in projects and not isinstance(projects[path], dict):
+        raise ValueError(f"projects[{path!r}] in {user_json_path} is not an object")
+    old = _entry_trusted(projects[path]) if path in projects else None
+    if value is None:
+        if old is None or "hasTrustDialogAccepted" not in projects[path]:
+            return (old, old)        # no flag to clear; file untouched
+        projects[path] = dict(projects[path])
+        del projects[path]["hasTrustDialogAccepted"]
+    elif old is None and value is False:
+        return (None, None)          # nothing to untrust; file untouched
+    elif old == value:
+        return (old, old)            # unchanged; file untouched
+    else:
+        if path not in projects:
+            projects[path] = copy.deepcopy(DEFAULT_TRUST_ENTRY)
+        else:
+            projects[path] = dict(projects[path])
+        projects[path]["hasTrustDialogAccepted"] = value
+
+    # Write atomically with mode preservation
+    target = os.path.realpath(user_json_path)
+    mode = stat.S_IMODE(os.stat(target).st_mode)
+    tmpdir = os.path.dirname(target)
+    fd, tmp_path = tempfile.mkstemp(dir=tmpdir, prefix=".claude.json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
+
+    return (old, value)
+
+
 class Settings:
     """Three-layer view of enabledPlugins and the MCP enable/disable
     name-lists, which share the same settings files. Toggles write to the
@@ -627,6 +839,102 @@ def build_skill_entries(skills, settings):
     return entries
 
 
+def _trust_detail_items(entry):
+    """(label, value) pairs for a trust entry's detail rows (onboarding
+    fields when present, plus the suppressing ancestor when untrusted)."""
+    items = []
+    if entry["onboarding_seen_count"] is not None:
+        items.append(("onboarding seen", entry["onboarding_seen_count"]))
+    if entry["has_completed_onboarding"] is not None:
+        items.append(("onboarding done", entry["has_completed_onboarding"]))
+    if not entry["trusted"] and entry.get("suppressor"):
+        items.append(("suppressed by", entry["suppressor"]))
+    return items
+
+
+def _make_trust_row(path, trusted, has_entry, current, onboarding_seen_count,
+                    has_completed_onboarding, flag_set=False):
+    return {
+        "kind": "trust",
+        "key": path,
+        "path": path,
+        "trusted": trusted,
+        "has_entry": has_entry,
+        "flag_set": flag_set,
+        "current": current,
+        "onboarding_seen_count": onboarding_seen_count,
+        "has_completed_onboarding": has_completed_onboarding,
+    }
+
+
+def build_trust_entries(trust_key, global_mode, cwd=None, user_json_path=None):
+    """Trust-tab rows. Non-global: the single current key (shown even with
+    no entry). Global: one row per discover_trust_entries(), current key
+    marked; if the current key has no entry, it's added as a no-entry
+    current row in path-sorted position. The suppressing ancestor is
+    computed only for the current row, and only when it's untrusted —
+    mirroring the CLI's own trust_suppressor call."""
+    cwd = cwd or os.getcwd()
+    user_json_path = user_json_path or CLAUDE_JSON_PATH
+    discovered = discover_trust_entries(user_json_path=user_json_path)
+
+    if not global_mode:
+        match = next((e for e in discovered if e["path"] == trust_key), None)
+        if match:
+            entries = [_make_trust_row(match["path"], match["trusted"], True, True,
+                                       match["onboarding_seen_count"],
+                                       match["has_completed_onboarding"],
+                                       match["flag_set"])]
+        else:
+            entries = [_make_trust_row(trust_key, False, False, True, None, None)]
+    else:
+        entries = [_make_trust_row(d["path"], d["trusted"], True, d["path"] == trust_key,
+                                   d["onboarding_seen_count"], d["has_completed_onboarding"],
+                                   d["flag_set"])
+                  for d in discovered]
+        if not any(e["current"] for e in entries):
+            entries.append(_make_trust_row(trust_key, False, False, True, None, None))
+            entries.sort(key=lambda e: e["path"])
+
+    for e in entries:
+        e["suppressor"] = None
+        if e["current"] and not e["trusted"]:
+            e["suppressor"] = trust_suppressor(cwd, key=trust_key, user_json_path=user_json_path)
+        e["detail_items"] = _trust_detail_items(e)
+    return entries
+
+
+def trust_tab_summary(entries):
+    """Header facts for the Trust tab: total entries and trusted/untrusted
+    counts. A no-entry row counts as untrusted."""
+    total = len(entries)
+    trusted = sum(1 for e in entries if e["trusted"])
+    return {"total": total, "trusted": trusted, "untrusted": total - trusted}
+
+
+def trust_next_state(entry):
+    """Toggle target: trusted -> None (remove the hasTrustDialogAccepted
+    field, which Claude reads as untrusted); anything else -> True."""
+    return None if entry["trusted"] else True
+
+
+def confirm_prompt(kind, entry):
+    """(verb, label) for the confirmation footer, kind-aware."""
+    if kind == "plugin":
+        return ("Delete", f"{entry['name']}@{entry['marketplace']}")
+    return ("Untrust" if entry["trusted"] else "Trust", entry["path"])
+
+
+def apply_trust_confirm(entry, user_json_path=None):
+    """Toggle a trust entry. Returns (True, 'saved') on success, or
+    (False, 'error: ...') without writing on a malformed file."""
+    try:
+        set_trust(entry["path"], trust_next_state(entry), user_json_path=user_json_path)
+        return True, "saved"
+    except (OSError, ValueError) as e:
+        return False, f"error: {e}"
+
+
 def skill_tab_summary(entries):
     """Header facts for the Skills tab: how many are effectively on, and
     the total resident token cost of the current effective listing."""
@@ -662,6 +970,11 @@ def build_rows(display, expanded, detail_wrap_width=78):
                 rows.append(("mcp-detail", i, f"{label}  {val}"))
             if not e["detail_items"]:
                 rows.append(("empty", i, "(no connection details)"))
+        elif e["kind"] == "trust":
+            for label, val in e["detail_items"]:
+                rows.append(("trust-detail", i, f"{label}  {val}"))
+            if not e["detail_items"]:
+                rows.append(("empty", i, "(no onboarding fields)"))
         else:   # skill
             detail_rows = []
             reason = None
@@ -716,7 +1029,7 @@ def wrap_legend(items, width):
     return lines
 
 
-def run(stdscr, plugins, servers, skills, settings):
+def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_GREEN, -1)
@@ -737,6 +1050,7 @@ def run(stdscr, plugins, servers, skills, settings):
     # as a stray dark box against the light bar.
     NOTIFY_SAVED = GREEN | curses.A_BOLD | curses.A_REVERSE
     NOTIFY_DELETED = ORANGE | curses.A_BOLD | curses.A_REVERSE
+    NOTIFY_ERROR = RED | curses.A_BOLD | curses.A_REVERSE
 
     # Skills-tab legend bar: a genuinely dark navy background so bright
     # white/green/cyan/yellow/red foreground text has real luminance
@@ -765,10 +1079,10 @@ def run(stdscr, plugins, servers, skills, settings):
                  "uninstalled": 4, "orphan": 4, "deleted": 5}
 
     expanded, cursor, top = set(), 0, 0
-    tab = 0           # 0 = Plugins, 1 = MCP Servers, 2 = Skills
-    TAB_NAMES = ["Plugins", "MCP Servers", "Skills"]
+    tab = 0           # 0 = Plugins, 1 = MCP Servers, 2 = Skills, 3 = Trust
+    TAB_NAMES = ["Plugins", "MCP Servers", "Skills", "Trust"]
     deleted = set()   # keys removed this session; gone from cache but kept in list
-    confirming = None  # key being confirmed for deletion, or None
+    confirming = None  # {"kind", "key", "entry"} being confirmed, or None
     notify_msg, notify_color, notify_at = "", None, 0.0
     sort_idx = 0
 
@@ -825,7 +1139,7 @@ def run(stdscr, plugins, servers, skills, settings):
             skl = sorted(skill_entries, key=lambda e: -e["resident_tokens"])
         else:
             skl = skill_entries
-        display = [plug, srv, skl][tab]
+        display = [plug, srv, skl, trust_entries][tab]
 
         h, w = stdscr.getmaxyx()
         # Skills tab reserves as many bottom rows as its legend needs to
@@ -863,6 +1177,16 @@ def run(stdscr, plugins, servers, skills, settings):
             (" · writes ", True),
             (settings.write_path.replace(os.path.expanduser("~"), "~"), False),
         ]
+        if tab == 3:
+            trust_summary = trust_tab_summary(trust_entries)
+            info_segs = [
+                (" ", True), (str(trust_summary["total"]), False), (" trust (", True),
+                (str(trust_summary["trusted"]), False), (" trusted/", True),
+                (str(trust_summary["untrusted"]), False), (" untrusted)  ", True),
+            ] + info_segs[1:-2] + [
+                (" · writes ", True),
+                (CLAUDE_JSON_PATH.replace(os.path.expanduser("~"), "~"), False),
+            ]
         x = 0
         for seg, is_label in info_segs:
             if x >= w - 1:
@@ -1046,6 +1370,41 @@ def run(stdscr, plugins, servers, skills, settings):
                 else:
                     name_width = max(1, w - 12)
                     stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+            elif kind == "trust":
+                t = display[pi]
+                if not t["has_entry"]:
+                    mark, color, state_str = "?", YELLOW, "no entry"
+                elif t["trusted"]:
+                    mark, color, state_str = "✓", GREEN, "trusted"
+                elif not t["flag_set"]:
+                    mark, color, state_str = "-", curses.A_DIM, "unset"
+                else:
+                    mark, color, state_str = "✗", RED, "untrusted"
+                src_tag = "current " if t["current"] else "        "
+                arrow = "▾" if t["key"] in expanded else "▸"
+                name_str = f"{arrow} {t['path']}"
+                info_segs = [("[ ", True), (state_str, False), (" ]", True)]
+                info_str = "".join(seg for seg, _ in info_segs)
+                name_color = color
+                stdscr.addnstr(y, 0, " ", 1, attr)
+                stdscr.addnstr(y, 1, mark, 1, color | attr | curses.A_BOLD)
+                stdscr.addnstr(y, 2, f" {src_tag}", 9,
+                               (YELLOW if t["current"] else curses.A_DIM) | attr)
+                info_col = w - len(info_str) - 1
+                if info_col > 11:
+                    name_width = max(1, info_col - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    ix = info_col
+                    for seg, is_label in info_segs:
+                        if ix >= w - 1:
+                            break
+                        n = min(len(seg), w - 1 - ix)
+                        stdscr.addnstr(y, ix, seg, n,
+                                       (curses.A_DIM if is_label else 0) | attr)
+                        ix += len(seg)
+                else:
+                    name_width = max(1, w - 12)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
             elif kind == "skill-lock-reason":
                 # Flowing prose, already soft-wrapped by build_rows — a light
                 # "· " prefix, not the label:value tag padding used below.
@@ -1054,7 +1413,8 @@ def run(stdscr, plugins, servers, skills, settings):
             else:
                 tag = {"plugin-skill": "skill", "plugin-agent": "agent",
                        "plugin-other": "other", "empty": "",
-                       "mcp-detail": "·", "skill-detail": "·"}[kind]
+                       "mcp-detail": "·", "skill-detail": "·",
+                       "trust-detail": "·"}[kind]
                 color = (CYAN if kind == "plugin-agent" else
                          YELLOW if kind == "plugin-other" else 0)
                 stdscr.addnstr(y, 11, f"· {tag:<5} {text}", w - 12,
@@ -1088,11 +1448,9 @@ def run(stdscr, plugins, servers, skills, settings):
                     x += len(seg)
 
         if confirming:
-            p_conf = plugins[next(i for i, p in enumerate(plugins)
-                                  if p["key"] == confirming)]
-            label = f"{p_conf['name']}@{p_conf['marketplace']}"
+            verb, label = confirm_prompt(confirming["kind"], confirming["entry"])
             footer_segs = [
-                (" Delete ", False), (label, False), ("?  ", False),
+                (f" {verb} ", False), (label, False), ("?  ", False),
                 ("y", True), (" = confirm   any other key = cancel", False),
             ]
         else:
@@ -1128,25 +1486,41 @@ def run(stdscr, plugins, servers, skills, settings):
         if showing_notify:
             badge = f" {notify_msg} "
             bx = max(0, w - len(badge) - 1)
-            stdscr.addnstr(h - 1, bx, badge, len(badge), notify_color)
+            n = max(0, min(len(badge), w - 1 - bx))
+            stdscr.addnstr(h - 1, bx, badge, n, notify_color)
         stdscr.refresh()
 
         ch = stdscr.getch()
+        if ch == -1:
+            continue  # badge-refresh timeout, not a keypress; must not cancel a confirm
         kind, pi, _ = rows[cursor] if rows else ("plugin", 0, None)
         entry = display[pi] if display and rows else None
         key = entry["key"] if entry else None
 
         if confirming:
             if ch == ord("y"):
-                p_del = display[next(i for i, p in enumerate(display)
-                                     if p["key"] == confirming)]
-                plugin_dir = os.path.join(CACHE_DIR, p_del["marketplace"],
-                                          p_del["name"])
-                shutil.rmtree(plugin_dir, ignore_errors=True)
-                settings.target.pop(confirming, None)
-                settings.save()
-                deleted.add(confirming)
-                notify_msg, notify_color, notify_at = "deleted", NOTIFY_DELETED, time.time()
+                if confirming["kind"] == "plugin":
+                    p_del = confirming["entry"]
+                    plugin_dir = os.path.join(CACHE_DIR, p_del["marketplace"],
+                                              p_del["name"])
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
+                    settings.target.pop(confirming["key"], None)
+                    settings.save()
+                    deleted.add(confirming["key"])
+                    notify_msg, notify_color, notify_at = \
+                        "deleted", NOTIFY_DELETED, time.time()
+                elif confirming["kind"] == "trust":
+                    ok, msg = apply_trust_confirm(confirming["entry"],
+                                                  user_json_path=CLAUDE_JSON_PATH)
+                    if ok:
+                        trust_entries = build_trust_entries(
+                            trust_key, settings.global_mode,
+                            user_json_path=CLAUDE_JSON_PATH)
+                        notify_msg, notify_color, notify_at = \
+                            "saved", NOTIFY_SAVED, time.time()
+                    else:
+                        notify_msg, notify_color, notify_at = \
+                            msg, NOTIFY_ERROR, time.time()
             confirming = None
             continue
 
@@ -1175,6 +1549,8 @@ def run(stdscr, plugins, servers, skills, settings):
             elif entry["kind"] == "skill" and entry["source"] != "plugin":
                 settings.cycle_skill_visible(entry["address"])
                 notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+            elif entry["kind"] == "trust":
+                confirming = {"kind": "trust", "key": key, "entry": entry}
         elif ch == ord("O") and entry and entry["kind"] == "skill" \
                 and entry["source"] != "plugin":
             settings.set_skill(entry["address"], "on")
@@ -1194,7 +1570,7 @@ def run(stdscr, plugins, servers, skills, settings):
                 expanded.discard(key)
                 # jump cursor back to the entry's own row
                 cursor = next(i for i, r in enumerate(build_rows(display, expanded))
-                              if r[0] in ("plugin", "mcp", "skill") and r[1] == pi)
+                              if r[0] in ("plugin", "mcp", "skill", "trust") and r[1] == pi)
         elif ch == ord("a"):
             expanded = set() if expanded else {e["key"] for e in display}
         elif ch == ord("s"):
@@ -1202,7 +1578,76 @@ def run(stdscr, plugins, servers, skills, settings):
             cursor = 0
         elif ch == ord("D") and entry and entry["kind"] == "plugin" \
                 and key not in deleted:
-            confirming = key
+            confirming = {"kind": "plugin", "key": key, "entry": entry}
+
+
+# Module-level sentinel for the --trust/--untrust default (current working directory's key)
+_CWD = object()
+
+
+def _resolve_trust_target(v):
+    """Resolve a trust target: _CWD -> resolve_trust_key(cwd), else realpath(expanduser(v))."""
+    if v is _CWD:
+        return resolve_trust_key(os.getcwd())
+    return os.path.realpath(os.path.expanduser(v))
+
+
+def _fmt_trust(v):
+    """Format a trust state: None -> 'no entry', True -> 'trusted', False -> 'untrusted'."""
+    if v is None:
+        return "no entry"
+    return "trusted" if v else "untrusted"
+
+
+_LIVE_NOTE = ("Note: a running Claude Code session may overwrite ~/.claude.json, "
+              "so this change is reliable for new sessions.")
+
+
+def _print_trust_change(path, old, new):
+    if old == new:
+        print(f"{path}: {_fmt_trust(old)} (unchanged)")
+    else:
+        print(f"{path}: {_fmt_trust(old)} -> {_fmt_trust(new)}")
+        print(_LIVE_NOTE)
+
+
+def _run_trust_cli(args):
+    """Handle --trust, --untrust, --trust-status CLI flags."""
+    try:
+        if args.trust is not None:
+            # --trust [PATH]
+            path = _resolve_trust_target(args.trust)
+            old, new = set_trust(path, True)
+            _print_trust_change(path, old, new)
+            if path == os.path.realpath(os.path.expanduser("~")):
+                print("WARNING: Claude Code treats home-directory trust as session-only and ignores persisted trust there.")
+        elif args.untrust is not None:
+            # --untrust [PATH]
+            path = _resolve_trust_target(args.untrust)
+            old, new = set_trust(path, False)
+            _print_trust_change(path, old, new)
+        elif args.trust_status:
+            # --trust-status [with optional -g]
+            if args.global_mode:
+                # List all entries
+                entries = discover_trust_entries()
+                key = resolve_trust_key(os.getcwd())
+                for entry in entries:
+                    mark = "* " if entry["path"] == key else "  "
+                    print(f"{mark}{entry['path']}: {_fmt_trust(entry['trusted'])}")
+            else:
+                # Show current key and state
+                key = resolve_trust_key(os.getcwd())
+                state = get_trust(key)
+                print(f"{key}: {_fmt_trust(state)}")
+                if state is not True:
+                    sup = trust_suppressor(os.getcwd(), key=key)
+                    if sup:
+                        print(f"  Dialog suppressed by trusted entry: {sup}")
+                        print("  The trust dialog is suppressed because this trusted entry is on the dialog's walk (cwd up to its own git root), but Claude applies trust only for the exact key above (https://github.com/anthropics/claude-code/issues/72896).")
+                        print("  Suggest: `claude-optin --trust`")
+    except (OSError, ValueError) as e:
+        sys.exit(f"claude-optin: {e}")
 
 
 def main():
@@ -1215,7 +1660,24 @@ def main():
                     action="store_true",
                     help="edit user-level defaults in ~/.claude/settings.json "
                          "instead of the repo's .claude/settings.local.json")
+
+    # Mutually exclusive trust flags
+    trust_group = ap.add_mutually_exclusive_group()
+    trust_group.add_argument("--trust", nargs="?", const=_CWD, default=None,
+                            metavar="PATH",
+                            help="mark a path as trusted (default: current repo's key)")
+    trust_group.add_argument("--untrust", nargs="?", const=_CWD, default=None,
+                            metavar="PATH",
+                            help="mark a path as untrusted")
+    trust_group.add_argument("--trust-status", action="store_true",
+                            help="show trust status (use -g to list all entries)")
+
     args = ap.parse_args()
+
+    # Handle trust CLI flags early, before building TUI
+    if args.trust is not None or args.untrust is not None or args.trust_status:
+        _run_trust_cli(args)
+        return
 
     plugins = discover_plugins()
     settings = Settings(find_repo_root(), global_mode=args.global_mode)
@@ -1228,9 +1690,12 @@ def main():
     skills = discover_skills(os.getcwd(), settings.repo_root,
                              os.path.expanduser("~"), settings)
 
-    if not plugins and not servers and not skills:
-        sys.exit("No plugins, MCP servers, or skills found")
-    curses.wrapper(run, plugins, servers, skills, settings)
+    trust_key = resolve_trust_key(os.getcwd())
+    trust_entries = build_trust_entries(trust_key, args.global_mode)
+
+    if not plugins and not servers and not skills and not trust_entries:
+        sys.exit("No plugins, MCP servers, skills, or trust entries found")
+    curses.wrapper(run, plugins, servers, skills, settings, trust_key, trust_entries)
     print(f"Opt-ins saved to {settings.write_path}")
     print("Run /reload-plugins in a live session (or start a new one) to apply.")
 

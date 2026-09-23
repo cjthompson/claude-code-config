@@ -8,12 +8,20 @@ Settings class's MCP enable/disable resolution and cycling.
 Run: python3 packages/claude-optin/test_claude_optin.py
 """
 
+import contextlib
+import copy
 import importlib.util
+import io
 import json
 import os
+import shutil
+import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
+from unittest import mock
 
 
 def load_module():
@@ -636,6 +644,1002 @@ class LegendWrapTests(unittest.TestCase):
 def load_doc(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def read_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def make_worktree(main, wt, name="wt", commondir="../..", backlink=None,
+                  gitdir_line=None, common=None):
+    """Hand-build git's linked-worktree layout with plain files (all paths absolute/real)."""
+    common = common or os.path.join(main, ".git")
+    gitdir = os.path.join(common, "worktrees", name)
+    os.makedirs(gitdir, exist_ok=True)
+    os.makedirs(wt, exist_ok=True)
+    if commondir is not None:
+        with open(os.path.join(gitdir, "commondir"), "w") as f:
+            f.write(commondir + "\n")
+    with open(os.path.join(gitdir, "gitdir"), "w") as f:
+        f.write((backlink or os.path.join(wt, ".git")) + "\n")
+    with open(os.path.join(wt, ".git"), "w") as f:
+        f.write(gitdir_line or f"gitdir: {gitdir}\n")
+    return gitdir
+
+
+class LoadJsonStrictTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_raises_on_missing_file(self):
+        with self.assertRaises(OSError):
+            co.load_json_strict("/nonexistent/path")
+
+    def test_raises_on_malformed_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "bad.json")
+            with open(path, "w") as f:
+                f.write("{invalid json")
+            with self.assertRaises(json.JSONDecodeError):
+                co.load_json_strict(path)
+
+    def test_raises_on_non_dict_top_level(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "array.json")
+            with open(path, "w") as f:
+                json.dump([], f)
+            with self.assertRaises(ValueError):
+                co.load_json_strict(path)
+
+    def test_succeeds_on_valid_dict(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "good.json")
+            with open(path, "w") as f:
+                json.dump({"key": "value"}, f)
+            result = co.load_json_strict(path)
+            self.assertEqual(result, {"key": "value"})
+
+
+class ResolveTrustKeyTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.root = os.path.realpath(self.tmpdir)
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_resolves_git_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_dir = os.path.join(tmpdir, "repo", ".git")
+            os.makedirs(git_dir)
+            start = os.path.join(tmpdir, "repo", "subdir")
+            os.makedirs(start)
+            key = co.resolve_trust_key(start)
+            self.assertEqual(key, os.path.realpath(os.path.join(tmpdir, "repo")))
+
+    def test_resolves_git_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_file = os.path.join(tmpdir, "repo", ".git")
+            os.makedirs(os.path.dirname(git_file))
+            with open(git_file, "w") as f:
+                f.write("gitdir: /some/path\n")
+            start = os.path.join(tmpdir, "repo", "subdir")
+            os.makedirs(start)
+            key = co.resolve_trust_key(start)
+            self.assertEqual(key, os.path.realpath(os.path.join(tmpdir, "repo")))
+
+    def test_returns_start_when_no_git(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = os.path.join(tmpdir, "nosgit")
+            os.makedirs(start)
+            key = co.resolve_trust_key(start)
+            self.assertEqual(key, os.path.realpath(start))
+
+    def test_bare_claude_dir_not_a_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = os.path.join(tmpdir, "bare", ".claude")
+            os.makedirs(start)
+            # resolve_trust_key finds no .git, so returns the start_dir
+            key = co.resolve_trust_key(start)
+            self.assertEqual(key, os.path.realpath(start))
+
+    def test_symlinked_path_resolves_to_realpath(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            real_dir = os.path.join(tmpdir, "real")
+            os.makedirs(real_dir)
+            git_dir = os.path.join(real_dir, ".git")
+            os.makedirs(git_dir)
+            link_dir = os.path.join(tmpdir, "link")
+            os.symlink(real_dir, link_dir)
+            key = co.resolve_trust_key(link_dir)
+            self.assertEqual(key, os.path.realpath(real_dir))
+
+    def test_uses_cwd_when_no_start_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_dir = os.path.join(tmpdir, ".git")
+            os.makedirs(git_dir)
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                key = co.resolve_trust_key()
+                self.assertEqual(key, os.path.realpath(tmpdir))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_linked_worktree_resolves_to_main_checkout(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(main, wt)
+        os.makedirs(os.path.join(wt, "sub"))
+        self.assertEqual(co.resolve_trust_key(os.path.join(wt, "sub")), main)
+
+    def test_linked_worktree_relative_gitdir(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(main, wt, gitdir_line="gitdir: ../main/.git/worktrees/wt\n")
+        self.assertEqual(co.resolve_trust_key(wt), main)
+
+    def test_nested_worktree_inside_main_checkout(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(main, ".claude", "worktrees", "x")
+        make_worktree(main, wt, name="x")
+        self.assertEqual(co.resolve_trust_key(wt), main)
+
+    def test_submodule_style_git_file_keeps_own_path(self):
+        super_dir = os.path.join(self.root, "super")
+        os.makedirs(os.path.join(super_dir, ".git"))
+        os.makedirs(os.path.join(super_dir, ".git", "modules", "sub"))
+        sub = os.path.join(super_dir, "sub")
+        os.makedirs(sub)
+        with open(os.path.join(super_dir, ".git", "modules", "sub", "HEAD"), "w") as f:
+            f.write("ref: refs/heads/main\n")
+        with open(os.path.join(sub, ".git"), "w") as f:
+            f.write("gitdir: ../.git/modules/sub\n")
+        self.assertEqual(co.resolve_trust_key(sub), sub)
+
+    def test_missing_commondir_keeps_own_path(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(main, wt, commondir=None)
+        self.assertEqual(co.resolve_trust_key(wt), wt)
+
+    def test_symlinked_commondir_keeps_own_path(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(main, wt)
+        commondir_path = os.path.join(os.path.join(main, ".git", "worktrees", "wt"), "commondir")
+        os.remove(commondir_path)
+        target_file = os.path.join(self.root, "commondir_target")
+        with open(target_file, "w") as f:
+            f.write("../..\n")
+        os.symlink(target_file, commondir_path)
+        self.assertEqual(co.resolve_trust_key(wt), wt)
+
+    def test_wrong_backlink_keeps_own_path(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        elsewhere = os.path.join(self.root, "elsewhere")
+        os.makedirs(elsewhere)
+        make_worktree(main, wt, backlink=os.path.join(elsewhere, ".git"))
+        self.assertEqual(co.resolve_trust_key(wt), wt)
+
+    def test_gitdir_not_under_worktrees_keeps_own_path(self):
+        main = os.path.join(self.root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(main, wt, commondir="../../..")
+        self.assertEqual(co.resolve_trust_key(wt), wt)
+
+    def test_bare_common_dir_resolves_to_common_dir(self):
+        bare = os.path.join(self.root, "repo.git")
+        os.makedirs(bare)
+        wt = os.path.join(self.root, "wt")
+        make_worktree(None, wt, commondir="../..", common=bare)
+        self.assertEqual(co.resolve_trust_key(wt), bare)
+
+    def test_bare_common_dir_with_inner_git_keeps_own_path(self):
+        bare = os.path.join(self.root, "repo.git")
+        os.makedirs(bare)
+        os.makedirs(os.path.join(bare, ".git"))
+        wt = os.path.join(self.root, "wt")
+        make_worktree(None, wt, commondir="../..", common=bare)
+        self.assertEqual(co.resolve_trust_key(wt), wt)
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_real_git_worktree_resolves_to_main_checkout(self):
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        main = os.path.join(self.root, "main")
+        wt = os.path.join(self.root, "wt")
+        run = lambda *a: subprocess.run(["git", *a], check=True, env=env,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run("init", "-q", main)
+        run("-C", main, "-c", "user.name=t", "-c", "user.email=t@e",
+            "commit", "-q", "--allow-empty", "-m", "init")
+        run("-C", main, "worktree", "add", "-q", wt)
+        self.assertEqual(co.resolve_trust_key(wt), main)
+
+
+class TrustEntryTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_get_trust_returns_none_for_missing_entry(self):
+        write_json(self.claude_json, {})
+        result = co.get_trust("/some/path", user_json_path=self.claude_json)
+        self.assertIsNone(result)
+
+    def test_get_trust_returns_false_for_missing_flag(self):
+        path = os.path.realpath("/some/path")
+        write_json(self.claude_json, {"projects": {path: {}}})
+        result = co.get_trust(path, user_json_path=self.claude_json)
+        self.assertFalse(result)
+
+    def test_get_trust_returns_explicit_true(self):
+        path = os.path.realpath("/some/path")
+        write_json(self.claude_json, {"projects": {path: {"hasTrustDialogAccepted": True}}})
+        result = co.get_trust(path, user_json_path=self.claude_json)
+        self.assertTrue(result)
+
+    def test_discover_trust_entries_sorted_by_path(self):
+        paths = ["/z/path", "/a/path"]
+        doc = {"projects": {
+            paths[0]: {"hasTrustDialogAccepted": True},
+            paths[1]: {"hasTrustDialogAccepted": False},
+        }}
+        write_json(self.claude_json, doc)
+        entries = co.discover_trust_entries(user_json_path=self.claude_json)
+        self.assertEqual([e["path"] for e in entries], sorted(paths))
+
+    def test_discover_trust_entries_includes_onboarding_fields(self):
+        path = os.path.realpath("/some/path")
+        doc = {"projects": {path: {
+            "hasTrustDialogAccepted": True,
+            "projectOnboardingSeenCount": 5,
+            "hasCompletedProjectOnboarding": True,
+        }}}
+        write_json(self.claude_json, doc)
+        entries = co.discover_trust_entries(user_json_path=self.claude_json)
+        entry = entries[0]
+        self.assertEqual(entry["onboarding_seen_count"], 5)
+        self.assertTrue(entry["has_completed_onboarding"])
+
+    def test_discover_trust_entries_onboarding_fields_none_when_absent(self):
+        path = os.path.realpath("/some/path")
+        write_json(self.claude_json, {"projects": {path: {}}})
+        entries = co.discover_trust_entries(user_json_path=self.claude_json)
+        entry = entries[0]
+        self.assertIsNone(entry["onboarding_seen_count"])
+        self.assertIsNone(entry["has_completed_onboarding"])
+
+    def test_get_trust_non_dict_entry_is_false(self):
+        p = os.path.realpath("/path")
+        write_json(self.claude_json, {"projects": {p: "x"}})
+        result = co.get_trust(p, user_json_path=self.claude_json)
+        self.assertIs(result, False)
+
+    def test_get_trust_requires_exact_true(self):
+        p = os.path.realpath("/path")
+        write_json(self.claude_json, {"projects": {p: {"hasTrustDialogAccepted": "true"}}})
+        result = co.get_trust(p, user_json_path=self.claude_json)
+        self.assertIs(result, False)
+
+    def test_read_helpers_tolerate_non_dict_projects(self):
+        write_json(self.claude_json, {"projects": []})
+        result_get = co.get_trust(os.path.realpath("/path"), user_json_path=self.claude_json)
+        self.assertIsNone(result_get)
+        result_discover = co.discover_trust_entries(user_json_path=self.claude_json)
+        self.assertEqual(result_discover, [])
+        write_json(self.claude_json, [])
+        result_get2 = co.get_trust(os.path.realpath("/path"), user_json_path=self.claude_json)
+        self.assertIsNone(result_get2)
+        result_discover2 = co.discover_trust_entries(user_json_path=self.claude_json)
+        self.assertEqual(result_discover2, [])
+
+
+class TrustSuppressorTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_worktree_own_root_reported_when_key_is_main_checkout(self):
+        root = os.path.realpath(self.tmpdir)
+        main = os.path.join(root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(root, "wt")
+        make_worktree(main, wt)
+        sub = os.path.join(wt, "sub")
+        os.makedirs(sub)
+        wt_real = os.path.realpath(wt)
+        write_json(self.claude_json, {"projects": {wt_real: {"hasTrustDialogAccepted": True}}})
+        self.assertEqual(co.resolve_trust_key(sub), main)
+        self.assertEqual(co.trust_suppressor(sub, user_json_path=self.claude_json), wt_real)
+
+    def test_walk_bounded_by_worktree_root_not_main_checkout(self):
+        root = os.path.realpath(self.tmpdir)
+        main = os.path.join(root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(main, ".claude", "worktrees", "x")
+        make_worktree(main, wt, name="x")
+        write_json(self.claude_json, {"projects": {
+            os.path.join(main, ".claude"): {"hasTrustDialogAccepted": True}}})
+        result = co.trust_suppressor(wt, user_json_path=self.claude_json)
+        self.assertIsNone(result)
+
+    def test_key_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            co.trust_suppressor("/path", self.claude_json, "/path")
+
+    def test_non_dict_entries_and_projects_ignored(self):
+        tmpdir = self.tmpdir
+        repo = os.path.join(tmpdir, "repo")
+        os.makedirs(os.path.join(repo, ".git"))
+        start = os.path.join(repo, "a", "b")
+        os.makedirs(start)
+        repo_a = os.path.realpath(os.path.join(repo, "a"))
+        repo_ab = os.path.realpath(start)
+        write_json(self.claude_json, {"projects": {
+            repo_a: "yes",
+            repo_ab: None,
+        }})
+        result = co.trust_suppressor(start, user_json_path=self.claude_json)
+        self.assertIsNone(result)
+        write_json(self.claude_json, {"projects": []})
+        result2 = co.trust_suppressor(start, user_json_path=self.claude_json)
+        self.assertIsNone(result2)
+        write_json(self.claude_json, [])
+        result3 = co.trust_suppressor(start, user_json_path=self.claude_json)
+        self.assertIsNone(result3)
+
+    def test_finds_ancestor_within_git_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            ancestor = os.path.join(repo, "a")
+            start = os.path.join(repo, "a", "b", "c")
+            os.makedirs(start)  # makedirs creates ancestor, a, and start
+
+            ancestor_real = os.path.realpath(ancestor)
+            write_json(self.claude_json, {"projects": {
+                ancestor_real: {"hasTrustDialogAccepted": True}
+            }})
+
+            result = co.trust_suppressor(start, user_json_path=self.claude_json)
+            self.assertEqual(result, ancestor_real)
+
+    def test_ignores_trusted_ancestor_above_git_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            start = os.path.join(repo, "sub")
+            os.makedirs(start)
+            above_root = os.path.realpath(tmpdir)  # direct parent of the git root
+            write_json(self.claude_json, {"projects": {
+                above_root: {"hasTrustDialogAccepted": True}
+            }})
+            result = co.trust_suppressor(start, user_json_path=self.claude_json)
+            self.assertIsNone(result)
+
+    def test_does_not_report_key_itself_as_suppressor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            key = os.path.realpath(repo)
+            write_json(self.claude_json, {"projects": {
+                key: {"hasTrustDialogAccepted": True}
+            }})
+
+            result = co.trust_suppressor(repo, key=key, user_json_path=self.claude_json)
+            self.assertIsNone(result)
+
+
+class SetTrustTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_raises_on_malformed_file(self):
+        with open(self.claude_json, "w") as f:
+            f.write("{invalid")
+        with self.assertRaises(json.JSONDecodeError):
+            co.set_trust("/path", True, user_json_path=self.claude_json)
+        # Verify file untouched
+        with open(self.claude_json) as f:
+            self.assertEqual(f.read(), "{invalid")
+
+    def test_none_removes_flag_keeps_entry(self):
+        p = os.path.realpath(os.path.join(self.tmpdir, "p"))
+        write_json(self.claude_json, {"projects": {
+            p: {"hasTrustDialogAccepted": False, "allowedTools": []}}})
+        self.assertEqual(co.set_trust(p, None, user_json_path=self.claude_json),
+                         (False, None))
+        self.assertEqual(load_doc(self.claude_json)["projects"][p], {"allowedTools": []})
+
+    def test_none_is_no_op_when_flag_absent(self):
+        p = os.path.realpath(os.path.join(self.tmpdir, "p"))
+        write_json(self.claude_json, {"projects": {p: {"allowedTools": []}}})
+        before = os.stat(self.claude_json).st_mtime_ns
+        co.set_trust(p, None, user_json_path=self.claude_json)
+        co.set_trust(os.path.join(self.tmpdir, "missing"), None,
+                     user_json_path=self.claude_json)
+        self.assertEqual(os.stat(self.claude_json).st_mtime_ns, before)
+
+    def test_preserves_all_other_keys_value_identical(self):
+        p = os.path.realpath("/path")
+        other = os.path.realpath("/other")
+        original = {
+            "numStartups": 42,
+            "oauthAccount": {"a": [1, {"b": None}], "c": "é"},
+            "mcpServers": {"S": {"command": "x", "args": ["-y"]}},
+            "projects": {
+                p: {"hasTrustDialogAccepted": False, "allowedTools": ["Bash"],
+                    "projectOnboardingSeenCount": 3, "mcpServers": {"m": {}}},
+                other: {"hasTrustDialogAccepted": True, "x": [1, 2]},
+            },
+        }
+        write_json(self.claude_json, original)
+        co.set_trust(p, True, user_json_path=self.claude_json)
+        expected = copy.deepcopy(original)
+        expected["projects"][p]["hasTrustDialogAccepted"] = True
+        self.assertEqual(load_doc(self.claude_json), expected)
+
+    def test_creates_default_object_for_new_entry(self):
+        write_json(self.claude_json, {})
+        path = os.path.realpath("/path")
+        co.set_trust(path, True, user_json_path=self.claude_json)
+        doc = load_doc(self.claude_json)
+        entry = doc["projects"][path]
+        self.assertTrue(entry["hasTrustDialogAccepted"])
+        self.assertIn("allowedTools", entry)
+        self.assertIn("mcpServers", entry)
+
+    def test_no_op_when_unchanged(self):
+        path = os.path.realpath("/path")
+        write_json(self.claude_json, {"projects": {
+            path: {"hasTrustDialogAccepted": True}
+        }})
+        stat_before = os.stat(self.claude_json)
+        co.set_trust(path, True, user_json_path=self.claude_json)
+        stat_after = os.stat(self.claude_json)
+        self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
+
+    def test_no_op_when_setting_false_with_no_entry(self):
+        write_json(self.claude_json, {})
+        path = os.path.realpath("/path")
+        stat_before = os.stat(self.claude_json)
+        old, new = co.set_trust(path, False, user_json_path=self.claude_json)
+        self.assertEqual((old, new), (None, None))
+        stat_after = os.stat(self.claude_json)
+        self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
+        doc = load_doc(self.claude_json)
+        self.assertNotIn(path, doc.get("projects", {}))
+
+    def test_preserves_file_mode(self):
+        if sys.platform == "win32":
+            self.skipTest("File mode test not applicable on Windows")
+        write_json(self.claude_json, {})
+        os.chmod(self.claude_json, 0o640)
+        path = os.path.realpath("/path")
+        co.set_trust(path, True, user_json_path=self.claude_json)
+        mode = stat.S_IMODE(os.stat(self.claude_json).st_mode)
+        self.assertEqual(mode, 0o640)
+
+    def test_returns_old_new_tuple(self):
+        path = os.path.realpath("/path")
+        write_json(self.claude_json, {})
+        old1, new1 = co.set_trust(path, True, user_json_path=self.claude_json)
+        self.assertIsNone(old1)
+        self.assertTrue(new1)
+        old2, new2 = co.set_trust(path, False, user_json_path=self.claude_json)
+        self.assertTrue(old2)
+        self.assertFalse(new2)
+
+    def test_no_op_returns_same_old_new(self):
+        path = os.path.realpath("/path")
+        write_json(self.claude_json, {"projects": {path: {"hasTrustDialogAccepted": True}}})
+        old, new = co.set_trust(path, True, user_json_path=self.claude_json)
+        self.assertEqual((old, new), (True, True))
+
+    def test_raises_value_error_on_non_dict_projects(self):
+        write_json(self.claude_json, {"projects": []})
+        bytes_before = read_bytes(self.claude_json)
+        path = os.path.realpath("/path")
+        with self.assertRaises(ValueError):
+            co.set_trust(path, True, user_json_path=self.claude_json)
+        bytes_after = read_bytes(self.claude_json)
+        self.assertEqual(bytes_before, bytes_after)
+
+    def test_raises_value_error_on_non_dict_entry(self):
+        path = os.path.realpath("/path")
+        write_json(self.claude_json, {"projects": {path: "x"}})
+        bytes_before = read_bytes(self.claude_json)
+        with self.assertRaises(ValueError):
+            co.set_trust(path, True, user_json_path=self.claude_json)
+        bytes_after = read_bytes(self.claude_json)
+        self.assertEqual(bytes_before, bytes_after)
+
+
+class TrustTabRowTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_non_global_empty_file_current_no_entry(self):
+        write_json(self.claude_json, {})
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        entries = co.build_trust_entries(trust_key, False, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertTrue(e["current"])
+        self.assertFalse(e["has_entry"])
+        self.assertFalse(e["trusted"])
+        rows = co.build_rows(entries, set())
+        self.assertEqual(rows, [("trust", 0, None)])
+
+    def test_non_global_ignores_other_entries(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        other = os.path.realpath(os.path.join(self.tmpdir, "other"))
+        write_json(self.claude_json, {"projects": {
+            other: {"hasTrustDialogAccepted": True}}})
+        entries = co.build_trust_entries(trust_key, False, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["path"], trust_key)
+
+    def test_global_lists_all_entries_one_current(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)   # no .git -> == cwd
+        paths = [trust_key,
+                os.path.realpath(os.path.join(self.tmpdir, "z")),
+                os.path.realpath(os.path.join(self.tmpdir, "a"))]
+        write_json(self.claude_json, {"projects": {
+            p: {"hasTrustDialogAccepted": False} for p in paths}})
+        entries = co.build_trust_entries(trust_key, True, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        self.assertEqual([e["path"] for e in entries], sorted(paths))
+        self.assertEqual(sum(1 for e in entries if e["current"]), 1)
+
+    def test_global_adds_current_when_absent(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        other1 = os.path.realpath(os.path.join(self.tmpdir, "aaa"))
+        other2 = os.path.realpath(os.path.join(self.tmpdir, "zzz"))
+        write_json(self.claude_json, {"projects": {
+            other1: {"hasTrustDialogAccepted": True},
+            other2: {"hasTrustDialogAccepted": False},
+        }})
+        entries = co.build_trust_entries(trust_key, True, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        paths = [e["path"] for e in entries]
+        self.assertEqual(paths, sorted([other1, other2, trust_key]))
+        current = next(e for e in entries if e["current"])
+        self.assertEqual(current["path"], trust_key)
+        self.assertFalse(current["has_entry"])
+        self.assertFalse(current["flag_set"])
+
+    def test_global_build_rows_collapsed_and_expanded(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        onboarded = os.path.realpath(os.path.join(self.tmpdir, "aaa"))
+        plain = os.path.realpath(os.path.join(self.tmpdir, "zzz"))
+        write_json(self.claude_json, {"projects": {
+            onboarded: {"hasTrustDialogAccepted": True,
+                        "projectOnboardingSeenCount": 2},
+            plain: {"hasTrustDialogAccepted": False},
+        }})
+        entries = co.build_trust_entries(trust_key, True, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        self.assertEqual(co.build_rows(entries, set()),
+                         [("trust", i, None) for i in range(len(entries))])
+        idx = {e["path"]: i for i, e in enumerate(entries)}
+        rows = co.build_rows(entries, {e["key"] for e in entries})
+        kinds = {i: [r[0] for r in rows if r[1] == i] for i in idx.values()}
+        self.assertEqual(kinds[idx[onboarded]], ["trust", "trust-detail"])
+        self.assertEqual(kinds[idx[plain]], ["trust", "empty"])
+        self.assertEqual(kinds[idx[trust_key]], ["trust", "empty"])
+
+    def test_flag_set_distinguishes_false_from_absent(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        other = os.path.realpath(os.path.join(self.tmpdir, "other"))
+        write_json(self.claude_json, {"projects": {
+            trust_key: {"hasTrustDialogAccepted": False},
+            other: {"allowedTools": []},
+        }})
+        entries = co.build_trust_entries(trust_key, True, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        flags = {e["path"]: e["flag_set"] for e in entries}
+        self.assertEqual(flags, {trust_key: True, other: False})
+
+    def test_expanded_with_onboarding_fields(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        write_json(self.claude_json, {"projects": {trust_key: {
+            "hasTrustDialogAccepted": True,
+            "projectOnboardingSeenCount": 5,
+            "hasCompletedProjectOnboarding": True,
+        }}})
+        entries = co.build_trust_entries(trust_key, False, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        rows = co.build_rows(entries, {entries[0]["key"]})
+        self.assertEqual([r[0] for r in rows], ["trust", "trust-detail", "trust-detail"])
+        texts = [r[2] for r in rows[1:]]
+        self.assertTrue(any("5" in t for t in texts))
+        self.assertTrue(any("True" in t for t in texts))
+
+    def test_expanded_without_onboarding_fields(self):
+        cwd = os.path.realpath(self.tmpdir)
+        trust_key = co.resolve_trust_key(cwd)
+        write_json(self.claude_json, {"projects": {
+            trust_key: {"hasTrustDialogAccepted": True}}})
+        entries = co.build_trust_entries(trust_key, False, cwd=cwd,
+                                         user_json_path=self.claude_json)
+        rows = co.build_rows(entries, {entries[0]["key"]})
+        self.assertEqual([r[0] for r in rows], ["trust", "empty"])
+
+    def test_suppressor_detail_when_untrusted(self):
+        repo = os.path.join(self.tmpdir, "repo")
+        os.makedirs(os.path.join(repo, ".git"))
+        sub = os.path.join(repo, "sub")
+        os.makedirs(sub)
+        repo_real = os.path.realpath(repo)
+        sub_real = os.path.realpath(sub)
+        write_json(self.claude_json, {"projects": {
+            sub_real: {"hasTrustDialogAccepted": True},
+        }})
+        trust_key = co.resolve_trust_key(repo_real)
+        entries = co.build_trust_entries(trust_key, False, cwd=sub_real,
+                                         user_json_path=self.claude_json)
+        e = entries[0]
+        self.assertFalse(e["trusted"])
+        self.assertEqual(e["suppressor"], sub_real)
+        self.assertIn(("suppressed by", sub_real), e["detail_items"])
+
+    def test_no_suppressor_detail_when_trusted(self):
+        repo = os.path.join(self.tmpdir, "repo2")
+        os.makedirs(os.path.join(repo, ".git"))
+        repo_real = os.path.realpath(repo)
+        write_json(self.claude_json, {"projects": {
+            repo_real: {"hasTrustDialogAccepted": True}}})
+        trust_key = co.resolve_trust_key(repo_real)
+        entries = co.build_trust_entries(trust_key, False, cwd=repo_real,
+                                         user_json_path=self.claude_json)
+        e = entries[0]
+        self.assertTrue(e["trusted"])
+        self.assertIsNone(e["suppressor"])
+        self.assertNotIn("suppressed by", [label for label, _ in e["detail_items"]])
+
+
+class TrustConfirmLabelTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.old_path = co.CLAUDE_JSON_PATH
+        co.CLAUDE_JSON_PATH = os.path.join(self.tempdir.name, ".claude.json")
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_plugin_label(self):
+        entry = {"name": "p", "marketplace": "m"}
+        self.assertEqual(co.confirm_prompt("plugin", entry), ("Delete", "p@m"))
+
+    def test_trusted_entry_label(self):
+        entry = {"path": "/x", "trusted": True}
+        self.assertEqual(co.confirm_prompt("trust", entry), ("Untrust", "/x"))
+
+    def test_untrusted_or_unset_label_trusts(self):
+        for flag_set in (True, False):
+            entry = {"path": "/x", "trusted": False, "flag_set": flag_set}
+            self.assertEqual(co.confirm_prompt("trust", entry), ("Trust", "/x"))
+
+
+class TrustToggleTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.old_path = co.CLAUDE_JSON_PATH
+        co.CLAUDE_JSON_PATH = os.path.join(self.tempdir.name, ".claude.json")
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_trusted_clears_flag(self):
+        self.assertIsNone(co.trust_next_state({"trusted": True, "flag_set": True}))
+
+    def test_untrusted_and_unset_become_trusted(self):
+        self.assertIs(co.trust_next_state({"trusted": False, "flag_set": True}), True)
+        self.assertIs(co.trust_next_state({"trusted": False, "flag_set": False}), True)
+
+
+class TrustTabSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.old_path = co.CLAUDE_JSON_PATH
+        co.CLAUDE_JSON_PATH = os.path.join(self.tempdir.name, ".claude.json")
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_mixed_counts(self):
+        entries = [{"trusted": True}, {"trusted": False}, {"trusted": False}]
+        summary = co.trust_tab_summary(entries)
+        self.assertEqual(summary, {"total": 3, "trusted": 1, "untrusted": 2})
+
+    def test_no_entry_counts_as_untrusted(self):
+        entries = [{"trusted": True}, {"trusted": False, "has_entry": False}]
+        summary = co.trust_tab_summary(entries)
+        self.assertEqual(summary["untrusted"], 1)
+
+
+class TrustConfirmActionTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_path = co.CLAUDE_JSON_PATH
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+
+    def tearDown(self):
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def test_success_flips_flag_and_returns_saved(self):
+        path = os.path.realpath(os.path.join(self.tmpdir, "repo"))
+        write_json(self.claude_json, {"projects": {
+            path: {"allowedTools": []}}})
+        entry = {"path": path, "trusted": False, "flag_set": False}
+        ok, msg = co.apply_trust_confirm(entry, user_json_path=self.claude_json)
+        self.assertTrue(ok)
+        self.assertEqual(msg, "saved")
+        doc = load_doc(self.claude_json)
+        self.assertTrue(doc["projects"][path]["hasTrustDialogAccepted"])
+
+    def test_trusted_flag_is_cleared(self):
+        path = os.path.realpath(os.path.join(self.tmpdir, "repo"))
+        write_json(self.claude_json, {"projects": {
+            path: {"hasTrustDialogAccepted": True, "allowedTools": ["x"]}}})
+        entry = {"path": path, "trusted": True, "flag_set": True}
+        ok, _ = co.apply_trust_confirm(entry, user_json_path=self.claude_json)
+        self.assertTrue(ok)
+        doc = load_doc(self.claude_json)
+        self.assertEqual(doc["projects"][path], {"allowedTools": ["x"]})
+
+    def test_malformed_file_returns_error_and_untouched(self):
+        with open(self.claude_json, "w") as f:
+            f.write("{invalid")
+        entry = {"path": "/x", "trusted": False}
+        bytes_before = read_bytes(self.claude_json)
+        ok, msg = co.apply_trust_confirm(entry, user_json_path=self.claude_json)
+        self.assertFalse(ok)
+        self.assertTrue(msg.startswith("error:"))
+        bytes_after = read_bytes(self.claude_json)
+        self.assertEqual(bytes_before, bytes_after)
+
+    def test_toggling_one_global_entry_leaves_others_unchanged(self):
+        p1 = os.path.realpath(os.path.join(self.tmpdir, "p1"))
+        p2 = os.path.realpath(os.path.join(self.tmpdir, "p2"))
+        write_json(self.claude_json, {"projects": {
+            p1: {"hasTrustDialogAccepted": True},
+            p2: {"hasTrustDialogAccepted": False},
+        }})
+        entry = {"path": p2, "trusted": False, "flag_set": True}
+        ok, _ = co.apply_trust_confirm(entry, user_json_path=self.claude_json)
+        self.assertTrue(ok)
+        doc = load_doc(self.claude_json)
+        self.assertTrue(doc["projects"][p1]["hasTrustDialogAccepted"])
+        self.assertTrue(doc["projects"][p2]["hasTrustDialogAccepted"])
+
+
+class TrustCliTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.tmpdir = self.tempdir.name
+        self.old_cwd = os.getcwd()
+        self.old_path = co.CLAUDE_JSON_PATH
+
+        # Create a temp repo with .git
+        self.repo = os.path.join(self.tmpdir, "repo")
+        os.makedirs(os.path.join(self.repo, ".git"))
+        os.chdir(self.repo)
+
+        self.claude_json = os.path.join(self.tmpdir, ".claude.json")
+        co.CLAUDE_JSON_PATH = self.claude_json
+        write_json(self.claude_json, {})
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        co.CLAUDE_JSON_PATH = self.old_path
+        self.tempdir.cleanup()
+
+    def _run_cli(self, argv):
+        """Run main() with patched sys.argv and capture stdout."""
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv):
+            with contextlib.redirect_stdout(output):
+                co.main()
+        return output.getvalue()
+
+    def test_trust_with_default_cwd_key(self):
+        key = os.path.realpath(self.repo)
+        output = self._run_cli(["prog", "--trust"])
+        self.assertIn(key, output)
+        self.assertIn("no entry -> trusted", output)
+
+    def test_trust_with_explicit_path(self):
+        explicit = os.path.realpath(os.path.join(self.tmpdir, "other"))
+        output = self._run_cli(["prog", "--trust", explicit])
+        self.assertIn(explicit, output)
+        self.assertIn("no entry -> trusted", output)
+
+    def test_untrust_after_trust(self):
+        key = os.path.realpath(self.repo)
+        write_json(self.claude_json, {"projects": {key: {"hasTrustDialogAccepted": True}}})
+        output = self._run_cli(["prog", "--untrust"])
+        self.assertIn(key, output)
+        self.assertIn("trusted -> untrusted", output)
+
+    def test_trust_status_shows_suppressor(self):
+        # Create a trusted ancestor directory inside the repo tree
+        key = os.path.realpath(self.repo)
+        ancestor = os.path.join(self.repo, "ancestor")
+        os.makedirs(ancestor, exist_ok=True)
+        ancestor_real = os.path.realpath(ancestor)
+
+        # Explicitly set the key to false (untrusted) so the suppressor check runs
+        start_dir = os.path.join(ancestor, "subdir")
+        os.makedirs(start_dir, exist_ok=True)
+        old_cwd = os.getcwd()
+        os.chdir(start_dir)
+        try:
+            write_json(self.claude_json, {"projects": {
+                key: {"hasTrustDialogAccepted": False},
+                ancestor_real: {"hasTrustDialogAccepted": True}
+            }})
+            output = self._run_cli(["prog", "--trust-status"])
+            self.assertIn(key, output)
+            self.assertIn("untrusted", output)
+            self.assertIn("Dialog suppressed by trusted entry", output)
+        finally:
+            os.chdir(old_cwd)
+
+    def test_trust_status_shows_suppressor_when_key_has_no_entry(self):
+        key = os.path.realpath(self.repo)
+        ancestor = os.path.join(self.repo, "ancestor")
+        start_dir = os.path.join(ancestor, "subdir")
+        os.makedirs(start_dir, exist_ok=True)
+        old_cwd = os.getcwd()
+        os.chdir(start_dir)
+        try:
+            write_json(self.claude_json, {"projects": {
+                os.path.realpath(ancestor): {"hasTrustDialogAccepted": True}
+            }})
+            output = self._run_cli(["prog", "--trust-status"])
+            self.assertIn(f"{key}: no entry", output)
+            self.assertIn("Dialog suppressed by trusted entry", output)
+        finally:
+            os.chdir(old_cwd)
+
+    def test_trust_status_global_lists_all(self):
+        path1 = os.path.realpath(os.path.join(self.tmpdir, "p1"))
+        path2 = os.path.realpath(os.path.join(self.tmpdir, "p2"))
+        write_json(self.claude_json, {"projects": {
+            path1: {"hasTrustDialogAccepted": True},
+            path2: {"hasTrustDialogAccepted": False},
+        }})
+        output = self._run_cli(["prog", "--trust-status", "-g"])
+        self.assertIn(path1, output)
+        self.assertIn(path2, output)
+        self.assertIn("trusted", output)
+        self.assertIn("untrusted", output)
+
+    def test_home_directory_warning(self):
+        home = os.path.realpath(os.path.expanduser("~"))
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            output = self._run_cli(["prog", "--trust", home])
+            self.assertIn("WARNING", output)
+            self.assertIn("session-only", output)
+
+    def test_malformed_file_exits(self):
+        with open(self.claude_json, "w") as f:
+            f.write("{invalid")
+        with self.assertRaises(SystemExit):
+            self._run_cli(["prog", "--trust"])
+
+    def test_mutually_exclusive_flags(self):
+        with self.assertRaises(SystemExit):
+            self._run_cli(["prog", "--trust", "--untrust"])
+
+    def test_untrust_with_no_entry_reports_unchanged(self):
+        key = os.path.realpath(self.repo)
+        output = self._run_cli(["prog", "--untrust"])
+        self.assertIn(f"{key}: no entry (unchanged)", output)
+        self.assertNotIn("->", output)
+        self.assertNotIn("Note:", output)
+
+    def test_trust_when_already_trusted_reports_unchanged(self):
+        key = os.path.realpath(self.repo)
+        write_json(self.claude_json, {"projects": {key: {"hasTrustDialogAccepted": True}}})
+        output = self._run_cli(["prog", "--trust"])
+        self.assertIn(f"{key}: trusted (unchanged)", output)
+
+    def test_non_dict_projects_exits_cleanly(self):
+        write_json(self.claude_json, {"projects": []})
+        with self.assertRaises(SystemExit) as cm:
+            self._run_cli(["prog", "--trust"])
+        self.assertTrue(str(cm.exception.code).startswith("claude-optin:"))
+        doc = load_doc(self.claude_json)
+        self.assertEqual(doc, {"projects": []})
+
+    def test_trust_status_in_linked_worktree_reports_own_root_suppressor(self):
+        root = os.path.realpath(self.tmpdir)
+        main = os.path.join(root, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        wt = os.path.join(root, "wt")
+        make_worktree(main, wt)
+        wt_real = os.path.realpath(wt)
+        write_json(self.claude_json, {"projects": {wt_real: {"hasTrustDialogAccepted": True}}})
+        old_cwd = os.getcwd()
+        os.chdir(wt)
+        try:
+            output = self._run_cli(["prog", "--trust-status"])
+            main_real = os.path.realpath(main)
+            self.assertIn(f"{main_real}: no entry", output)
+            self.assertIn(f"Dialog suppressed by trusted entry: {wt_real}", output)
+        finally:
+            os.chdir(old_cwd)
 
 
 if __name__ == "__main__":
