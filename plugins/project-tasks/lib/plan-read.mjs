@@ -33,6 +33,7 @@
  */
 
 import { emit, esc, notesJson, planDrift, resolvePlanId, sqlJson, sqlRows } from './db.mjs';
+import { table } from './gfm.mjs';
 import { slugify } from './normalize.mjs';
 
 /**
@@ -387,18 +388,6 @@ function tally(tasks) {
 }
 
 /**
- * Escape one markdown table cell. A pipe inside a title would otherwise split
- * the row into extra columns, and a newline would end the table entirely.
- *
- * @param {unknown} value
- * @returns {string}
- */
-function cell(value) {
-    const text = value === null || value === undefined ? '' : String(value);
-    return text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|');
-}
-
-/**
  * The one-paragraph summary — derived entirely from the counts, so the same
  * database always produces the same sentence. All four statuses are named even
  * at zero: a reader comparing two runs should see a number change rather than a
@@ -493,19 +482,23 @@ function planProgress(action) {
     if (tasks.length === 0) {
         out.push('_No tasks are linked to this plan yet._');
     } else {
-        out.push('| ID | Project | Step | Status | When | Commit |');
-        out.push('| --- | --- | --- | --- | --- | --- |');
-        for (const task of tasks) {
-            // The step column falls back to the title for a task with no
-            // anchor: a plan may own tasks that were never derived from a
-            // heading, and an empty cell would report them as nameless rather
-            // than as unanchored.
-            const step = task.plan_anchor || task.title;
-            out.push(
-                `| ${taskLabel(task.seq)} | ${cell(task.project)} | ${cell(step)} | ` +
-                    `${cell(task.status)} | ${cell(task.when_ts)} | ${cell(task.commit_sha)} |`,
-            );
-        }
+        out.push(
+            table(
+                ['ID', 'Project', 'Step', 'Status', 'When', 'Commit'],
+                tasks.map((t) => [
+                    taskLabel(t.seq),
+                    t.project,
+                    // The step column falls back to the title for a task with
+                    // no anchor: a plan may own tasks that were never derived
+                    // from a heading, and an empty cell would report them as
+                    // nameless rather than as unanchored.
+                    t.plan_anchor || t.title,
+                    t.status,
+                    t.when_ts,
+                    t.commit_sha,
+                ]),
+            ),
+        );
     }
 
     out.push('', summarize(label, counts));

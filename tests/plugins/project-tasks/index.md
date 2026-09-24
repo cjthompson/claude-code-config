@@ -4,7 +4,7 @@ Tests for the `project-tasks` plugin and its `task-db` helper.
 
 ## Overview
 
-The automated task-db coverage is organized as four Node test suites. See the
+The automated task-db coverage is organized as five Node test suites. See the
 [task-db test index](../../packages/task-db/index.md) for module ownership,
 parser groups, and per-suite coverage. Historical output is recorded in
 [test-results.md](../../packages/task-db/test-results.md).
@@ -23,11 +23,13 @@ Located at `plugins/project-tasks/`:
 | `task-db.integration.test.mts` | CLI dispatch, migrations, schema/FKs, handlers, transactions, and concurrency |
 | `task-db.plan-read.test.mts` | Plan tasks, status, and progress |
 | `task-db.plan-sync.test.mts` | Plan reconciliation and lifecycle mutations |
+| `task-db.gfm.test.mts` | GFM writer (`lib/gfm.mjs`): table/cell/heading/paragraph/blockquote output and GFM validity |
 
-The canonical four-suite run is:
+The canonical five-suite run is below. Run `npm install` first:
+`task-db.gfm.test.mts` imports the `micromark` devDependencies.
 
 ```bash
-node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts
+node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts plugins/project-tasks/task-db.gfm.test.mts
 ```
 
 ## Release guard

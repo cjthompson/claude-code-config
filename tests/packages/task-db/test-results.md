@@ -2,10 +2,11 @@
 
 Tracks test execution history for the task-db package.
 
-The canonical four-suite command is:
+The canonical five-suite command is below. Run `npm install` first:
+`task-db.gfm.test.mts` imports the `micromark` devDependencies.
 
 ```bash
-node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts
+node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts plugins/project-tasks/task-db.gfm.test.mts
 ```
 
 To capture and regenerate the TAP summary, run the suites into a temporary
@@ -15,7 +16,7 @@ file and extract the aggregate lines:
 set -e
 capture_file="$(mktemp)"
 trap 'rm -f "$capture_file"' EXIT
-node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts >"$capture_file" 2>&1
+node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts plugins/project-tasks/task-db.gfm.test.mts >"$capture_file" 2>&1
 awk '/^# (tests|pass|fail) /' "$capture_file"
 ```
 

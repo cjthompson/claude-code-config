@@ -17,6 +17,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "micromark": "^4.0.2",
+    "micromark-extension-gfm-table": "^2.1.2",
     "typescript": "^7.0.2"
   }
 }
