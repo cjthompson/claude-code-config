@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.0.78 - 2026-09-24
+
+### Fixes
+- **claude-optin**: MCP state now resolves the way Claude Code 2.1.281 does. A disable in any settings layer wins, whichever file is nearer. Before, nearest-layer-wins showed a false `✓` for a local enable under a project or user disable, and no number of SPACE presses turned the server on. Rows now show `✓` approved, `✗` hidden, a dim `·` for pending approval (in neither list), and an orange `!` with "blocked by <layer>" when another layer overrides the local choice (the save badge says so too). In an untrusted repo, enables stay pending. SPACE keeps its three-state cycle (approved → hidden → pending), and `cycle_mcp` removes duplicate names from both lists before writing. Keypresses were never dropped.
+- **claude-optin**: project settings (MCP lists, `enabledPlugins`, `skillOverrides`) are read and written at the git root, or the cwd outside git, instead of the nearest ancestor with a `.claude/` directory. Skill discovery is unchanged.
+- **claude-optin**: after a toggle re-sorts the list, the cursor stays on the server that was toggled.
+
 ## v0.0.77 - 2026-09-24
 
 ### Changes
