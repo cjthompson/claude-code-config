@@ -640,4 +640,20 @@ describe('plan progress', () => {
             '3|0|1|1|1|0',
         );
     });
+
+    it('escapes a backslash-and-pipe title in the Step cell, falling back to it with no anchor', () => {
+        // No --anchor: plan_anchor is NULL, so the Step column falls back to
+        // the title, which is exactly the value the gfm writer must escape.
+        const home = initialized();
+        const planId = makePlan(home, 'testproj', 'Escaping');
+        const r = run(home, [
+            'task', 'add', '--project', 'testproj', '--type', 'task', '--title', 'a\\|b',
+            '--plan-id', String(planId),
+        ]);
+        strictEqual(r.code, 0, r.err);
+        const out = run(home, ['plan', 'progress', '--project', 'testproj', '--seq', '1']).out;
+        const row = out.split('\n').find((line) => line.startsWith('| #001 '));
+        // Expected cell text is a\\\|b: escaped backslash, then escaped pipe.
+        match(row ?? '', /^\| #001 \| testproj \| a\\\\\\\|b \| pending \| \S+ \S+ \|  \|$/);
+    });
 });
