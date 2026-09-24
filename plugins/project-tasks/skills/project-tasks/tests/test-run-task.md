@@ -33,6 +33,10 @@ pipeline. It does not call `sqlite3` directly.
    paths before dispatching write-capable work.
 4. Dispatch a background read-only Planning Scout at the host's Strong tier.
 5. Chain a background write-capable Execution Agent at the host's Fast tier.
+   Profile resolution follows the order defined in `test-2stage-pipeline.md`
+   (see "Default Pipeline" → profile-resolution clause): `lean-agents` plugin
+   profiles when present, capability-equivalent host profiles otherwise,
+   prompt-level reinforcement as the final fallback.
 6. Do not commit automatically from the Executor. When it completes, present:
 
    ```text

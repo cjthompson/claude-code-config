@@ -29,6 +29,16 @@ baseline snapshot, and ownership boundary before dispatch.
    Implementation Map without editing files.
 5. Chain a background Execution Agent using the write-capable profile and the
    host-resolved **Fast tier**.
+   When the host's agent roster includes the optional `lean-agents` plugin, the
+   dispatch resolves `lean-agents:read-only` for Planning Scout and
+   `lean-agents:lean-executor` for Execution Agent. Otherwise, a
+   capability-equivalent host profile is used. When no structurally read-only
+   profile is available, the host's general subagent is reinforced at the prompt
+   level with the exact text: *"You have write tools available only because the
+   read-only profile is not installed. Do not use them. Do not modify files, the
+   index, or task data."*, and the user is told: *"Note: this host does not
+   expose a structurally read-only subagent, so read-only enforcement is
+   prompt-level for this dispatch."*
 6. Call `syncTaskToList(seq, "executing", ...)`. The Executor follows the map,
    edits only the mapped files, runs the mapped test command, and returns a
    structured report without committing.
@@ -123,6 +133,8 @@ only a user-selected cancellation cleanup and never restarts the task.
 - **FAIL** if the default pipeline omits either the read-only Scout or the
   write-capable Executor.
 - **FAIL** if a nested dispatch uses a literal provider model name.
+- **FAIL** if profile fallback silently drops the read-only reinforcement /
+  user note when no structurally read-only subagent is available.
 - **FAIL** if validation mutates files or database task status; stale/malformed
   lifecycle bookkeeping may move the in-memory/TaskList phase to
   `awaiting_decision`.
