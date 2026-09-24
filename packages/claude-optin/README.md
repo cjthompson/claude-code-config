@@ -111,7 +111,7 @@ Layers are resolved in order: **local → project → user → default** (instal
 
 ### MCP servers
 
-MCP servers use the same three states and the same layer resolution, but the underlying storage differs. State is stored as two name-lists in each settings file — `enabledMcpjsonServers` and `disabledMcpjsonServers` — and toggling moves a server's name between them (or removes it for *inherit*). Unlike plugins, an MCP server defaults to **off**: a `.mcp.json` server isn't loaded until it's explicitly enabled, so the safe default keeps it out of context.
+MCP servers use three states — **approved**, **hidden**, and **pending approval** — stored as two name-lists in each settings file: `enabledMcpjsonServers` and `disabledMcpjsonServers`. Toggling moves a server's name between them (or removes it, for pending). Unlike plugins, MCP resolution is **disable-wins, not nearest-layer-wins**: a disable in *any* layer hides the server, regardless of which layer is nearer, matching Claude Code's own resolution. An enable only takes effect if no layer disables it and the current repo is trusted; otherwise it stays pending. Pressing SPACE on a server that another layer disables shows `!` and a "blocked by \<layer\>" footer badge rather than silently doing nothing. In an untrusted repo, enabling a server keeps it pending (shown as `!` with "blocked: untrusted") until the repo is trusted. Project settings come from the git root, or the current directory if there's no git repo — plugin and skill overrides resolve from that same settings root.
 
 ### Skills
 
@@ -128,7 +128,7 @@ Resolution checks the qualified address (e.g. `apps/web:deploy`) before the plai
 
 ### Project-level (per-repo)
 
-When run without `--global`, changes are written to `.claude/settings.local.json` in the repo root. This file is gitignored and personal — it won't affect teammates.
+When run without `--global`, changes are written to `.claude/settings.local.json` in the repo root — the nearest git root, or the current directory if there's no git repo. This file is gitignored and personal — it won't affect teammates.
 
 Use this to disable plugins that aren't relevant to a particular codebase.
 

@@ -111,10 +111,16 @@ class McpDiscoveryTests(unittest.TestCase):
 
 
 class McpSettingsTests(unittest.TestCase):
-    def _settings(self, home, repo, global_mode=False):
+    def setUp(self):
+        self._old_claude_dir = co.CLAUDE_DIR
+
+    def tearDown(self):
+        co.CLAUDE_DIR = self._old_claude_dir
+
+    def _settings(self, home, repo, global_mode=False, trusted=True):
         # Point the module's CLAUDE_DIR at our temp home/.claude.
         co.CLAUDE_DIR = os.path.join(home, ".claude")
-        return co.Settings(repo, global_mode=global_mode)
+        return co.Settings(repo, global_mode=global_mode, trusted=trusted)
 
     def test_effective_defaults_off_when_unset(self):
         with tempfile.TemporaryDirectory() as home:
@@ -192,6 +198,235 @@ class McpSettingsTests(unittest.TestCase):
             user = os.path.join(home, ".claude", "settings.json")
             self.assertEqual(load_doc(user).get("enabledMcpjsonServers"), ["G"])
             self.assertEqual(s.effective_mcp("G"), (True, "user"))
+
+    def test_mcp_mark_returns_distinct_marks_across_cycle(self):
+        """Verify that each SPACE press produces a visibly different mark,
+        cycling approved -> hidden -> pending -> approved."""
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            s = self._settings(home, repo)
+
+            # Start unset (pending): dim dot
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"]), ("pending", "default"))
+            mark1, _ = co.mcp_mark(st["state"], st["blocked_by"], False)
+            self.assertEqual(mark1, "·")
+
+            # Press 1: pending -> approved
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"]), ("approved", "local"))
+            mark2, _ = co.mcp_mark(st["state"], st["blocked_by"], False)
+            self.assertEqual(mark2, "✓")
+            self.assertNotEqual(mark1, mark2)
+
+            # Press 2: approved -> hidden
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"]), ("hidden", "local"))
+            mark3, _ = co.mcp_mark(st["state"], st["blocked_by"], False)
+            self.assertEqual(mark3, "✗")
+            self.assertNotEqual(mark2, mark3)
+            self.assertNotEqual(mark1, mark3)
+
+            # Press 3: hidden -> pending
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"]), ("pending", "default"))
+            mark4, _ = co.mcp_mark(st["state"], st["blocked_by"], False)
+            self.assertEqual(mark4, "·")
+            self.assertEqual(mark1, mark4)
+
+    def test_mcp_mark_unit_assertions(self):
+        """Direct unit tests for mcp_mark behavior — all 5 table rows."""
+        # Pending (unset everywhere or untrusted enable): dim dot
+        mark, kind = co.mcp_mark("pending", None, False)
+        self.assertEqual(mark, "·")
+        self.assertEqual(kind, "dim")
+
+        # Hidden (disabled somewhere): red cross
+        mark, kind = co.mcp_mark("hidden", None, False)
+        self.assertEqual(mark, "✗")
+        self.assertEqual(kind, "red")
+
+        # Approved: green checkmark
+        mark, kind = co.mcp_mark("approved", None, False)
+        self.assertEqual(mark, "✓")
+        self.assertEqual(kind, "green")
+
+        # Blocked by another layer or by trust: orange bang, regardless of state
+        mark, kind = co.mcp_mark("hidden", "project", False)
+        self.assertEqual(mark, "!")
+        self.assertEqual(kind, "orange")
+
+        # Orphan: yellow question mark (state/blocked_by don't matter for orphans)
+        mark, kind = co.mcp_mark("approved", None, True)
+        self.assertEqual(mark, "?")
+        self.assertEqual(kind, "yellow")
+
+    def test_project_disable_cycle_is_blocked(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "project", "project"))
+            self.assertIs(st["intent"], True)
+            self.assertEqual(s.effective_mcp("S"), (False, "project"))
+
+    def test_project_disable_cycle_sequence(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "project", None))
+
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "project", "project"))
+
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "local", None))
+
+            s.cycle_mcp("S")
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "project", None))
+
+    def test_user_disable_then_local_enable_is_blocked_by_user(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            write_json(os.path.join(home, ".claude", "settings.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "user", None))
+
+            s.cycle_mcp("S")   # local: unset -> enabled
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "user", "user"))
+
+    def test_local_disable_over_project_enable(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.json"),
+                       {"enabledMcpjsonServers": ["S"]})
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("hidden", "local", None))
+
+    def test_untrusted_local_enable_is_pending_until_trusted(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo, trusted=False)
+
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("pending", "local", "untrusted"))
+            self.assertEqual(s.effective_mcp("S"), (False, "local"))
+
+            s.trusted = True   # no caching: same instance, fresh read
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"], st["blocked_by"]),
+                             ("approved", "local", None))
+
+    def test_untrusted_local_disable_is_still_hidden(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo, trusted=False)
+            self.assertEqual(s.mcp_status("S")["state"], "hidden")
+
+    def test_name_in_both_local_lists_then_two_cycles(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            local = os.path.join(repo, ".claude", "settings.local.json")
+            write_json(local, {"enabledMcpjsonServers": ["S"],
+                               "disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+            self.assertEqual(s.mcp_status("S")["state"], "hidden")
+
+            s.cycle_mcp("S")
+            doc = load_doc(local)
+            self.assertNotIn("S", doc.get("enabledMcpjsonServers", []))
+            self.assertNotIn("S", doc.get("disabledMcpjsonServers", []))
+            st = s.mcp_status("S")
+            self.assertEqual((st["state"], st["source"]), ("pending", "default"))
+
+            s.cycle_mcp("S")
+            doc = load_doc(local)
+            self.assertEqual(doc.get("enabledMcpjsonServers"), ["S"])
+            self.assertNotIn("S", doc.get("disabledMcpjsonServers", []))
+
+    def test_duplicate_enable_entries_collapse_on_cycle(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            local = os.path.join(repo, ".claude", "settings.local.json")
+            write_json(local, {"enabledMcpjsonServers": ["S", "S"]})
+            s = self._settings(home, repo)
+            s.cycle_mcp("S")
+            doc = load_doc(local)
+            self.assertEqual(doc.get("disabledMcpjsonServers"), ["S"])
+            self.assertNotIn("S", doc.get("enabledMcpjsonServers", []))
+
+    def test_full_cycle_returns_to_start_from_each_seed(self):
+        seeds = [
+            ("approved", {"enabledMcpjsonServers": ["S"]}),
+            ("hidden", {"disabledMcpjsonServers": ["S"]}),
+            ("pending", None),
+        ]
+        for label, seed_doc in seeds:
+            with self.subTest(seed=label):
+                with tempfile.TemporaryDirectory() as home:
+                    repo = os.path.join(home, "repo")
+                    local = os.path.join(repo, ".claude", "settings.local.json")
+                    if seed_doc is not None:
+                        write_json(local, seed_doc)
+                    else:
+                        os.makedirs(repo)
+                    s = self._settings(home, repo)
+                    start = load_doc(local) if os.path.isfile(local) else {}
+                    for _ in range(3):
+                        s.cycle_mcp("S")
+                        # every intermediate write is a valid, distinct state
+                        self.assertIn(s.mcp_status("S")["state"],
+                                     ("approved", "hidden", "pending"))
+                    end = load_doc(local) if os.path.isfile(local) else {}
+                    self.assertEqual(start.get("enabledMcpjsonServers", []),
+                                     end.get("enabledMcpjsonServers", []))
+                    self.assertEqual(start.get("disabledMcpjsonServers", []),
+                                     end.get("disabledMcpjsonServers", []))
+
+    def test_global_mode_ignores_project_disable(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.json"),
+                       {"disabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo, global_mode=True)
+            st = s.mcp_status("S")
+            self.assertEqual(st["state"], "pending")
+            self.assertIsNone(st["blocked_by"])
 
 
 class SkillSettingsTests(unittest.TestCase):
@@ -1640,6 +1875,126 @@ class TrustCliTests(unittest.TestCase):
             self.assertIn(f"Dialog suppressed by trusted entry: {wt_real}", output)
         finally:
             os.chdir(old_cwd)
+
+
+class CursorFollowTests(unittest.TestCase):
+    def setUp(self):
+        self._old_claude_dir = co.CLAUDE_DIR
+
+    def tearDown(self):
+        co.CLAUDE_DIR = self._old_claude_dir
+
+    def test_find_entry_row_tracks_a_cycled_and_resorted_server(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            co.CLAUDE_DIR = os.path.join(home, ".claude")
+            s = co.Settings(repo)
+            s.cycle_mcp("a")   # seed "a" approved, so it sorts first
+
+            servers = [co._mcp_entry(n, {}, "test") for n in ("a", "b", "c")]
+            expanded = {"a"}
+
+            srv = co.sort_mcp_servers(servers, s, "enabled")
+            self.assertEqual([e["name"] for e in srv], ["a", "b", "c"])
+            rows = co.build_rows(srv, expanded)
+            c_entry_idx = next(i for i, e in enumerate(srv) if e["name"] == "c")
+
+            s.cycle_mcp("c")   # pending -> approved
+
+            srv2 = co.sort_mcp_servers(servers, s, "enabled")
+            self.assertEqual([e["name"] for e in srv2], ["a", "c", "b"])
+            rows2 = co.build_rows(srv2, expanded)
+            c_entry_idx2 = next(i for i, e in enumerate(srv2) if e["name"] == "c")
+
+            row_idx = co.find_entry_row(rows2, srv2, "c")
+            self.assertIsNotNone(row_idx)
+            self.assertEqual(srv2[rows2[row_idx][1]]["name"], "c")
+            self.assertNotEqual(row_idx, c_entry_idx2)
+            self.assertNotEqual(c_entry_idx, c_entry_idx2)  # sanity: position moved
+
+            self.assertIsNone(co.find_entry_row(rows2, srv2, "no-such-key"))
+
+
+class SettingsRootTests(unittest.TestCase):
+    def test_git_root_wins_over_nested_claude_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.realpath(tmpdir)
+            repo = os.path.join(root, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            deeper = os.path.join(repo, "sub", "deeper")
+            os.makedirs(os.path.join(repo, "sub", ".claude"))
+            os.makedirs(deeper)
+            self.assertEqual(co.settings_root(deeper), os.path.realpath(repo))
+
+    def test_no_git_falls_back_to_start_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.realpath(tmpdir)
+            top = os.path.join(root, "top")
+            child = os.path.join(top, "child")
+            os.makedirs(os.path.join(top, ".claude"))
+            os.makedirs(child)
+            self.assertEqual(co.settings_root(child), os.path.realpath(child))
+
+    def test_linked_worktree_settings_root_differs_from_trust_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.realpath(tmpdir)
+            main = os.path.join(root, "main")
+            os.makedirs(os.path.join(main, ".git"))
+            wt = os.path.join(root, "wt")
+            make_worktree(main, wt)
+            sub = os.path.join(wt, "sub")
+            os.makedirs(sub)
+            self.assertEqual(co.settings_root(sub), os.path.realpath(wt))
+            self.assertEqual(co.resolve_trust_key(sub), main)
+
+
+class MainWiringTests(unittest.TestCase):
+    def setUp(self):
+        self._old_claude_dir = co.CLAUDE_DIR
+        self._old_claude_json = co.CLAUDE_JSON_PATH
+
+    def tearDown(self):
+        co.CLAUDE_DIR = self._old_claude_dir
+        co.CLAUDE_JSON_PATH = self._old_claude_json
+
+    def test_main_wires_settings_root_repo_root_and_trust(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.realpath(tmpdir)
+            repo = os.path.join(root, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            sub = os.path.join(repo, "sub")
+            os.makedirs(os.path.join(sub, ".claude"))
+            co.CLAUDE_DIR = os.path.join(root, "home-claude")
+            co.CLAUDE_JSON_PATH = os.path.join(root, "home-claude.json")
+            write_json(co.CLAUDE_JSON_PATH,
+                       {"projects": {repo: {"hasTrustDialogAccepted": True}}})
+
+            captured = {}
+
+            def fake_wrapper(func, *args):
+                captured["settings"] = args[3]
+                return None
+
+            def fake_discover_skills(*args, **kwargs):
+                captured["discover_skills_args"] = args
+                return []
+
+            old_cwd = os.getcwd()
+            os.chdir(sub)
+            try:
+                with mock.patch.object(sys, "argv", ["claude-optins"]), \
+                     mock.patch.object(co.curses, "wrapper", fake_wrapper), \
+                     mock.patch.object(co, "discover_plugins", return_value=[]), \
+                     mock.patch.object(co, "discover_skills", fake_discover_skills), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    co.main()
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(captured["settings"].repo_root, os.path.realpath(repo))
+            self.assertEqual(captured["discover_skills_args"][1], sub)
+            self.assertTrue(captured["settings"].trusted)
 
 
 if __name__ == "__main__":
