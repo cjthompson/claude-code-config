@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.77 - 2026-09-24
+
+### Changes
+- **project-tasks**: align two-stage and run-task test scenarios with the host-aware model selection in `SKILL.md`. `tests/test-2stage-pipeline.md` adds a profile-resolution clause covering the `lean-agents` plugin profiles (`lean-agents:read-only` / `lean-agents:lean-executor`) → capability-equivalent host profiles → prompt-level read-only reinforcement when no structurally read-only subagent is available, with a matching **FAIL** criterion. `tests/test-run-task.md` adds a short cross-reference pointing at the authoritative treatment in the two-stage scenario. `SKILL.md`, `references/`, and unrelated test scenarios are unchanged; the skill frontmatter `model: haiku` is preserved.
+
 ## v0.0.76 - 2026-09-23
 
 ### Changes
