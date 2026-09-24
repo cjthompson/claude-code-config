@@ -6,9 +6,13 @@ startup context, in four tabs switched with TAB:
 
   • Plugins — every installed plugin (with its skills and agents), its
     effective enabled state, and where that comes from.
-  • MCP servers — every server defined in a .mcp.json found walking from
-    the current directory up to your home directory, plus user-scope
-    servers in ~/.claude.json. Toggling moves a name between the
+  • MCP servers — every server defined in every .mcp.json found walking
+    from the current directory all the way up to the filesystem root
+    (matching how Claude Code itself discovers them — it does not stop at
+    your home directory or a git root), grouped by the file it came from,
+    plus user-scope servers in ~/.claude.json. A name defined in several
+    files gets one row per file: the nearest copy is active, farther
+    copies are shown shadowed. Toggling moves a name between the
     enabledMcpjsonServers / disabledMcpjsonServers lists; a disabled
     server stays defined but isn't started, so it costs no context.
   • Skills — every discovered skill (personal, project, and active-plugin),
@@ -28,6 +32,7 @@ Keys:
   a             expand/collapse all        g/G  top/bottom
   s             cycle sort: default / name / enabled / source / skills+agents / tokens
   D             delete plugin (removes cache dir, prompts; Plugins tab only)
+                or delete a user-scope (~/.claude.json) MCP server, prompts
   O/U/C         Skills tab only: explicit on / user-invocable-only / clear override
   q             quit (changes are saved on every toggle)
 
@@ -337,8 +342,13 @@ def discover_plugins():
     return plugins
 
 
-def _mcp_entry(name, definition, source):
-    """Shape an MCP server like a plugin entry so the renderer can share code."""
+def _mcp_entry(name, definition, source, *, source_path, group, group_label,
+               scope, shadowed_by=None, overrides=()):
+    """Shape an MCP server like a plugin entry so the renderer can share code.
+
+    key is unique per (source file, name) — a name defined in several
+    .mcp.json files gets one row per file, not a single deduped row.
+    """
     transport = definition.get("type")
     if not transport:
         transport = "stdio" if definition.get("command") else "http"
@@ -352,9 +362,15 @@ def _mcp_entry(name, definition, source):
         detail_items.append(("command", cmd))
     return {
         "kind": "mcp",
-        "key": name,
+        "key": f"{source_path}\0{name}",
         "name": name,
-        "source": source,
+        "source": group_label,   # kept for compatibility; display label
+        "source_path": source_path,
+        "group": group,
+        "group_label": group_label,
+        "scope": scope,           # "project" | "user" | "orphan"
+        "shadowed_by": shadowed_by,
+        "overrides": list(overrides),
         "transport": transport,
         "definition": definition,
         "detail_items": detail_items,
@@ -363,58 +379,124 @@ def _mcp_entry(name, definition, source):
     }
 
 
-def discover_mcp_servers(start_dir, home=None, user_json_path=None):
-    """Servers defined in .mcp.json files walking start_dir up to home,
-    plus user-scope mcpServers in ~/.claude.json. Nearer .mcp.json files
-    win on name collision; the user scope is the lowest precedence.
+def _mcp_label(path, home):
+    """'~/<rel>/.mcp.json' under home, else the absolute path."""
+    if path == home or path.startswith(home + os.sep):
+        rel = os.path.relpath(path, home)
+        return "~/" + rel.replace(os.sep, "/")
+    return path
 
-    Returns a list of MCP entry dicts sorted by name.
+
+def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None):
+    """Every server defined in every .mcp.json found walking from
+    realpath(start_dir) up to stop_at (default the filesystem root — this
+    does NOT stop at $HOME or a git root, matching how Claude Code itself
+    discovers .mcp.json files), plus user-scope mcpServers in
+    ~/.claude.json. stop_at exists for tests only.
+
+    A name defined in several .mcp.json files gets one entry per file
+    (grouped by source path), not a single deduped row: the nearest file's
+    copy is the active one (shadowed_by=None, overrides=[farther labels]);
+    farther copies record shadowed_by=<nearest label>. User-scope entries
+    are always emitted, even when a .mcp.json defines the same name.
+
+    Returns entries ordered by group (nearest .mcp.json first, then the
+    user group), name case-insensitive within a group.
     """
     home = os.path.realpath(home or os.path.expanduser("~"))
     user_json_path = user_json_path or CLAUDE_JSON_PATH
+    stop_at = os.path.realpath(stop_at) if stop_at else os.sep
 
-    # Walk cwd -> home, collecting (name -> (definition, rel_source)).
-    # Iterate nearest first so the first definition seen for a name wins.
-    found = {}
+    # Walk start_dir -> stop_at, collecting each .mcp.json found, nearest first.
+    files = []
     d = os.path.realpath(start_dir)
     while True:
         mcp_path = os.path.join(d, ".mcp.json")
         if os.path.isfile(mcp_path):
-            servers = load_json(mcp_path).get("mcpServers", {})
-            rel = os.path.relpath(mcp_path, home)
-            for name, definition in servers.items():
-                if name not in found:
-                    found[name] = (definition, rel)
-        if d == home:
+            doc_servers = load_json(mcp_path).get("mcpServers", {})
+            if isinstance(doc_servers, dict):
+                files.append((mcp_path, doc_servers))
+        if d == stop_at:
             break
         parent = os.path.dirname(d)
-        if parent == d:   # reached filesystem root before home
+        if parent == d:   # reached filesystem root
             break
         d = parent
 
-    entries = [_mcp_entry(name, defi, src) for name, (defi, src) in found.items()]
+    # Nearest-first list of file indices that define each name.
+    name_occurrences = {}
+    for i, (_, doc_servers) in enumerate(files):
+        for name in doc_servers:
+            name_occurrences.setdefault(name, []).append(i)
 
-    # User-scope definitions from ~/.claude.json (lowest precedence).
+    entries = []
+    for i, (path, doc_servers) in enumerate(files):
+        group_label = _mcp_label(path, home)
+        for name, definition in doc_servers.items():
+            occurrences = name_occurrences[name]
+            nearest_idx = occurrences[0]
+            if i == nearest_idx:
+                shadowed_by = None
+                overrides = [_mcp_label(files[j][0], home) for j in occurrences[1:]]
+            else:
+                shadowed_by = _mcp_label(files[nearest_idx][0], home)
+                overrides = ()
+            entries.append(_mcp_entry(name, definition, path, source_path=path,
+                                      group=i, group_label=group_label,
+                                      scope="project", shadowed_by=shadowed_by,
+                                      overrides=overrides))
+
+    # User-scope definitions from ~/.claude.json — always emitted, even when
+    # a .mcp.json defines the same name (no static shadowing here; see
+    # mcp_row_status for the dynamic shadow check against effective state).
     user_servers = load_json(user_json_path).get("mcpServers", {})
-    for name, definition in user_servers.items():
-        if name not in found:
-            entries.append(_mcp_entry(name, definition, "user"))
+    if isinstance(user_servers, dict) and user_servers:
+        user_group = len(files)
+        for name, definition in user_servers.items():
+            entries.append(_mcp_entry(name, definition, user_json_path,
+                                      source_path=user_json_path, group=user_group,
+                                      group_label="~/.claude.json (user)",
+                                      scope="user"))
 
-    return sorted(entries, key=lambda e: e["name"].lower())
+    entries.sort(key=lambda e: (e["group"], e["name"].lower()))
+    return entries
+
+
+ORPHAN_GROUP_LABEL = "orphans (listed in settings, no definition)"
 
 
 def add_orphans(servers, referenced_names):
     """Append entries for names referenced in enabled/disabled lists that
-    have no matching definition, flagged orphan=True."""
+    have no matching definition, flagged orphan=True. Placed in their own
+    group after every other group — but if an orphan group already exists
+    (e.g. this is a re-run after a delete), reuse its group number instead
+    of appending a second "orphans" header. Idempotent: names already
+    present (including existing orphan entries) aren't duplicated, so this
+    can be safely re-run after a definition disappears (e.g. a delete) to
+    make a name reappear as an orphan immediately."""
     known = {s["name"] for s in servers}
-    orphans = []
+    existing_orphan_group = next((s["group"] for s in servers
+                                  if s.get("scope") == "orphan"), None)
+    if existing_orphan_group is None:
+        orphan_group = max((s["group"] for s in servers), default=-1) + 1
+    else:
+        orphan_group = existing_orphan_group
+    new_orphans = []
     for name in sorted(referenced_names, key=str.lower):
         if name not in known:
-            e = _mcp_entry(name, {}, "orphan")
+            e = _mcp_entry(name, {}, "orphan", source_path="orphan",
+                           group=orphan_group, group_label=ORPHAN_GROUP_LABEL,
+                           scope="orphan")
             e["orphan"] = True
             e["transport"] = "?"
-            orphans.append(e)
-    return servers + orphans
+            new_orphans.append(e)
+    if not new_orphans:
+        return servers
+    others = [s for s in servers if s.get("scope") != "orphan"]
+    existing_orphans = [s for s in servers if s.get("scope") == "orphan"]
+    all_orphans = sorted(existing_orphans + new_orphans,
+                         key=lambda s: s["name"].lower())
+    return others + all_orphans
 
 
 # ---------- settings ----------
@@ -640,6 +722,30 @@ def trust_suppressor(path, user_json_path=None, *, key=None):
         d = parent
 
 
+def _write_json_atomic(path, doc):
+    """Write doc as JSON to path atomically: mkstemp in the same dir, fsync,
+    chmod to path's own existing mode, os.replace; unlink the temp file on
+    failure. Raises on any OSError."""
+    target = os.path.realpath(path)
+    mode = stat.S_IMODE(os.stat(target).st_mode)
+    tmpdir = os.path.dirname(target)
+    fd, tmp_path = tempfile.mkstemp(dir=tmpdir, prefix=".claude.json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
+
+
 def set_trust(path, value, user_json_path=None):
     """Set hasTrustDialogAccepted for path (value None removes the field but
     keeps the entry). Returns (old, new).
@@ -669,27 +775,27 @@ def set_trust(path, value, user_json_path=None):
             projects[path] = dict(projects[path])
         projects[path]["hasTrustDialogAccepted"] = value
 
-    # Write atomically with mode preservation
-    target = os.path.realpath(user_json_path)
-    mode = stat.S_IMODE(os.stat(target).st_mode)
-    tmpdir = os.path.dirname(target)
-    fd, tmp_path = tempfile.mkstemp(dir=tmpdir, prefix=".claude.json.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp_path, mode)
-        os.replace(tmp_path, target)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        raise
-
+    _write_json_atomic(user_json_path, doc)
     return (old, value)
+
+
+def delete_user_mcp_server(name, user_json_path=None):
+    """Delete `name` from ~/.claude.json's top-level mcpServers. Returns
+    True if it was present and removed, False if absent (no write).
+    Raises ValueError if mcpServers isn't a dict; raises on a malformed
+    file (via load_json_strict) — either way, leaves the file untouched."""
+    user_json_path = user_json_path or CLAUDE_JSON_PATH
+    doc = load_json_strict(user_json_path)
+    servers = doc.get("mcpServers")
+    if servers is None:
+        return False
+    if not isinstance(servers, dict):
+        raise ValueError(f"'mcpServers' in {user_json_path} is not an object")
+    if name not in servers:
+        return False
+    del servers[name]
+    _write_json_atomic(user_json_path, doc)
+    return True
 
 
 class Settings:
@@ -894,6 +1000,77 @@ class Settings:
             f.write("\n")
 
 
+MCP_USER_LOCK_REASON = "always on; enable lists don't apply"
+
+
+def mcp_row_status(entry, servers, settings):
+    """Per-row facts for one MCP entry, independent of rendering.
+
+    Returns {role, mark, color, dim, tag, toggleable, deletable,
+    lock_reason, notice}. `servers` is the full MCP-tab display list, used
+    to find a same-named entry in the other scope (project <-> user) for
+    cross-scope tags/shadowing.
+    """
+    name = entry["name"]
+    scope = entry.get("scope")
+
+    if scope == "orphan":
+        return {"role": "orphan", "mark": "?", "color": "yellow", "dim": False,
+                "tag": "", "toggleable": True, "deletable": False,
+                "lock_reason": None, "notice": None}
+
+    if scope == "project":
+        shadowed_by = entry.get("shadowed_by")
+        on, _ = settings.effective_mcp(name)
+        mark, color = ("✓", "green") if on else ("✗", "red")
+        if shadowed_by is None:
+            overridden = list(entry.get("overrides") or [])
+            user_entry = next((s for s in servers if s.get("scope") == "user"
+                               and s["name"] == name), None)
+            # Project always wins over a same-named user entry while it's
+            # effectively on; fold it into the same overrides list so it
+            # reads as "overrides a, b" rather than a separate bare tag.
+            if user_entry is not None and on:
+                overridden.append(user_entry["group_label"])
+            tag = "overrides " + ", ".join(overridden) if overridden else ""
+            return {"role": "live", "mark": mark, "color": color, "dim": False,
+                    "tag": tag, "toggleable": True, "deletable": False,
+                    "lock_reason": None, "notice": None}
+        notice = (f"MCP state is per name — toggle it on the active row "
+                 f"under {shadowed_by}")
+        return {"role": "shadowed", "mark": mark, "color": color, "dim": True,
+                "tag": f"shadowed by {shadowed_by}", "toggleable": False,
+                "deletable": False, "lock_reason": None, "notice": notice}
+
+    if scope == "user":
+        project_entry = next((s for s in servers if s.get("scope") == "project"
+                              and s["name"] == name and s.get("shadowed_by") is None),
+                             None)
+        shadowed = False
+        if project_entry is not None:
+            on, _ = settings.effective_mcp(name)
+            # A disabled/pending project copy yields to the user copy, whether
+            # or not the folder is trusted (FINDINGS #9-10) — same rule here.
+            if on:
+                shadowed = True
+        if shadowed:
+            notice = ("MCP state is per name — this user-scope copy is not "
+                     "active while the project copy is enabled")
+            return {"role": "locked-shadowed", "mark": "🔒", "color": "yellow",
+                    "dim": True, "tag": f"shadowed by {project_entry['group_label']}",
+                    "toggleable": False, "deletable": True, "lock_reason": None,
+                    "notice": notice}
+        notice = "user-scope MCP servers are always on; toggling here would do nothing"
+        return {"role": "locked", "mark": "🔒", "color": "yellow", "dim": False,
+                "tag": "", "toggleable": False, "deletable": True,
+                "lock_reason": MCP_USER_LOCK_REASON, "notice": notice}
+
+    # Shouldn't happen for a well-formed entry; degrade to orphan-like display.
+    return {"role": "unknown", "mark": "?", "color": "yellow", "dim": False,
+            "tag": "", "toggleable": True, "deletable": False,
+            "lock_reason": None, "notice": None}
+
+
 # ---------- TUI ----------
 
 def _token_estimate(text):
@@ -1016,6 +1193,8 @@ def confirm_prompt(kind, entry):
     """(verb, label) for the confirmation footer, kind-aware."""
     if kind == "plugin":
         return ("Delete", f"{entry['name']}@{entry['marketplace']}")
+    if kind == "mcp-user":
+        return ("Delete", f"{entry['name']} from ~/.claude.json")
     return ("Untrust" if entry["trusted"] else "Trust", entry["path"])
 
 
@@ -1046,7 +1225,12 @@ def build_rows(display, expanded, detail_wrap_width=78):
     from the live terminal width; the default just keeps this usable when
     called without one (e.g. from tests)."""
     rows = []
+    last_mcp_group = object()   # sentinel; group 0 must still trigger a header
     for i, e in enumerate(display):
+        if e["kind"] == "mcp" and e.get("group_label") is not None \
+                and e["group"] != last_mcp_group:
+            rows.append(("mcp-group", i, e["group_label"]))
+            last_mcp_group = e["group"]
         rows.append((e["kind"], i, None))
         if e["key"] not in expanded:
             continue
@@ -1064,6 +1248,12 @@ def build_rows(display, expanded, detail_wrap_width=78):
                 rows.append(("mcp-detail", i, f"{label}  {val}"))
             if not e["detail_items"]:
                 rows.append(("empty", i, "(no connection details)"))
+            if e.get("scope") in ("project", "user"):
+                rows.append(("mcp-detail", i, f"source  {e['source_path']}"))
+            if e.get("scope") == "user":
+                for line in textwrap.wrap(MCP_USER_LOCK_REASON,
+                                          max(20, detail_wrap_width)):
+                    rows.append(("mcp-lock-reason", i, line))
         elif e["kind"] == "trust":
             for label, val in e["detail_items"]:
                 rows.append(("trust-detail", i, f"{label}  {val}"))
@@ -1149,14 +1339,16 @@ SRC_ORDER = {"local": 0, "project": 1, "user": 2, "default": 3,
 
 def sort_mcp_servers(servers, settings, sort_mode):
     """Servers only support name/enabled/source ordering; other modes fall
-    back to their default (already name-sorted) order."""
+    back to their default (already name-sorted) order. Every mode keeps
+    servers grouped by source .mcp.json file first."""
     if sort_mode == "enabled":
         return sorted(servers,
-                      key=lambda s: (0 if settings.effective_mcp(s["name"])[0]
+                      key=lambda s: (s["group"],
+                                     0 if settings.effective_mcp(s["name"])[0]
                                      else 1, s["name"].lower()))
     if sort_mode == "source":
         return sorted(servers,
-                      key=lambda s: (SRC_ORDER.get(
+                      key=lambda s: (s["group"], SRC_ORDER.get(
                           "orphan" if s["orphan"]
                           else settings.effective_mcp(s["name"])[1], 3),
                           s["name"].lower()))
@@ -1194,6 +1386,7 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
     NOTIFY_SAVED = GREEN | curses.A_BOLD | curses.A_REVERSE
     NOTIFY_DELETED = ORANGE | curses.A_BOLD | curses.A_REVERSE
     NOTIFY_ERROR = RED | curses.A_BOLD | curses.A_REVERSE
+    NOTIFY_NEUTRAL = DIM_WHITE | curses.A_BOLD | curses.A_REVERSE
 
     # Skills-tab legend bar: a genuinely dark navy background so bright
     # white/green/cyan/yellow/red foreground text has real luminance
@@ -1282,6 +1475,15 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                 cursor = idx
             follow = None
         cursor = max(0, min(cursor, len(rows) - 1))
+        # Computed once per frame (not just after a keypress) so the footer
+        # below can react to what's under the cursor right now. A header row
+        # (e.g. mcp-group) has no entry/key of its own — SPACE/l/h/D/D-footer
+        # all no-op on it.
+        cur_kind, cur_pi, _ = rows[cursor] if rows else ("plugin", 0, None)
+        entry = display[cur_pi] if display and rows else None
+        if cur_kind == "mcp-group":
+            entry = None
+        key = entry["key"] if entry else None
         body_h = max(1, h - 4 - reserved_bottom)   # title + info + tab bar + footer
         if cursor < top:
             top = cursor
@@ -1401,18 +1603,32 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                     stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
             elif kind == "mcp":
                 s = display[pi]
+                status = mcp_row_status(s, display, settings)
                 st = settings.mcp_status(s["name"])
-                mark, color_kind = mcp_mark(st["state"], st["blocked_by"], s["orphan"])
                 color_map = {
                     "yellow": YELLOW,
                     "green": GREEN,
                     "red": RED,
                     "orange": ORANGE,
+                    "cyan": CYAN,
                     "dim": DIM_WHITE | curses.A_DIM,
                 }
-                color = color_map.get(color_kind, DIM_WHITE)
+                if status["role"] == "live":
+                    # Live rows reflect full disable-wins state (pending,
+                    # blocked, approved), not just plain on/off.
+                    mark, color_kind = mcp_mark(st["state"], st["blocked_by"], s["orphan"])
+                    color = color_map.get(color_kind, DIM_WHITE)
+                    row_dim = curses.A_DIM if color_kind == "dim" else 0
+                else:
+                    mark = status["mark"]
+                    color = color_map.get(status["color"], DIM_WHITE)
+                    row_dim = curses.A_DIM if status["dim"] else 0
                 editable = "user" if settings.global_mode else "local"
-                if st["blocked_by"]:
+                if status["role"] != "live":
+                    src_tag = {"local": "local   ", "project": "project ",
+                               "user": "user    "}.get(st["source"], "default ")
+                    tag_src = st["source"]
+                elif st["blocked_by"]:
                     tag_src, src_tag = editable, {
                         "local": "local   ", "user": "user    "}[editable]
                 else:
@@ -1427,13 +1643,18 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                     blocked_info = [(f"blocked by {st['blocked_by']} ", True)]
                 else:
                     blocked_info = []
+                tag_seg = (" " + status["tag"]) if status["tag"] else ""
                 info_segs = blocked_info + [
                     ("[ ", True), (f"{s['transport']:<5}", False),
-                    (" ", True), (s["source"], False), (" ]", True),
+                    (tag_seg, False), (" ]", True),
                 ]
                 info_str = "".join(seg for seg, _ in info_segs)
                 if s["orphan"]:
                     name_color = DIM_WHITE | curses.A_DIM
+                elif row_dim:
+                    name_color = DIM_WHITE | curses.A_DIM
+                elif status["role"] != "live":
+                    name_color = color
                 elif st["blocked_by"]:
                     name_color = ORANGE
                 elif st["state"] == "pending":
@@ -1443,25 +1664,30 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                 else:
                     name_color = RED
                 stdscr.addnstr(y, 0, " ", 1, attr)
-                mark_attr = color | attr if color_kind == "dim" else color | attr | curses.A_BOLD
+                mark_attr = color | attr | row_dim if row_dim else color | attr | curses.A_BOLD
                 stdscr.addnstr(y, 1, mark, 1, mark_attr)
                 stdscr.addnstr(y, 2, f" {src_tag}", 9,
                                (YELLOW if tag_src == editable else curses.A_DIM) | attr)
                 info_col = w - len(info_str) - 1
                 if info_col > 11:
                     name_width = max(1, info_col - 12)
-                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr | row_dim)
                     ix = info_col
                     for seg, is_label in info_segs:
                         if ix >= w - 1:
                             break
                         n = min(len(seg), w - 1 - ix)
                         stdscr.addnstr(y, ix, seg, n,
-                                       (curses.A_DIM if is_label else 0) | attr)
+                                       (curses.A_DIM if is_label else 0) | attr | row_dim)
                         ix += len(seg)
                 else:
                     name_width = max(1, w - 12)
-                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr)
+                    stdscr.addnstr(y, 11, name_str, name_width, name_color | attr | row_dim)
+            elif kind == "mcp-group":
+                stdscr.addnstr(y, 1, str(text), max(0, w - 2),
+                               attr | curses.A_BOLD | curses.A_DIM)
+            elif kind == "mcp-lock-reason":
+                stdscr.addnstr(y, 11, f"· {text}", w - 12, attr | curses.A_DIM)
             elif kind == "skill":
                 sk = display[pi]
                 state = sk["effective_state"]
@@ -1614,6 +1840,9 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
             ]
             if tab == 0:   # delete is plugin-only
                 footer_segs += [("D", True), (":delete  ", False)]
+            if tab == 1 and entry and entry.get("kind") == "mcp" \
+                    and entry.get("scope") == "user":
+                footer_segs += [("D", True), (":delete  ", False)]
             if tab == 2:   # explicit skill states are Skills-tab-only
                 footer_segs += [("O", True), (":on  ", False),
                                 ("U", True), (":user-only  ", False),
@@ -1642,9 +1871,7 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
         ch = stdscr.getch()
         if ch == -1:
             continue  # badge-refresh timeout, not a keypress; must not cancel a confirm
-        kind, pi, _ = rows[cursor] if rows else ("plugin", 0, None)
-        entry = display[pi] if display and rows else None
-        key = entry["key"] if entry else None
+        kind, pi = cur_kind, cur_pi
 
         if confirming:
             if ch == ord("y"):
@@ -1673,6 +1900,21 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                     else:
                         notify_msg, notify_color, notify_at = \
                             msg, NOTIFY_ERROR, time.time()
+                elif confirming["kind"] == "mcp-user":
+                    del_entry = confirming["entry"]
+                    try:
+                        delete_user_mcp_server(del_entry["name"],
+                                               user_json_path=CLAUDE_JSON_PATH)
+                        servers = [s for s in servers
+                                  if s["key"] != confirming["key"]]
+                        referenced = set(settings.local_mcp) \
+                            | set(settings.project_mcp) | set(settings.user_mcp)
+                        servers = add_orphans(servers, referenced)
+                        notify_msg, notify_color, notify_at = \
+                            "deleted", NOTIFY_DELETED, time.time()
+                    except (OSError, ValueError) as e:
+                        notify_msg, notify_color, notify_at = \
+                            f"error: {e}", NOTIFY_ERROR, time.time()
             confirming = None
             continue
 
@@ -1697,14 +1939,19 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                     notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
                     follow = key
             elif entry["kind"] == "mcp":
-                settings.cycle_mcp(entry["name"])
-                st = settings.mcp_status(entry["name"])
-                if st["blocked_by"]:
+                status = mcp_row_status(entry, srv, settings)
+                if status["toggleable"]:
+                    settings.cycle_mcp(entry["name"])
+                    st = settings.mcp_status(entry["name"])
+                    if st["blocked_by"]:
+                        notify_msg, notify_color, notify_at = \
+                            f"saved · blocked by {st['blocked_by']}", NOTIFY_DELETED, time.time()
+                    else:
+                        notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
+                    follow = key
+                elif status["notice"]:
                     notify_msg, notify_color, notify_at = \
-                        f"saved · blocked by {st['blocked_by']}", NOTIFY_DELETED, time.time()
-                else:
-                    notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
-                follow = key
+                        status["notice"], NOTIFY_NEUTRAL, time.time()
             elif entry["kind"] == "skill" and entry["source"] != "plugin":
                 settings.cycle_skill_visible(entry["address"])
                 notify_msg, notify_color, notify_at = "saved", NOTIFY_SAVED, time.time()
@@ -1739,6 +1986,9 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
         elif ch == ord("D") and entry and entry["kind"] == "plugin" \
                 and key not in deleted:
             confirming = {"kind": "plugin", "key": key, "entry": entry}
+        elif ch == ord("D") and entry and entry["kind"] == "mcp" \
+                and entry.get("scope") == "user":
+            confirming = {"kind": "mcp-user", "key": key, "entry": entry}
 
 
 # Module-level sentinel for the --trust/--untrust default (current working directory's key)

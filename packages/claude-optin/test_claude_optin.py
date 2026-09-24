@@ -61,7 +61,8 @@ class McpDiscoveryTests(unittest.TestCase):
             repo = os.path.join(home, "workspace", "myrepo")
             os.makedirs(repo)
             servers = co.discover_mcp_servers(repo, home=home,
-                                              user_json_path="/nonexistent")
+                                              user_json_path="/nonexistent",
+                                              stop_at=home)
             by_name = {s["name"]: s for s in servers}
             self.assertEqual(set(by_name), {"Alpha", "Beta"})
             self.assertEqual(by_name["Alpha"]["transport"], "http")
@@ -69,7 +70,35 @@ class McpDiscoveryTests(unittest.TestCase):
             self.assertFalse(by_name["Alpha"]["orphan"])
             self.assertEqual(by_name["Alpha"]["kind"], "mcp")
 
-    def test_nearer_mcp_json_wins_on_collision(self):
+    def test_walk_crosses_home_and_git_root(self):
+        # root/.mcp.json, root/home/.mcp.json,
+        # root/home/ws/repo/.git/, root/home/ws/repo/sub/.mcp.json
+        with tempfile.TemporaryDirectory() as root:
+            root = os.path.realpath(root)
+            home = os.path.join(root, "home")
+            write_json(os.path.join(root, ".mcp.json"),
+                       {"mcpServers": {"Root": {"type": "http", "url": "r"}}})
+            write_json(os.path.join(home, ".mcp.json"),
+                       {"mcpServers": {"Home": {"type": "http", "url": "h"}}})
+            repo = os.path.join(home, "ws", "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            sub = os.path.join(repo, "sub")
+            write_json(os.path.join(sub, ".mcp.json"),
+                       {"mcpServers": {"Sub": {"type": "http", "url": "s"}}})
+            servers = co.discover_mcp_servers(sub, home=home,
+                                              user_json_path="/nonexistent",
+                                              stop_at=root)
+            labels = {s["group_label"] for s in servers}
+            self.assertEqual({s["name"] for s in servers}, {"Root", "Home", "Sub"})
+            self.assertEqual(len(labels), 3)
+            root_label = next(s["group_label"] for s in servers if s["name"] == "Root")
+            home_label = next(s["group_label"] for s in servers if s["name"] == "Home")
+            sub_label = next(s["group_label"] for s in servers if s["name"] == "Sub")
+            self.assertEqual(root_label, os.path.join(root, ".mcp.json"))
+            self.assertTrue(home_label.startswith("~/"))
+            self.assertTrue(sub_label.startswith("~/"))
+
+    def test_duplicate_name_listed_per_file(self):
         with tempfile.TemporaryDirectory() as home:
             write_json(os.path.join(home, ".mcp.json"),
                        {"mcpServers": {"Dup": {"type": "http", "url": "far"}}})
@@ -78,22 +107,83 @@ class McpDiscoveryTests(unittest.TestCase):
             write_json(os.path.join(repo, ".mcp.json"),
                        {"mcpServers": {"Dup": {"type": "http", "url": "near"}}})
             servers = co.discover_mcp_servers(repo, home=home,
-                                              user_json_path="/nonexistent")
-            dup = next(s for s in servers if s["name"] == "Dup")
-            self.assertEqual(dup["definition"]["url"], "near")
+                                              user_json_path="/nonexistent",
+                                              stop_at=home)
+            dups = [s for s in servers if s["name"] == "Dup"]
+            self.assertEqual(len(dups), 2)
+            self.assertEqual(len({d["key"] for d in dups}), 2)
+            self.assertEqual(len({d["source_path"] for d in dups}), 2)
+            near = next(d for d in dups if d["definition"]["url"] == "near")
+            far = next(d for d in dups if d["definition"]["url"] == "far")
+            far_label = "~/.mcp.json"
+            near_label = near["group_label"]
+            self.assertIsNone(near["shadowed_by"])
+            self.assertEqual(near["overrides"], [far_label])
+            self.assertEqual(far["shadowed_by"], near_label)
 
-    def test_merges_user_scope_from_claude_json(self):
+    def test_three_level_duplicate(self):
         with tempfile.TemporaryDirectory() as home:
+            top = os.path.join(home, "top")
+            a = os.path.join(top, "a")
+            leaf = os.path.join(a, "leaf")
+            os.makedirs(leaf)
+            write_json(os.path.join(top, ".mcp.json"),
+                       {"mcpServers": {"Dup": {"type": "http", "url": "top"}}})
+            write_json(os.path.join(a, ".mcp.json"),
+                       {"mcpServers": {"Dup": {"type": "http", "url": "a"}}})
+            write_json(os.path.join(leaf, ".mcp.json"),
+                       {"mcpServers": {"Dup": {"type": "http", "url": "leaf"}}})
+            servers = co.discover_mcp_servers(leaf, home=home,
+                                              user_json_path="/nonexistent",
+                                              stop_at=top)
+            by_url = {s["definition"]["url"]: s for s in servers}
+            leaf_e, a_e, top_e = by_url["leaf"], by_url["a"], by_url["top"]
+            self.assertIsNone(leaf_e["shadowed_by"])
+            self.assertEqual(leaf_e["overrides"],
+                             [a_e["group_label"], top_e["group_label"]])
+            self.assertEqual(a_e["shadowed_by"], leaf_e["group_label"])
+            self.assertEqual(top_e["shadowed_by"], leaf_e["group_label"])
+
+    def test_group_order_nearest_then_user_then_orphans(self):
+        with tempfile.TemporaryDirectory() as home:
+            near = os.path.join(home, "near")
+            os.makedirs(near)
+            write_json(os.path.join(near, ".mcp.json"),
+                       {"mcpServers": {"Near": {"type": "http", "url": "n"}}})
+            write_json(os.path.join(home, ".mcp.json"),
+                       {"mcpServers": {"Far": {"type": "http", "url": "f"}}})
             user_json = os.path.join(home, ".claude.json")
             write_json(user_json,
-                       {"mcpServers": {"UserScoped": {"type": "http",
-                                                      "url": "https://u"}}})
+                       {"mcpServers": {"User1": {"type": "http", "url": "u"}}})
+            servers = co.discover_mcp_servers(near, home=home,
+                                              user_json_path=user_json,
+                                              stop_at=home)
+            servers = co.add_orphans(servers, {"Near", "Far", "User1", "Ghost"})
+            scopes = [s["scope"] for s in servers]
+            names = [s["name"] for s in servers]
+            self.assertEqual(names, ["Near", "Far", "User1", "Ghost"])
+            self.assertEqual(scopes, ["project", "project", "user", "orphan"])
+            groups = [s["group"] for s in servers]
+            self.assertEqual(groups, sorted(groups))
+            self.assertEqual(len(set(groups)), 4)
+
+    def test_user_scope_kept_despite_project_name(self):
+        with tempfile.TemporaryDirectory() as home:
+            write_json(os.path.join(home, ".mcp.json"),
+                       {"mcpServers": {"Shared": {"type": "http", "url": "p"}}})
+            user_json = os.path.join(home, ".claude.json")
+            write_json(user_json,
+                       {"mcpServers": {"Shared": {"type": "http", "url": "u"}}})
             repo = os.path.join(home, "repo")
             os.makedirs(repo)
             servers = co.discover_mcp_servers(repo, home=home,
-                                              user_json_path=user_json)
-            us = next(s for s in servers if s["name"] == "UserScoped")
-            self.assertEqual(us["source"], "user")
+                                              user_json_path=user_json,
+                                              stop_at=home)
+            shared = [s for s in servers if s["name"] == "Shared"]
+            self.assertEqual(len(shared), 2)
+            self.assertEqual({s["scope"] for s in shared}, {"project", "user"})
+            user_entry = next(s for s in shared if s["scope"] == "user")
+            self.assertEqual(user_entry["group_label"], "~/.claude.json (user)")
 
     def test_orphans_appended_for_unknown_listed_names(self):
         with tempfile.TemporaryDirectory() as home:
@@ -102,12 +192,15 @@ class McpDiscoveryTests(unittest.TestCase):
             repo = os.path.join(home, "repo")
             os.makedirs(repo)
             servers = co.discover_mcp_servers(repo, home=home,
-                                              user_json_path="/nonexistent")
+                                              user_json_path="/nonexistent",
+                                              stop_at=home)
             servers = co.add_orphans(servers, {"Known", "GhostServer"})
             by_name = {s["name"]: s for s in servers}
             self.assertIn("GhostServer", by_name)
             self.assertTrue(by_name["GhostServer"]["orphan"])
             self.assertFalse(by_name["Known"]["orphan"])
+            keys = [s["key"] for s in servers]
+            self.assertEqual(len(keys), len(set(keys)))
 
 
 class McpSettingsTests(unittest.TestCase):
@@ -427,6 +520,217 @@ class McpSettingsTests(unittest.TestCase):
             st = s.mcp_status("S")
             self.assertEqual(st["state"], "pending")
             self.assertIsNone(st["blocked_by"])
+
+
+class McpRowStatusTests(unittest.TestCase):
+    def _settings(self, home, repo, global_mode=False):
+        co.CLAUDE_DIR = os.path.join(home, ".claude")
+        return co.Settings(repo, global_mode=global_mode)
+
+    def _project_entry(self, name, source_path="/repo/.mcp.json", group=0,
+                       group_label="/repo/.mcp.json", shadowed_by=None,
+                       overrides=()):
+        return co._mcp_entry(name, {"type": "http", "url": "x"}, source_path,
+                             source_path=source_path, group=group,
+                             group_label=group_label, scope="project",
+                             shadowed_by=shadowed_by, overrides=overrides)
+
+    def _user_entry(self, name, source_path="/home/.claude.json", group=1):
+        return co._mcp_entry(name, {"type": "http", "url": "u"}, source_path,
+                             source_path=source_path, group=group,
+                             group_label="~/.claude.json (user)", scope="user")
+
+    def test_live_row_toggleable_with_overrides_in_tag(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": ["S"]})
+            s = self._settings(home, repo)
+            live = self._project_entry("S", overrides=["/far/.mcp.json"])
+            status = co.mcp_row_status(live, [live], s)
+            self.assertEqual(status["role"], "live")
+            self.assertTrue(status["toggleable"])
+            self.assertIn("/far/.mcp.json", status["tag"])
+
+    def test_shadowed_row_not_toggleable_notice_names_nearer_label(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            s = self._settings(home, repo)
+            far = self._project_entry("S", source_path="/far/.mcp.json",
+                                      group=1, group_label="/far/.mcp.json",
+                                      shadowed_by="/near/.mcp.json")
+            before_local = os.path.join(repo, ".claude", "settings.local.json")
+            status = co.mcp_row_status(far, [far], s)
+            self.assertFalse(status["toggleable"])
+            self.assertIn("/near/.mcp.json", status["notice"])
+            self.assertFalse(os.path.exists(before_local))
+
+    def test_user_row_locked_toggleable_false_deletable_true(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            s = self._settings(home, repo)
+            user = self._user_entry("U")
+            status = co.mcp_row_status(user, [user], s)
+            self.assertEqual(status["role"], "locked")
+            self.assertEqual(status["mark"], "🔒")
+            self.assertEqual(status["lock_reason"], co.MCP_USER_LOCK_REASON)
+            self.assertFalse(status["toggleable"])
+            self.assertTrue(status["deletable"])
+
+    def test_user_row_shadowed_when_project_enabled(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": ["Shared"]})
+            s = self._settings(home, repo)
+            project = self._project_entry("Shared")
+            user = self._user_entry("Shared")
+            servers = [project, user]
+            user_status = co.mcp_row_status(user, servers, s)
+            self.assertEqual(user_status["role"], "locked-shadowed")
+            project_status = co.mcp_row_status(project, servers, s)
+            self.assertIn("~/.claude.json (user)", project_status["tag"])
+            self.assertEqual(project_status["tag"], "overrides ~/.claude.json (user)")
+
+    def test_user_row_not_shadowed_when_project_pending(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            s = self._settings(home, repo)
+            project = self._project_entry("Shared")
+            user = self._user_entry("Shared")
+            servers = [project, user]
+            user_status = co.mcp_row_status(user, servers, s)
+            self.assertEqual(user_status["role"], "locked")
+            project_status = co.mcp_row_status(project, servers, s)
+            self.assertNotIn("~/.claude.json (user)", project_status["tag"])
+
+    def test_status_recomputed_after_cycle_mcp_flips_user_role(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            os.makedirs(repo)
+            s = self._settings(home, repo)
+            project = self._project_entry("Shared")
+            user = self._user_entry("Shared")
+            servers = [project, user]
+            self.assertEqual(co.mcp_row_status(user, servers, s)["role"], "locked")
+            s.cycle_mcp("Shared")   # unset -> enabled at local layer
+            self.assertEqual(co.mcp_row_status(user, servers, s)["role"],
+                             "locked-shadowed")
+
+
+class DeleteUserMcpTests(unittest.TestCase):
+    def test_deletes_only_target_keeps_other_entries_and_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".claude.json")
+            write_json(path, {"numStartups": 3,
+                              "mcpServers": {"A": {"command": "x"},
+                                            "B": {"command": "y"}}})
+            ok = co.delete_user_mcp_server("A", user_json_path=path)
+            self.assertTrue(ok)
+            doc = load_doc(path)
+            self.assertEqual(doc["mcpServers"], {"B": {"command": "y"}})
+            self.assertEqual(doc["numStartups"], 3)
+
+    def test_preserves_file_mode(self):
+        if sys.platform == "win32":
+            self.skipTest("File mode test not applicable on Windows")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".claude.json")
+            write_json(path, {"mcpServers": {"A": {}}})
+            os.chmod(path, 0o640)
+            co.delete_user_mcp_server("A", user_json_path=path)
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            self.assertEqual(mode, 0o640)
+
+    def test_missing_name_returns_false_and_leaves_file_byte_identical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".claude.json")
+            write_json(path, {"mcpServers": {"A": {}}})
+            before = read_bytes(path)
+            ok = co.delete_user_mcp_server("Ghost", user_json_path=path)
+            self.assertFalse(ok)
+            self.assertEqual(read_bytes(path), before)
+
+    def test_malformed_json_raises_and_leaves_file_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".claude.json")
+            with open(path, "w") as f:
+                f.write("{invalid")
+            with self.assertRaises(json.JSONDecodeError):
+                co.delete_user_mcp_server("A", user_json_path=path)
+            with open(path) as f:
+                self.assertEqual(f.read(), "{invalid")
+
+    def test_non_dict_mcp_servers_raises_and_leaves_file_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".claude.json")
+            write_json(path, {"mcpServers": ["not", "a", "dict"]})
+            before = read_bytes(path)
+            with self.assertRaises(ValueError):
+                co.delete_user_mcp_server("A", user_json_path=path)
+            self.assertEqual(read_bytes(path), before)
+
+    def test_delete_then_rebuild_orphans_reappears_immediately(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            user_json = os.path.join(home, ".claude.json")
+            write_json(user_json, {"mcpServers": {"Ghost": {"command": "x"}}})
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": ["Ghost"]})
+            os.makedirs(repo, exist_ok=True)
+            servers = co.discover_mcp_servers(repo, home=home,
+                                              user_json_path=user_json,
+                                              stop_at=home)
+            ghost = next(s for s in servers if s["name"] == "Ghost")
+            self.assertTrue(co.delete_user_mcp_server("Ghost", user_json_path=user_json))
+            servers = [s for s in servers if s["key"] != ghost["key"]]
+            servers = co.add_orphans(servers, {"Ghost"})
+            rebuilt = next(s for s in servers if s["name"] == "Ghost")
+            self.assertTrue(rebuilt["orphan"])
+            self.assertEqual(rebuilt["scope"], "orphan")
+
+    def test_orphan_rebuild_after_delete_reuses_single_orphan_group(self):
+        # Start with an existing orphan ("AlreadyGhost"), then delete a
+        # second user server ("Ghost") whose name is still listed in
+        # settings, and re-run add_orphans as the D-delete handler does.
+        # The two orphans must land in the SAME group — no second
+        # "orphans" header.
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "repo")
+            user_json = os.path.join(home, ".claude.json")
+            write_json(user_json, {"mcpServers": {"Ghost": {"command": "x"}}})
+            write_json(os.path.join(repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": ["Ghost", "AlreadyGhost"]})
+            os.makedirs(repo, exist_ok=True)
+            servers = co.discover_mcp_servers(repo, home=home,
+                                              user_json_path=user_json,
+                                              stop_at=home)
+            # Pre-existing orphan, as if add_orphans already ran once.
+            servers = co.add_orphans(servers, {"Ghost", "AlreadyGhost"})
+            orphan_groups_before = {s["group"] for s in servers
+                                    if s.get("scope") == "orphan"}
+            self.assertEqual(len(orphan_groups_before), 1)
+
+            ghost = next(s for s in servers if s["name"] == "Ghost"
+                        and s["scope"] == "user")
+            self.assertTrue(co.delete_user_mcp_server("Ghost", user_json_path=user_json))
+            servers = [s for s in servers if s["key"] != ghost["key"]]
+            servers = co.add_orphans(servers, {"Ghost", "AlreadyGhost"})
+
+            orphans = [s for s in servers if s.get("scope") == "orphan"]
+            names = {s["name"] for s in orphans}
+            self.assertEqual(names, {"Ghost", "AlreadyGhost"})
+            self.assertEqual(len({s["group"] for s in orphans}), 1)
+            # No duplicate orphan for a name already orphaned.
+            self.assertEqual(len(orphans), 2)
+
+            rows = co.build_rows(servers, set())
+            group_headers = [r for r in rows if r[0] == "mcp-group"
+                             and r[2] == co.ORPHAN_GROUP_LABEL]
+            self.assertEqual(len(group_headers), 1)
 
 
 class SkillSettingsTests(unittest.TestCase):
@@ -856,8 +1160,11 @@ class RowBuildingTests(unittest.TestCase):
                 "marketplace": "m", "skills": [], "agents": [],
                 "other_items": [], "est_tokens": 0, "installed": True}
 
-    def _server(self, name):
-        return co._mcp_entry(name, {"type": "http", "url": "x"}, "ws/.mcp.json")
+    def _server(self, name, source_path="ws/.mcp.json", group=0,
+               group_label="ws/.mcp.json", scope="project", **kw):
+        return co._mcp_entry(name, {"type": "http", "url": "x"}, source_path,
+                             source_path=source_path, group=group,
+                             group_label=group_label, scope=scope, **kw)
 
     def test_rows_have_no_section_headers(self):
         # Tabs replace inline section headers; each tab's display holds one
@@ -869,8 +1176,44 @@ class RowBuildingTests(unittest.TestCase):
         s = self._server("S1")
         rows = co.build_rows([s], {s["key"]})
         kinds = [r[0] for r in rows]
-        self.assertEqual(kinds[0], "mcp")
+        self.assertEqual(kinds[0], "mcp-group")
+        self.assertEqual(kinds[1], "mcp")
         self.assertIn("mcp-detail", kinds)
+
+    def test_one_mcp_group_row_per_group_in_order(self):
+        s1 = self._server("A", source_path="near/.mcp.json", group=0,
+                          group_label="near/.mcp.json")
+        s2 = self._server("B", source_path="far/.mcp.json", group=1,
+                          group_label="far/.mcp.json")
+        s3 = self._server("C", source_path="far/.mcp.json", group=1,
+                          group_label="far/.mcp.json")
+        rows = co.build_rows([s1, s2, s3], set())
+        group_rows = [r for r in rows if r[0] == "mcp-group"]
+        self.assertEqual([r[2] for r in group_rows],
+                         ["near/.mcp.json", "far/.mcp.json"])
+
+    def test_expanding_one_duplicate_key_does_not_expand_the_other(self):
+        near = self._server("Dup", source_path="near/.mcp.json", group=0,
+                            group_label="near/.mcp.json", shadowed_by=None,
+                            overrides=["far/.mcp.json"])
+        far = self._server("Dup", source_path="far/.mcp.json", group=1,
+                           group_label="far/.mcp.json",
+                           shadowed_by="near/.mcp.json")
+        self.assertNotEqual(near["key"], far["key"])
+        rows = co.build_rows([near, far], {near["key"]})
+        kinds_for_near = [r[0] for r in rows if r[1] == 0]
+        kinds_for_far = [r[0] for r in rows if r[1] == 1]
+        self.assertIn("mcp-detail", kinds_for_near)
+        self.assertNotIn("mcp-detail", kinds_for_far)
+
+    def test_user_row_emits_lock_reason_when_expanded(self):
+        u = self._server("U", source_path="/home/.claude.json", group=1,
+                         group_label="~/.claude.json (user)", scope="user")
+        rows = co.build_rows([u], {u["key"]}, detail_wrap_width=200)
+        kinds = [r[0] for r in rows]
+        self.assertIn("mcp-lock-reason", kinds)
+        reason_text = next(r[2] for r in rows if r[0] == "mcp-lock-reason")
+        self.assertIn("always on", reason_text)
 
     def test_expanded_plugin_uses_namespaced_child_kinds(self):
         plugin = self._plugin("P1")
@@ -1726,6 +2069,11 @@ class TrustConfirmLabelTests(unittest.TestCase):
         entry = {"name": "p", "marketplace": "m"}
         self.assertEqual(co.confirm_prompt("plugin", entry), ("Delete", "p@m"))
 
+    def test_mcp_user_label(self):
+        entry = {"name": "S"}
+        self.assertEqual(co.confirm_prompt("mcp-user", entry),
+                         ("Delete", "S from ~/.claude.json"))
+
     def test_trusted_entry_label(self):
         entry = {"path": "/x", "trusted": True}
         self.assertEqual(co.confirm_prompt("trust", entry), ("Untrust", "/x"))
@@ -2008,7 +2356,9 @@ class CursorFollowTests(unittest.TestCase):
             s = co.Settings(repo)
             s.cycle_mcp("a")   # seed "a" approved, so it sorts first
 
-            servers = [co._mcp_entry(n, {}, "test") for n in ("a", "b", "c")]
+            servers = [co._mcp_entry(n, {}, "test", source_path="test",
+                                      group=0, group_label="test", scope="project")
+                       for n in ("a", "b", "c")]
             expanded = {"a"}
 
             srv = co.sort_mcp_servers(servers, s, "enabled")
@@ -2023,7 +2373,8 @@ class CursorFollowTests(unittest.TestCase):
             rows2 = co.build_rows(srv2, expanded)
             c_entry_idx2 = next(i for i, e in enumerate(srv2) if e["name"] == "c")
 
-            row_idx = co.find_entry_row(rows2, srv2, "c")
+            c_key = next(e["key"] for e in srv2 if e["name"] == "c")
+            row_idx = co.find_entry_row(rows2, srv2, c_key)
             self.assertIsNotNone(row_idx)
             self.assertEqual(srv2[rows2[row_idx][1]]["name"], "c")
             self.assertNotEqual(row_idx, c_entry_idx2)

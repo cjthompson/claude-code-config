@@ -9,7 +9,7 @@ Every enabled plugin injects its skills and agent definitions into Claude's cont
 It manages all four in four tabs, switched with `Tab`:
 
 - **Plugins** — discovered from the plugin cache.
-- **MCP servers** — discovered from every `.mcp.json` found walking the current directory up to your home directory, plus user-scope servers in `~/.claude.json`. A server you disable stays *defined* but isn't started, so it contributes no startup context. Names listed in your settings that have no matching definition are shown flagged as **orphans** so you can clean them up.
+- **MCP servers** — discovered from every `.mcp.json` found walking the current directory all the way up to the filesystem root (this does **not** stop at your home directory or a git root — it matches how Claude Code itself discovers `.mcp.json` files), plus user-scope servers in `~/.claude.json`. Servers are grouped by the file they come from, with a group header per file (nearest first), then a `~/.claude.json (user)` group, then orphans. A server you disable stays *defined* but isn't started, so it contributes no startup context. Names listed in your settings that have no matching definition are shown flagged as **orphans** so you can clean them up.
 - **Skills** — every discovered skill: personal (`~/.claude/skills/`), project (`.claude/skills/`, including directory-scoped subfolders), and active-plugin skills. Each shows its effective visibility state and resident token cost. Plugin-backed skills are always on and read-only here — manage those from the Plugins tab instead.
 - **Trust** — whether the current repo (or, with `--global`, every entry in `~/.claude.json`) has accepted Claude Code's trust dialog. See [Trust](#trust) below.
 
@@ -44,7 +44,7 @@ claude-optin --global     # manage your user-wide defaults
 | `a` | Expand/collapse all |
 | `g`/`G` | Jump to top/bottom |
 | `s` | Cycle sort: default / name / enabled / source / skills+agents / tokens |
-| `D` | Delete plugin (removes cache, prompts for confirmation) — Plugins tab only |
+| `D` | Delete plugin (removes cache, prompts for confirmation) — Plugins tab only. On the MCP tab, deletes a user-scope (`~/.claude.json`) server's definition, prompts for confirmation — only available on a user-scope row |
 | `O` | Set explicit **on** — Skills tab only |
 | `U` | Set explicit **user-invocable-only** — Skills tab only |
 | `C` | Clear the override at the current write scope — Skills tab only |
@@ -114,6 +114,10 @@ Layers are resolved in order: **local → project → user → default** (instal
 ### MCP servers
 
 MCP servers use three states — **approved**, **hidden**, and **pending approval** — stored as two name-lists in each settings file: `enabledMcpjsonServers` and `disabledMcpjsonServers`. Toggling moves a server's name between them (or removes it, for pending). A pending server shows `default` in the source column, the same label plugins and skills use when no settings file sets them. Unlike plugins, MCP resolution is **disable-wins, not nearest-layer-wins**: a disable in *any* layer hides the server, regardless of which layer is nearer, matching Claude Code's own resolution. An enable only takes effect if no layer disables it and the current repo is trusted; otherwise it stays pending. Pressing SPACE on a server that another layer disables shows `!` and a "blocked by \<layer\>" footer badge rather than silently doing nothing. In an untrusted repo, enabling a server keeps it pending (shown as `!` with "blocked: untrusted") until the repo is trusted. Project settings come from the git root, or the current directory if there's no git repo (a git root at `$HOME` is skipped, as Claude Code does) — plugin and skill overrides resolve from that same settings root.
+
+**Lists are name-keyed, not file-keyed.** Toggling the *active* (live) row for a name changes that name's `enabledMcpjsonServers`/`disabledMcpjsonServers` state, which affects every other `.mcp.json` copy of that name too, because Claude Code itself only ever looks the name up once. When the same name is defined in more than one `.mcp.json` up the directory chain, only the nearest copy actually runs; farther copies are shown **shadowed** (dimmed, marked "shadowed by \<nearer file\>") and can't be toggled directly — toggle the active row instead.
+
+A `~/.claude.json` user-scope server is a different case: it isn't governed by the enable/disable lists at all, so it's shown **locked** (🔒) and is always on regardless of any list. Pressing `space`/`enter` on it doesn't toggle anything — it only shows a notice explaining that. If a project copy with the same name exists and is effectively enabled, the project copy wins and the user-scope row is additionally shown **locked, shadowed**. To remove a user-scope server, press `D` on its row to delete its definition from `~/.claude.json` (a different action from toggling — this edits `~/.claude.json` directly, not a settings list). If its name is still listed in an enable/disable list, it reappears immediately as an **orphan** so you can clean that list up too.
 
 ### Skills
 
