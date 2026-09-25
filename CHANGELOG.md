@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.79 - 2026-09-25
+
+### Fixes
+- **lean-agents**: bump to `1.0.3` so `claude plugin update` fetches the `read-only` agent. It was added at `1.0.2` without a version bump, so cached installs kept the old four-agent copy. The marketplace and README descriptions now list `read-only`.
+
 ## v0.0.78 - 2026-09-24
 
 ### Fixes
