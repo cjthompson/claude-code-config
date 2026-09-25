@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.0.84 - 2026-09-25
+
+### Fixes
+- **command-watchdog** `1.5.3`: wait-loop tracking now honors `pgrep` filters and direct `while`/`until` condition direction, keeps real targets such as `tail -f` instead of discarding them by executable name, and counts CPU from newly observed workers. Failed queries no longer fake progress or target absence; unsupported options and shell-expanded arguments are skipped. Grace periods honor `sleep` units. Ordinary throttled work loops keep normal output based idle detection.
+
+## v0.0.83 - 2026-09-25
+
+### Fixes
+- **command-watchdog** `1.5.2`: fewer false wait-loop kills. The `target-gone` grace now outlasts one `sleep N` cycle, so a loop whose target exits mid-sleep finishes normally instead of returning `124`. `pgrep` invocations are parsed as shell words (`--`, `-u user`, `-x`, `-i` handled; unparseable ones skipped). Quoted paths with spaces are watched whole. A `bash -c` wrapper running real work counts as a `pgrep` target, and its children's CPU counts as activity; only shells that are themselves wait loops are ignored.
+
+## v0.0.82 - 2026-09-25
+
+### Fixes
+- **command-watchdog** `1.5.1`: wait-loop target parsing no longer misreads the command. Relative paths (`./run.log`) resolve through an earlier `cd` instead of the watchdog's own directory, and are dropped when the `cd` target can't be resolved. `pgrep` patterns and paths the shell would expand (`"$pat"`, backticks) are skipped instead of matched literally, which could have killed a healthy loop as `target-gone`. Files the loop writes itself (`>`, `>>`, `tee`) no longer count as progress. The `watchdog-patterns.txt` header now says patterns only set idle windows.
+
+## v0.0.81 - 2026-09-25
+
+### Changes
+- **command-watchdog** `1.5.0`: wrapped commands and everything they spawn run at the lowest CPU priority (`nice` 19) so long builds and test runs don't bog the machine down. `WATCHDOG_NICE` overrides it (`0` leaves priority unchanged). The watchdog process and the `rtk` rewrite decision keep normal priority.
+
+## v0.0.80 - 2026-09-25
+
+### Fixes
+- **command-watchdog** `1.4.0`: `until`/`while … sleep` wait loops are judged by what they wait on, not by their own `echo -n .` output or the CPU of their `pgrep`/`grep` checks. Five loops had run 6+ hours matching each other's shells via `pgrep -f`. A `! pgrep` loop whose only matches are inline shells or watchdogs is killed within ~3 samples (`target-gone`). A loop whose `pgrep` targets, watched files, and in-group work (including `bash foo.sh` scripts) all stop progressing is killed after the idle window (`poll-idle`). Loops with no parseable target get a 30-minute cap (`WATCHDOG_POLL_CAP`). Kill messages tell the agent to read the log instead of polling again. Adds `plugins/command-watchdog/tests/`.
+
 ## v0.0.79 - 2026-09-25
 
 ### Fixes

@@ -123,6 +123,9 @@ def resolve_via_rtk(raw, cmd):
         env = dict(os.environ)
         env["WATCHDOG_MAX_RUNTIME"] = str(RTK_MAX_RUNTIME)
         env["WATCHDOG_IDLE"] = str(RTK_MAX_RUNTIME)
+        # The rewrite decision blocks every Bash call; at lowest priority on a
+        # loaded machine it could starve past RTK_MAX_RUNTIME.
+        env["WATCHDOG_NICE"] = "0"
         result = subprocess.run(
             ["/usr/bin/python3", WATCHDOG, rtk_cmd],
             capture_output=True, text=True, env=env,

@@ -25,7 +25,7 @@ The Python and TypeScript development plugins also include Codex manifests and a
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
 | **rust-coding** | Idiomatic Rust guidance: data modeling, traits, macros, build-speed best practices |
 | **textual** | Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes |
-| **command-watchdog** | Idle-hang detection for Bash commands (rspec, any `.sh` script) — kills silently-stuck runs after a configurable timeout |
+| **command-watchdog** | Idle-hang detection for every Bash command — kills silently-stuck runs after a configurable timeout, and wait loops whose targets stop progressing |
 | **python-scripting** | One-off Python helpers, practical typing, standalone-file quality checks, and standard-library macOS automation |
 | **python-development** | Deep Python standards, testing, repository tooling and quality checks, concurrency, the full typing specification, and focused type tightening |
 | **typescript-development** | Deep TypeScript standards, testing, project tooling, modules and packaging, focused official references, and low-churn type tightening |
@@ -128,9 +128,15 @@ Custom Claude Code hooks, located in `plugins/<name>/hooks/`. Like skills, each 
 
 ### command-watchdog
 
-A `PreToolUse` hook on the `Bash` tool. Any command matching a regex in `hooks/watchdog-patterns.txt` (ships with `rspec` and any `.sh` script by default) runs under an idle-hang watchdog instead of directly: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so.
+A `PreToolUse` hook on the `Bash` tool. Every command runs under an idle-hang watchdog: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s; `hooks/watchdog-patterns.txt` sets per-command overrides, e.g. `rspec` and `.sh` scripts). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so. Wrapped commands and everything they spawn run at the lowest CPU priority (`nice` 19) so long builds and test runs don't bog the machine down; set `WATCHDOG_NICE` to change it (`0` leaves priority unchanged). It also kills the command immediately if the watchdog's parent process exits. If `rtk` is installed, its token-saving rewrite is applied first.
 
-Commands that don't match any pattern are delegated to `rtk hook claude` if `rtk` is installed, otherwise passed through unmodified.
+**Wait loops.** A sleeping `until` or `while` loop with a simple `pgrep`, `grep -q`, or file-test condition is judged by what it waits on, not by its own `echo -n .` output or the CPU of its checks. Ordinary work loops such as `while read …; do curl …; sleep 1; done` retain normal output based idle detection:
+
+- **`pgrep [OPTIONS] PATTERN`** — PIDs selected by `pgrep` itself, so filters such as `-u` and `-P` apply. Other watchdogs, wait-loop shells, and their checker processes are ignored; an unrelated `tail`, `find`, or `rg` can still be a target. A `bash -c` wrapper running real work counts, including its children's CPU. CPU already accrued by a newly observed worker also counts. In a direct wait-for-exit condition (`until ! pgrep` or `while pgrep`, including `/usr/bin/pgrep`), no real match for longer than one `sleep` cycle triggers `target-gone`. A failing `pgrep` query does not count as activity. Shell-expanded arguments and unsupported options are skipped; `-q` is supported.
+- **File paths** (`/…`, `~/…`, `./…`, relative ones resolved through an earlier `cd`) — growth or mtime changes count, as does CPU of processes holding the file open. Files the loop writes itself (`>`, `>>`, `tee`) and anything the shell would expand (`$var`, backticks) are ignored.
+- **Work inside the loop** — a long-lived non-shell, non-helper process (e.g. `bin/rspec` run by the loop body). Loop output counts only while one exists.
+
+If none move for the idle window the loop is killed (`poll-idle`). A loop with no parseable target keeps the normal rules plus a 30-minute cap (`WATCHDOG_POLL_CAP`). Tests: `/usr/bin/python3 -m unittest discover -s plugins/command-watchdog/tests -v`.
 
 To add a pattern, edit `plugins/command-watchdog/hooks/watchdog-patterns.txt` — one `<regex>  [idle_seconds]` per line. See the file's header comment for the exact matching rules.
 

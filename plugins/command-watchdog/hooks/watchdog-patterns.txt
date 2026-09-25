@@ -1,8 +1,8 @@
 # command-watchdog patterns.
 #
-# A Bash command matching ANY regex below is run under command-watchdog.py
-# (live output + idle-hang detection). Everything else is delegated to rtk
-# (if installed) or left untouched.
+# Every Bash command runs under command-watchdog.py (live output + idle-hang
+# detection). These patterns only set a per-command idle window: the FIRST
+# matching regex wins; a command matching none gets the default (90s).
 #
 # Format per line:  <regex>  [idle_seconds]
 #   - idle_seconds is optional (default 90). It must be the LAST token and be
