@@ -19,7 +19,7 @@ The Python and TypeScript development plugins also include Codex manifests and a
 | Plugin | Description |
 |--------|-------------|
 | **project-tasks** | Capture tasks with `task:`/`fix:`/`todo:` prefixes, group them under `plan:` epics, dispatch to subagents, auto-generate changelogs |
-| **lean-agents** | Reduced-toolset sub-agent profiles (`lean-executor`, `standard-executor`, `main`, `full-executor`) that lower System-tools token overhead vs. spawning the default agent; pairs with `project-tasks`, which dispatches by name |
+| **lean-agents** | Reduced-toolset sub-agent profiles (`read-only`, `lean-executor`, `standard-executor`, `main`, `full-executor`) that lower System-tools token overhead vs. spawning the default agent; pairs with `project-tasks`, which dispatches by name |
 | **output-styles** | Custom output styles (`output-styles:Concise`, `output-styles:Terse`) selectable via `/output-style` |
 | **orchestration-strategy** | Select cost-efficient orchestration: solo, parallel, sequential, or Agent Teams |
 | **agent-team-development** | End-to-end Agent Teams orchestration with worktree isolation and cherry-pick integration |
