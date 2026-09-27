@@ -1101,6 +1101,25 @@ LEGEND_ITEMS = [
 ]
 
 
+def _tilde(path, home):
+    if path == home or path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
+def header_title(repo_root, write_path, *, global_mode, trust_tab, home=None,
+                 claude_json=None):
+    """Title line: the scope, then the file toggles on this tab will write."""
+    home = home or os.path.expanduser("~")
+    scope = "GLOBAL defaults" if global_mode else _tilde(repo_root, home)
+    target = (claude_json or CLAUDE_JSON_PATH) if trust_tab else write_path
+    if not trust_tab and not global_mode and target.startswith(repo_root + os.sep):
+        target = os.path.relpath(target, repo_root)
+    else:
+        target = _tilde(target, home)
+    return f" claude-optins — {scope} → {target}"
+
+
 def wrap_legend(items, width):
     """Pack legend items into lines no wider than `width`, without
     splitting an item's segments across two lines."""
@@ -1267,9 +1286,10 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                           if settings.effective(p["key"], p["installed"])[0])
         on_count, off_count = settings.counts(plugins)
         skill_summary = skill_tab_summary(skill_entries)
-        scope = "GLOBAL defaults" if settings.global_mode else settings.repo_root
+        title = header_title(settings.repo_root, settings.write_path,
+                             global_mode=settings.global_mode, trust_tab=tab == 3)
         stdscr.clear()
-        stdscr.addnstr(0, 0, f" claude-optins — {scope}", w - 1, curses.A_BOLD)
+        stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
         info_segs = [
             (" ", True), (str(len(plugins)), False), (" plugins (", True),
             (str(on_count), False), (" on/", True), (str(off_count), False),
@@ -1281,8 +1301,6 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
             ("enabled plugin cost ≈", True),
             (f"{enabled_tok} tok", False),
             (" · sort: ", True), (sort_mode, False),
-            (" · writes ", True),
-            (settings.write_path.replace(os.path.expanduser("~"), "~"), False),
         ]
         if tab == 3:
             trust_summary = trust_tab_summary(trust_entries)
@@ -1290,10 +1308,7 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                 (" ", True), (str(trust_summary["total"]), False), (" trust (", True),
                 (str(trust_summary["trusted"]), False), (" trusted/", True),
                 (str(trust_summary["untrusted"]), False), (" untrusted)  ", True),
-            ] + info_segs[1:-2] + [
-                (" · writes ", True),
-                (CLAUDE_JSON_PATH.replace(os.path.expanduser("~"), "~"), False),
-            ]
+            ] + info_segs[1:]
         x = 0
         for seg, is_label in info_segs:
             if x >= w - 1:

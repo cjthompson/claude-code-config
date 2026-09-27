@@ -850,6 +850,43 @@ class RowBuildingTests(unittest.TestCase):
         self.assertEqual([r[0] for r in rows], ["skill", "empty"])
 
 
+class HeaderTitleTests(unittest.TestCase):
+    HOME = "/Users/me"
+
+    def test_local_mode_shows_repo_and_relative_write_file(self):
+        self.assertEqual(
+            co.header_title("/Users/me/work/repo",
+                            "/Users/me/work/repo/.claude/settings.local.json",
+                            global_mode=False, trust_tab=False, home=self.HOME),
+            " claude-optins — ~/work/repo → .claude/settings.local.json")
+
+    def test_global_mode_shows_user_settings_file(self):
+        self.assertEqual(
+            co.header_title("/Users/me/work/repo", "/Users/me/.claude/settings.json",
+                            global_mode=True, trust_tab=False, home=self.HOME),
+            " claude-optins — GLOBAL defaults → ~/.claude/settings.json")
+
+    def test_trust_tab_shows_claude_json(self):
+        self.assertEqual(
+            co.header_title("/Users/me/work/repo",
+                            "/Users/me/work/repo/.claude/settings.local.json",
+                            global_mode=False, trust_tab=True, home=self.HOME,
+                            claude_json="/Users/me/.claude.json"),
+            " claude-optins — ~/work/repo → ~/.claude.json")
+
+    def test_write_file_outside_repo_stays_absolute(self):
+        self.assertEqual(
+            co.header_title("/Users/me/work/repo", "/Users/me/.claude/settings.local.json",
+                            global_mode=False, trust_tab=False, home=self.HOME),
+            " claude-optins — ~/work/repo → ~/.claude/settings.local.json")
+
+    def test_home_prefix_needs_a_path_boundary(self):
+        self.assertEqual(
+            co.header_title("/Users/meg/repo", "/Users/meg/repo/.claude/settings.local.json",
+                            global_mode=False, trust_tab=False, home=self.HOME),
+            " claude-optins — /Users/meg/repo → .claude/settings.local.json")
+
+
 class LegendWrapTests(unittest.TestCase):
     def test_wide_width_fits_on_one_line(self):
         lines = co.wrap_legend(co.LEGEND_ITEMS, 500)

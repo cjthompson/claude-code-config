@@ -50,11 +50,13 @@ claude-optin --global     # manage your user-wide defaults
 | `C` | Clear the override at the current write scope — Skills tab only |
 | `q` | Quit (changes are saved on every toggle) |
 
+The title line shows the scope and the file your toggles will write — e.g. `~/work/repo → .claude/settings.local.json`, or `GLOBAL defaults → ~/.claude/settings.json` with `-g` — so a wrong settings root is visible before you change anything.
+
 The header shows the total estimated token cost of all currently-enabled plugins so you can see the impact of your changes. (MCP servers load their tool schemas at connect time, so their cost can't be estimated statically and is shown as `?`.)
 
 The header also shows an `N on/M off` count, resolved the same way `claude-optin` resolves everything else: **only the layer(s) currently in view**. A plugin key merely *existing* in `enabledPlugins` doesn't mean it's enabled — check the boolean, not just presence. And `--global`/`-g` intentionally shows *only* the user layer (that's what "GLOBAL defaults" in the header means): a plugin off there can still be `true` in a specific repo's `.claude/settings.local.json` or `.claude/settings.json`, and will show as on/actively used in that repo. Run plain `claude-optin` (no `-g`) from inside a repo to see its actual effective state — the merge of local → project → user.
 
-On the Trust tab, the header adds an `N trust (X trusted/Y untrusted)` count at the start of the line, keeps the other counts, and shows the writes path as `~/.claude.json` regardless of `--global`.
+On the Trust tab, the header adds an `N trust (X trusted/Y untrusted)` count at the start of the line, keeps the other counts, and the title shows `~/.claude.json` as the write target regardless of `--global`.
 
 ## Trust
 
