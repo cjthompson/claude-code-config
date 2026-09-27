@@ -1948,6 +1948,34 @@ class SettingsRootTests(unittest.TestCase):
             self.assertEqual(co.settings_root(sub), os.path.realpath(wt))
             self.assertEqual(co.resolve_trust_key(sub), main)
 
+    def test_stray_git_dir_above_start_is_a_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            top = os.path.join(os.path.realpath(tmpdir), "top")
+            os.makedirs(os.path.join(top, ".git", "info"))
+            child = os.path.join(top, "child")
+            os.makedirs(child)
+            self.assertEqual(co.settings_root(child), top)
+
+    def _home_git_case(self, real_repo):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = os.path.realpath(tmpdir)
+            git_dir = os.path.join(home, ".git")
+            os.makedirs(os.path.join(git_dir, "info"))
+            if real_repo:
+                with open(os.path.join(git_dir, "HEAD"), "w") as f:
+                    f.write("ref: refs/heads/main\n")
+            child = os.path.join(home, "workspace", "proj")
+            os.makedirs(os.path.join(child, ".claude"))
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                self.assertEqual(co.settings_root(child), child)
+                self.assertEqual(co.resolve_trust_key(child), home)
+
+    def test_stray_git_dir_at_home_is_not_a_settings_root(self):
+        self._home_git_case(real_repo=False)
+
+    def test_real_repo_at_home_is_not_a_settings_root(self):
+        self._home_git_case(real_repo=True)
+
 
 class MainWiringTests(unittest.TestCase):
     def setUp(self):

@@ -508,9 +508,14 @@ def _git_root(start):
 def settings_root(start_dir=None):
     """The settings-resolution root: the nearest git root, else start_dir
     itself (Claude Code reads project settings from the git root, or from
-    cwd only — never from a parent .claude/ directory without a .git)."""
+    cwd only — never from a parent .claude/ directory without a .git).
+    A git root at $HOME doesn't count: Claude Code skips it for settings
+    (trust still keys off it — see resolve_trust_key)."""
     start = os.path.realpath(start_dir or os.getcwd())
-    return _git_root(start) or start
+    root = _git_root(start)
+    if root == os.path.realpath(os.path.expanduser("~")):
+        root = None
+    return root or start
 
 
 def _read_regular_file(path):
