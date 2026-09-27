@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.85 - 2026-09-27
+
+### Fixes
+- **claude-optin**: a `.git` at `$HOME`, even a stray one holding only `info/`, no longer becomes the settings root. Toggles made outside a git repo were being saved to `~/.claude/settings.local.json` instead of the project's `.claude/settings.local.json`, so a project-level disable never cleared. This matches Claude Code, which skips a `$HOME` git root for settings but still uses it as the trust key.
+
 ## v0.0.84 - 2026-09-25
 
 ### Fixes
