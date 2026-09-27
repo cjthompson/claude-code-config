@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.88 - 2026-09-27
+
+### Fixes
+- **claude-optin**: the Plugins tab no longer lists Claude Code's staging clones from in-progress or abandoned plugin fetches (cache folders named like `temp_github_<digits>_<suffix>`, shown as rows such as `.claude@temp_github_…`), or any cache folder starting with `.`. Plugins left in the cache but no longer installed are still listed so `D` can delete them. Abandoned temp folders stay on disk and are no longer removable from the TUI.
+
 ## v0.0.87 - 2026-09-27
 
 ### Changes
