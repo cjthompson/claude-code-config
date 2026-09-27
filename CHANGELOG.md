@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.87 - 2026-09-27
+
+### Changes
+- **claude-optin**: MCP servers that no settings file enables or disables now show `default` in the source column instead of `pending`, matching the Plugins and Skills tabs. The dim `·` mark and the behavior are unchanged.
+
 ## v0.0.86 - 2026-09-27
 
 ### Changes
