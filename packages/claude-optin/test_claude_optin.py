@@ -752,6 +752,85 @@ class SkillEntryTests(unittest.TestCase):
                               if e["address"] == "on-one"))
 
 
+class PluginDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = self.tmp.name
+
+        # Patch CACHE_DIR and INSTALLED_PLUGINS_PATH
+        self.cache_dir_patcher = mock.patch.object(
+            co, "CACHE_DIR", os.path.join(root, "cache"))
+        self.installed_plugins_patcher = mock.patch.object(
+            co, "INSTALLED_PLUGINS_PATH", os.path.join(root, "installed_plugins.json"))
+
+        self.cache_dir_patcher.start()
+        self.addCleanup(self.cache_dir_patcher.stop)
+        self.installed_plugins_patcher.start()
+        self.addCleanup(self.installed_plugins_patcher.stop)
+
+        # Create cache directory
+        os.makedirs(os.path.join(root, "cache"))
+
+        # Create fixtures
+        # Real marketplace with a real plugin
+        write_file(os.path.join(root, "cache", "m", "real", "1.0.0", "skills", "run", "SKILL.md"),
+                   "---\ndescription: Real\n---\n")
+
+        # Orphan marketplace with a plugin not in registry
+        write_file(os.path.join(root, "cache", "m", "orphan", "1.0.0", "skills", "run", "SKILL.md"),
+                   "---\ndescription: Orphan\n---\n")
+
+        # Temp directory (should be filtered out)
+        write_file(os.path.join(root, "cache", "temp_github_1790367689036_wkdpdn", ".claude", "settings.json"),
+                   "{}")
+        write_file(os.path.join(root, "cache", "temp_github_1790367689036_wkdpdn", "plugins", "x", "1.0.0", "skills", "s", "SKILL.md"),
+                   "---\ndescription: Temp\n---\n")
+
+        # Marketplace named temp_notes (should NOT be filtered - proves regex is narrow)
+        write_file(os.path.join(root, "cache", "m", ".git", "HEAD"),
+                   "ref: refs/heads/main\n")
+        write_file(os.path.join(root, "cache", "temp_notes", "keep", "1.0.0", "skills", "k", "SKILL.md"),
+                   "---\ndescription: Keep\n---\n")
+
+        # Registry file with only real@m marked as installed
+        write_json(os.path.join(root, "installed_plugins.json"),
+                   {"plugins": {"real@m": {}}})
+
+    def test_discover_plugins_excludes_temp_directories(self):
+        """Verify that temp_* directories are filtered out."""
+        plugins = co.discover_plugins()
+        keys = {p["key"] for p in plugins}
+        self.assertEqual(keys, {"real@m", "orphan@m", "keep@temp_notes"})
+
+    def test_discover_plugins_includes_real_and_orphan(self):
+        """Verify that real and orphan plugins are discovered."""
+        plugins = co.discover_plugins()
+        keys = {p["key"] for p in plugins}
+        self.assertIn("real@m", keys)
+        self.assertIn("orphan@m", keys)
+
+    def test_discover_plugins_includes_temp_notes_marketplace(self):
+        """Verify that temp_notes marketplace (not matching temp_* pattern) is included."""
+        plugins = co.discover_plugins()
+        keys = {p["key"] for p in plugins}
+        self.assertIn("keep@temp_notes", keys)
+
+    def test_plugin_installed_flags(self):
+        """Verify installed flag is set correctly."""
+        plugins = co.discover_plugins()
+        by_key = {p["key"]: p for p in plugins}
+        self.assertTrue(by_key["real@m"]["installed"])
+        self.assertFalse(by_key["orphan@m"]["installed"])
+
+    def test_discover_plugins_no_dot_prefixed_entries(self):
+        """Verify that no plugin key starts with a dot."""
+        plugins = co.discover_plugins()
+        for p in plugins:
+            self.assertFalse(p["key"].startswith("."),
+                            f"Plugin key should not start with dot: {p['key']}")
+
+
 class PluginCountTests(unittest.TestCase):
     def _plugin(self, name):
         return {"key": f"{name}@m", "name": name, "installed": True}

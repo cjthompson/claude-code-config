@@ -55,6 +55,8 @@ import time
 CLAUDE_DIR = os.path.expanduser("~/.claude")
 CACHE_DIR = os.path.join(CLAUDE_DIR, "plugins", "cache")
 INSTALLED_PLUGINS_PATH = os.path.join(CLAUDE_DIR, "plugins", "installed_plugins.json")
+# Claude Code's staging clones for in-progress plugin fetches.
+_TEMP_CACHE_DIR_RE = re.compile(r"^temp_[A-Za-z0-9]+_\d+_[A-Za-z0-9]+$")
 # User-scope MCP definitions and the running config live here. This is a
 # file (~/.claude.json), not under the ~/.claude/ directory.
 CLAUDE_JSON_PATH = os.path.expanduser("~/.claude.json")
@@ -244,10 +246,14 @@ def discover_plugins():
     if not os.path.isdir(CACHE_DIR):
         return plugins
     for marketplace in sorted(os.listdir(CACHE_DIR)):
+        if marketplace.startswith(".") or _TEMP_CACHE_DIR_RE.match(marketplace):
+            continue
         mdir = os.path.join(CACHE_DIR, marketplace)
         if not os.path.isdir(mdir):
             continue
         for plugin in sorted(os.listdir(mdir)):
+            if plugin.startswith("."):
+                continue
             pdir = os.path.join(mdir, plugin)
             if not os.path.isdir(pdir):
                 continue
