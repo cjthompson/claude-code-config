@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.86 - 2026-09-27
+
+### Changes
+- **claude-optin**: the title line now shows the file your toggles will write, as `<scope> → <file>` (for example `~/work/repo → .claude/settings.local.json`, `GLOBAL defaults → ~/.claude/settings.json`, or `~/.claude.json` on the Trust tab). Before, the path sat at the end of the info line and was cut off at normal terminal widths.
+
 ## v0.0.85 - 2026-09-27
 
 ### Fixes
