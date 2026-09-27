@@ -20,7 +20,7 @@ startup context, in four tabs switched with TAB:
 Keys:
   tab           switch Plugins / MCP Servers / Skills / Trust tab
   j/k, arrows   move          space/enter  cycle (Plugins: unset -> on -> off;
-                                            MCP: approved -> hidden -> pending;
+                                            MCP: approved -> hidden -> default;
                                             Skills: on -> name-only -> off;
                                             Trust: confirm, then trust or
                                             untrust (clears the flag))
@@ -31,7 +31,7 @@ Keys:
   O/U/C         Skills tab only: explicit on / user-invocable-only / clear override
   q             quit (changes are saved on every toggle)
 
-  MCP legend: ✓ approved, ✗ hidden, · pending approval, ! blocked, ? orphan.
+  MCP legend: ✓ approved, ✗ hidden, · default (pending approval), ! blocked, ? orphan.
 
 Toggles are written to <repo>/.claude/settings.local.json (gitignored,
 personal), where <repo> is the git root, or the cwd outside a git repo.
@@ -1409,8 +1409,6 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                 if st["blocked_by"]:
                     tag_src, src_tag = editable, {
                         "local": "local   ", "user": "user    "}[editable]
-                elif st["state"] == "pending" and st["source"] == "default":
-                    tag_src, src_tag = st["source"], "pending "
                 else:
                     tag_src = st["source"]
                     src_tag = {"local": "local   ", "project": "project ",
