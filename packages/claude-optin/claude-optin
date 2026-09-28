@@ -442,14 +442,20 @@ def _managed_dir():
     return "/etc/claude-code"
 
 
-def _managed_settings_servers(managed_dir):
-    """(path, servers) pairs for managedMcpServers in managed-settings.json
-    and each managed-settings.d/*.json drop-in (sorted, later wins)."""
+def _managed_settings_paths(managed_dir):
+    """managed-settings.json, then managed-settings.d/*.json sorted (later wins)."""
     paths = [os.path.join(managed_dir, "managed-settings.json")]
     drop_in = os.path.join(managed_dir, "managed-settings.d")
     if os.path.isdir(drop_in):
         paths += [os.path.join(drop_in, n) for n in sorted(os.listdir(drop_in))
                   if n.endswith(".json") and not n.startswith(".")]
+    return paths
+
+
+def _managed_settings_servers(managed_dir):
+    """(path, servers) pairs for managedMcpServers in managed-settings.json
+    and each managed-settings.d/*.json drop-in (sorted, later wins)."""
+    paths = _managed_settings_paths(managed_dir)
     out = []
     for path in paths:
         doc = load_mcp_doc(path, servers_key="managedMcpServers")
@@ -460,12 +466,19 @@ def _managed_settings_servers(managed_dir):
     return out
 
 
+_NO_INSTALL_RECORD = object()
+
+
 def _plugin_install_path(registry_entry, repo_root):
     """installPath for a plugin from installed_plugins.json: v2 lists one
     record per scope (prefer one whose projectPath is this repo, then
-    user/managed); v1 is a single record."""
+    user/managed); v1 is a single record. Returns None when records exist
+    but none applies here (e.g. installed only for another project), and
+    _NO_INSTALL_RECORD when no record has an installPath at all."""
     records = registry_entry if isinstance(registry_entry, list) else [registry_entry]
     records = [r for r in records if isinstance(r, dict) and r.get("installPath")]
+    if not records:
+        return _NO_INSTALL_RECORD
     repo_root = os.path.realpath(repo_root) if repo_root else None
     for r in records:
         pp = r.get("projectPath")
@@ -477,8 +490,20 @@ def _plugin_install_path(registry_entry, repo_root):
     return None
 
 
+def managed_enabled_plugins(managed_dir):
+    """enabledPlugins from managed-settings.json and its .d/ drop-ins
+    (sorted, later wins). Policy outranks every other settings layer."""
+    paths = _managed_settings_paths(managed_dir)
+    out = {}
+    for path in paths:
+        plugins = load_json(path).get("enabledPlugins")
+        if isinstance(plugins, dict):
+            out.update(plugins)
+    return out
+
+
 def discover_plugin_mcp_servers(settings, *, cache_dir=None, registry_path=None,
-                                repo_root=None):
+                                repo_root=None, managed_plugins=None):
     """(plugin_key, source_path, servers) for every enabled, installed
     plugin that declares MCP servers — in <plugin>/.mcp.json or in
     .claude-plugin/plugin.json "mcpServers" (an object, a path to a JSON
@@ -490,11 +515,14 @@ def discover_plugin_mcp_servers(settings, *, cache_dir=None, registry_path=None,
     if not isinstance(registry, dict):
         return []
     out = []
+    managed_plugins = managed_plugins or {}
     for key in sorted(registry, key=str.lower):
-        if not settings.effective(key, installed=True)[0]:
+        enabled = bool(managed_plugins[key]) if key in managed_plugins \
+            else settings.effective(key, installed=True)[0]
+        if not enabled:
             continue
         root = _plugin_install_path(registry[key], repo_root)
-        if not root or not os.path.isdir(root):
+        if root is _NO_INSTALL_RECORD:   # legacy registry: use the cache
             plugin, _, marketplace = key.partition("@")
             pdir = os.path.join(cache_dir, marketplace, plugin)
             ver = latest_version(pdir) if os.path.isdir(pdir) else None
@@ -2409,7 +2437,8 @@ def main():
         servers = discover_mcp_servers(
             os.getcwd(), project_key=trust_key, managed_dir=_managed_dir(),
             plugin_servers=discover_plugin_mcp_servers(
-                settings, repo_root=settings.repo_root))
+                settings, repo_root=settings.repo_root,
+                managed_plugins=managed_enabled_plugins(_managed_dir())))
     except McpConfigError as e:
         sys.exit(f"claude-optin: invalid MCP config: {e}")
     referenced = set(settings.local_mcp) | set(settings.project_mcp) \

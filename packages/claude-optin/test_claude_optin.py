@@ -2775,6 +2775,38 @@ class PluginMcpDiscoveryTests(unittest.TestCase):
         self.assertEqual(status["role"], "locked")
         self.assertIn("Plugins tab", status["lock_reason"])
 
+    def test_managed_policy_enables_plugin_over_local_off(self):
+        self._plugin("h@m", mcp={"mcpServers": {"s": {"command": "x"}}})
+        write_json(os.path.join(self.repo, ".claude", "settings.local.json"),
+                   {"enabledPlugins": {"h@m": False}})
+        settings = co.Settings(self.repo)
+        found = co.discover_plugin_mcp_servers(
+            settings, cache_dir=self.cache, registry_path=self.registry,
+            repo_root=self.repo, managed_plugins={"h@m": True})
+        self.assertEqual([k for k, _, _ in found], ["h@m"])
+
+    def test_managed_enabled_plugins_merges_drop_ins(self):
+        managed = os.path.join(self.root, "managed")
+        write_json(os.path.join(managed, "managed-settings.json"),
+                   {"enabledPlugins": {"a@m": True, "b@m": True}})
+        write_json(os.path.join(managed, "managed-settings.d", "10.json"),
+                   {"enabledPlugins": {"b@m": False}})
+        self.assertEqual(co.managed_enabled_plugins(managed),
+                         {"a@m": True, "b@m": False})
+
+    def test_plugin_installed_only_for_other_project_is_skipped(self):
+        root = self._plugin("i@m", mcp={"mcpServers": {"s": {"command": "x"}}})
+        self.plugins["i@m"] = [{"scope": "project", "projectPath": "/other",
+                                "installPath": root}]
+        write_json(self.registry, {"version": 2, "plugins": self.plugins})
+        self.assertEqual(self._discover(), [])
+
+    def test_legacy_registry_without_install_path_uses_cache(self):
+        self._plugin("j@m", mcp={"mcpServers": {"s": {"command": "x"}}})
+        self.plugins["j@m"] = {"version": "1.0.0"}
+        write_json(self.registry, {"plugins": self.plugins})
+        self.assertEqual([k for k, _, _ in self._discover()], ["j@m"])
+
     def test_invalid_plugin_mcp_json_raises(self):
         root = self._plugin("g@m")
         write_file(os.path.join(root, ".mcp.json"), "{bad")
