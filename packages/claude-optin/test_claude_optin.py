@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -2490,6 +2491,150 @@ class MainWiringTests(unittest.TestCase):
             self.assertEqual(captured["settings"].repo_root, os.path.realpath(repo))
             self.assertEqual(captured["discover_skills_args"][1], sub)
             self.assertTrue(captured["settings"].trusted)
+
+
+class McpRootBoundaryTests(unittest.TestCase):
+    def test_real_walk_never_probes_filesystem_root(self):
+        probed = []
+        real_isfile = os.path.isfile
+
+        def spy(path):
+            probed.append(path)
+            return real_isfile(path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            start = os.path.join(os.path.realpath(tmp), "a", "b")
+            os.makedirs(start)
+            with mock.patch.object(co.os.path, "isfile", side_effect=spy):
+                co.discover_mcp_servers(start, home=tmp,
+                                        user_json_path="/nonexistent")
+        mcp_probes = [p for p in probed if p.endswith(".mcp.json")]
+        self.assertNotIn(os.path.join(os.sep, ".mcp.json"), mcp_probes)
+        # It did walk past the temp dir toward the root, one level short of it.
+        top = os.sep + os.path.realpath(tmp).split(os.sep)[1]
+        self.assertIn(os.path.join(top, ".mcp.json"), mcp_probes)
+
+    def test_start_at_root_reads_nothing(self):
+        servers = co.discover_mcp_servers(os.sep, user_json_path="/nonexistent")
+        self.assertEqual(servers, [])
+
+
+class McpInvalidConfigTests(unittest.TestCase):
+    def _discover(self, root, user_json_path="/nonexistent"):
+        return co.discover_mcp_servers(root, home=root,
+                                       user_json_path=user_json_path,
+                                       stop_at=root)
+
+    def test_bad_json_mcp_file_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_file(os.path.join(root, ".mcp.json"), "{not json")
+            with self.assertRaisesRegex(co.McpConfigError, "invalid JSON"):
+                self._discover(root)
+
+    def test_non_object_top_level_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_json(os.path.join(root, ".mcp.json"), ["a"])
+            with self.assertRaisesRegex(co.McpConfigError, "top level"):
+                self._discover(root)
+
+    def test_non_object_mcp_servers_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_json(os.path.join(root, ".mcp.json"), {"mcpServers": []})
+            with self.assertRaisesRegex(co.McpConfigError, "'mcpServers'"):
+                self._discover(root)
+
+    def test_invalid_user_claude_json_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            user_json = os.path.join(root, "claude.json")
+            write_file(user_json, '"just a string"')
+            with self.assertRaisesRegex(co.McpConfigError, re.escape(user_json)):
+                self._discover(root, user_json_path=user_json)
+
+    def test_missing_files_are_fine(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._discover(root), [])
+
+    def test_main_exits_with_error_instead_of_crashing(self):
+        with tempfile.TemporaryDirectory() as root:
+            bad = os.path.join(root, ".mcp.json")
+            write_file(bad, "[1, 2]")
+            with mock.patch.object(co, "CLAUDE_DIR", os.path.join(root, "claude")), \
+                    mock.patch.object(co, "CLAUDE_JSON_PATH", os.path.join(root, "claude.json")), \
+                    mock.patch.object(co, "discover_mcp_servers",
+                                   side_effect=co.McpConfigError(f"{bad}: top level is not a JSON object")), \
+                    mock.patch.object(co, "discover_plugins", return_value=[]), \
+                    mock.patch.object(co, "curses") as fake_curses, \
+                    mock.patch.object(sys, "argv", ["claude-optin"]):
+                with self.assertRaises(SystemExit) as cm:
+                    co.main()
+            self.assertIn("invalid MCP config", str(cm.exception.code))
+            self.assertIn(bad, str(cm.exception.code))
+            fake_curses.wrapper.assert_not_called()
+
+
+class SelectableRowTests(unittest.TestCase):
+    ROWS = [("mcp-group", 0, "a"), ("mcp", 0, None), ("mcp", 1, None),
+            ("mcp-group", 2, "b"), ("mcp", 2, None)]
+
+    def test_top_lands_on_first_entry_not_header(self):
+        self.assertEqual(co.selectable_row(self.ROWS, 0, 1), 1)
+
+    def test_up_from_first_entry_stays_put(self):
+        self.assertEqual(co.selectable_row(self.ROWS, 0, -1), 1)
+
+    def test_down_over_header_skips_it(self):
+        self.assertEqual(co.selectable_row(self.ROWS, 3, 1), 4)
+
+    def test_up_over_header_skips_it(self):
+        self.assertEqual(co.selectable_row(self.ROWS, 3, -1), 2)
+
+    def test_clamps_out_of_range(self):
+        self.assertEqual(co.selectable_row(self.ROWS, 99, 1), 4)
+        self.assertEqual(co.selectable_row(self.ROWS, -5, -1), 1)
+
+    def test_non_mcp_rows_unchanged(self):
+        rows = [("plugin", 0, None), ("plugin", 1, None)]
+        self.assertEqual(co.selectable_row(rows, 1, 1), 1)
+
+    def test_empty_rows(self):
+        self.assertEqual(co.selectable_row([], 3, 1), 0)
+
+
+class ConcurrentUpdateTests(unittest.TestCase):
+    def test_delete_reapplies_after_concurrent_write(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "claude.json")
+            write_json(path, {"mcpServers": {"a": {}, "b": {}}, "n": 0})
+            real_write = co._write_json_atomic
+            calls = {"n": 0}
+
+            def racing_write(target, doc, expect_signature=None):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    # Another writer (Claude Code) lands between read and replace.
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({"mcpServers": {"a": {}, "b": {}}, "n": 1,
+                                   "extra": True}, f, indent=4)
+                return real_write(target, doc, expect_signature=expect_signature)
+
+            with mock.patch.object(co, "_write_json_atomic", side_effect=racing_write):
+                self.assertTrue(co.delete_user_mcp_server("a", user_json_path=path))
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            self.assertEqual(doc, {"mcpServers": {"b": {}}, "n": 1, "extra": True})
+            self.assertEqual(calls["n"], 2)
+            self.assertEqual([n for n in os.listdir(root) if n.endswith(".tmp")], [])
+
+    def test_gives_up_if_file_keeps_changing(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "claude.json")
+            write_json(path, {"mcpServers": {"a": {}}})
+            with mock.patch.object(co, "_file_signature",
+                                   side_effect=lambda p, c=iter(range(1000)): next(c)):
+                with self.assertRaisesRegex(OSError, "kept changing"):
+                    co.delete_user_mcp_server("a", user_json_path=path)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"mcpServers": {"a": {}}})
 
 
 if __name__ == "__main__":

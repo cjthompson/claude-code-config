@@ -7,9 +7,9 @@ startup context, in four tabs switched with TAB:
   • Plugins — every installed plugin (with its skills and agents), its
     effective enabled state, and where that comes from.
   • MCP servers — every server defined in every .mcp.json found walking
-    from the current directory all the way up to the filesystem root
-    (matching how Claude Code itself discovers them — it does not stop at
-    your home directory or a git root), grouped by the file it came from,
+    from the current directory upward, past your home directory and any
+    git root, stopping short of /.mcp.json (matching how Claude Code itself
+    discovers them), grouped by the file it came from,
     plus user-scope servers in ~/.claude.json. A name defined in several
     files gets one row per file: the nearest copy is active, farther
     copies are shown shadowed. Toggling moves a name between the
@@ -387,12 +387,40 @@ def _mcp_label(path, home):
     return path
 
 
+class McpConfigError(Exception):
+    """An MCP config file exists but can't be used (unreadable, bad JSON,
+    or wrong shape). main() turns this into an error exit."""
+
+
+def load_mcp_doc(path, *, servers_key="mcpServers"):
+    """Strictly load an MCP config file. Returns {} if it doesn't exist;
+    raises McpConfigError if it's unreadable, isn't valid JSON, its top
+    level isn't an object, or its servers_key value isn't an object."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as e:
+        raise McpConfigError(f"{path}: can't read: {e}") from e
+    except json.JSONDecodeError as e:
+        raise McpConfigError(f"{path}: invalid JSON: {e}") from e
+    if not isinstance(doc, dict):
+        raise McpConfigError(f"{path}: top level is not a JSON object")
+    if servers_key in doc and not isinstance(doc[servers_key], dict):
+        raise McpConfigError(f"{path}: '{servers_key}' is not a JSON object")
+    return doc
+
+
 def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None):
     """Every server defined in every .mcp.json found walking from
-    realpath(start_dir) up to stop_at (default the filesystem root — this
-    does NOT stop at $HOME or a git root, matching how Claude Code itself
-    discovers .mcp.json files), plus user-scope mcpServers in
-    ~/.claude.json. stop_at exists for tests only.
+    realpath(start_dir) upward, plus user-scope mcpServers in
+    ~/.claude.json. Like Claude Code, the walk passes $HOME and any git
+    root but never reads the filesystem root's own /.mcp.json. stop_at
+    (inclusive) exists for tests only.
+
+    Raises McpConfigError for any existing .mcp.json or ~/.claude.json
+    that isn't usable, rather than silently skipping it.
 
     A name defined in several .mcp.json files gets one entry per file
     (grouped by source path), not a single deduped row: the nearest file's
@@ -405,21 +433,21 @@ def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None
     """
     home = os.path.realpath(home or os.path.expanduser("~"))
     user_json_path = user_json_path or CLAUDE_JSON_PATH
-    stop_at = os.path.realpath(stop_at) if stop_at else os.sep
+    stop_at = os.path.realpath(stop_at) if stop_at else None
 
     # Walk start_dir -> stop_at, collecting each .mcp.json found, nearest first.
+    # realpath matches Claude Code, which walks realpath(process.cwd()).
     files = []
     d = os.path.realpath(start_dir)
     while True:
+        parent = os.path.dirname(d)
+        if parent == d:   # filesystem root: Claude Code never reads /.mcp.json
+            break
         mcp_path = os.path.join(d, ".mcp.json")
         if os.path.isfile(mcp_path):
-            doc_servers = load_json(mcp_path).get("mcpServers", {})
-            if isinstance(doc_servers, dict):
-                files.append((mcp_path, doc_servers))
+            doc_servers = load_mcp_doc(mcp_path).get("mcpServers", {})
+            files.append((mcp_path, doc_servers))
         if d == stop_at:
-            break
-        parent = os.path.dirname(d)
-        if parent == d:   # reached filesystem root
             break
         d = parent
 
@@ -449,8 +477,8 @@ def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None
     # User-scope definitions from ~/.claude.json — always emitted, even when
     # a .mcp.json defines the same name (no static shadowing here; see
     # mcp_row_status for the dynamic shadow check against effective state).
-    user_servers = load_json(user_json_path).get("mcpServers", {})
-    if isinstance(user_servers, dict) and user_servers:
+    user_servers = load_mcp_doc(user_json_path).get("mcpServers", {})
+    if user_servers:
         user_group = len(files)
         for name, definition in user_servers.items():
             entries.append(_mcp_entry(name, definition, user_json_path,
@@ -722,10 +750,21 @@ def trust_suppressor(path, user_json_path=None, *, key=None):
         d = parent
 
 
-def _write_json_atomic(path, doc):
+class _ConcurrentChange(Exception):
+    """The target file changed between our read and our replace."""
+
+
+def _file_signature(path):
+    st = os.stat(path)
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _write_json_atomic(path, doc, expect_signature=None):
     """Write doc as JSON to path atomically: mkstemp in the same dir, fsync,
     chmod to path's own existing mode, os.replace; unlink the temp file on
-    failure. Raises on any OSError."""
+    failure. If expect_signature is given and the file no longer matches it
+    just before the replace, raise _ConcurrentChange and leave it untouched.
+    Raises on any OSError."""
     target = os.path.realpath(path)
     mode = stat.S_IMODE(os.stat(target).st_mode)
     tmpdir = os.path.dirname(target)
@@ -737,8 +776,10 @@ def _write_json_atomic(path, doc):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp_path, mode)
+        if expect_signature is not None and _file_signature(target) != expect_signature:
+            raise _ConcurrentChange(target)
         os.replace(tmp_path, target)
-    except Exception:
+    except BaseException:
         try:
             os.unlink(tmp_path)
         except Exception:
@@ -746,37 +787,59 @@ def _write_json_atomic(path, doc):
         raise
 
 
+def _update_json_atomic(path, mutate, attempts=5):
+    """Read-modify-write path without losing a concurrent writer's change
+    (Claude Code rewrites ~/.claude.json often). mutate(doc) edits doc in
+    place and returns (result, changed); if the file changes between our
+    read and our replace, re-read and re-apply. Returns mutate's result.
+    Raises on a malformed file, or OSError if it keeps changing."""
+    target = os.path.realpath(path)
+    for _ in range(attempts):
+        sig = _file_signature(target)
+        doc = load_json_strict(target)
+        result, changed = mutate(doc)
+        if not changed:
+            return result
+        try:
+            _write_json_atomic(target, doc, expect_signature=sig)
+        except _ConcurrentChange:
+            continue
+        return result
+    raise OSError(f"{path} kept changing while being updated; try again")
+
+
 def set_trust(path, value, user_json_path=None):
     """Set hasTrustDialogAccepted for path (value None removes the field but
     keeps the entry). Returns (old, new).
     No-op if unchanged; preserves file mode; raises on malformed file."""
     user_json_path = user_json_path or CLAUDE_JSON_PATH
-    doc = load_json_strict(user_json_path)
-    projects = doc.setdefault("projects", {})
-    if not isinstance(projects, dict):
-        raise ValueError(f"'projects' in {user_json_path} is not an object")
     path = os.path.realpath(path)
-    if path in projects and not isinstance(projects[path], dict):
-        raise ValueError(f"projects[{path!r}] in {user_json_path} is not an object")
-    old = _entry_trusted(projects[path]) if path in projects else None
-    if value is None:
-        if old is None or "hasTrustDialogAccepted" not in projects[path]:
-            return (old, old)        # no flag to clear; file untouched
-        projects[path] = dict(projects[path])
-        del projects[path]["hasTrustDialogAccepted"]
-    elif old is None and value is False:
-        return (None, None)          # nothing to untrust; file untouched
-    elif old == value:
-        return (old, old)            # unchanged; file untouched
-    else:
-        if path not in projects:
-            projects[path] = copy.deepcopy(DEFAULT_TRUST_ENTRY)
-        else:
-            projects[path] = dict(projects[path])
-        projects[path]["hasTrustDialogAccepted"] = value
 
-    _write_json_atomic(user_json_path, doc)
-    return (old, value)
+    def mutate(doc):
+        projects = doc.setdefault("projects", {})
+        if not isinstance(projects, dict):
+            raise ValueError(f"'projects' in {user_json_path} is not an object")
+        if path in projects and not isinstance(projects[path], dict):
+            raise ValueError(f"projects[{path!r}] in {user_json_path} is not an object")
+        old = _entry_trusted(projects[path]) if path in projects else None
+        if value is None:
+            if old is None or "hasTrustDialogAccepted" not in projects[path]:
+                return (old, old), False     # no flag to clear; file untouched
+            projects[path] = dict(projects[path])
+            del projects[path]["hasTrustDialogAccepted"]
+        elif old is None and value is False:
+            return (None, None), False       # nothing to untrust; file untouched
+        elif old == value:
+            return (old, old), False         # unchanged; file untouched
+        else:
+            if path not in projects:
+                projects[path] = copy.deepcopy(DEFAULT_TRUST_ENTRY)
+            else:
+                projects[path] = dict(projects[path])
+            projects[path]["hasTrustDialogAccepted"] = value
+        return (old, value), True
+
+    return _update_json_atomic(user_json_path, mutate)
 
 
 def delete_user_mcp_server(name, user_json_path=None):
@@ -785,17 +848,19 @@ def delete_user_mcp_server(name, user_json_path=None):
     Raises ValueError if mcpServers isn't a dict; raises on a malformed
     file (via load_json_strict) — either way, leaves the file untouched."""
     user_json_path = user_json_path or CLAUDE_JSON_PATH
-    doc = load_json_strict(user_json_path)
-    servers = doc.get("mcpServers")
-    if servers is None:
-        return False
-    if not isinstance(servers, dict):
-        raise ValueError(f"'mcpServers' in {user_json_path} is not an object")
-    if name not in servers:
-        return False
-    del servers[name]
-    _write_json_atomic(user_json_path, doc)
-    return True
+
+    def mutate(doc):
+        servers = doc.get("mcpServers")
+        if servers is None:
+            return False, False
+        if not isinstance(servers, dict):
+            raise ValueError(f"'mcpServers' in {user_json_path} is not an object")
+        if name not in servers:
+            return False, False
+        del servers[name]
+        return True, True
+
+    return _update_json_atomic(user_json_path, mutate)
 
 
 class Settings:
@@ -1364,6 +1429,25 @@ def find_entry_row(rows, display, key):
     return None
 
 
+HEADER_ROW_KINDS = ("mcp-group",)
+
+
+def selectable_row(rows, cursor, direction=1):
+    """Clamp cursor into rows, then step off any header row: first in
+    `direction` (+1 down, -1 up), else the other way. A header has no entry,
+    so landing on one would make SPACE/l/h/D silently do nothing."""
+    if not rows:
+        return 0
+    cursor = max(0, min(cursor, len(rows) - 1))
+    for step in (direction, -direction):
+        i = cursor
+        while 0 <= i < len(rows):
+            if rows[i][0] not in HEADER_ROW_KINDS:
+                return i
+            i += step
+    return cursor
+
+
 def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
     curses.curs_set(0)
     curses.use_default_colors()
@@ -1411,6 +1495,7 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
         LEGEND_RED = RED | curses.A_REVERSE
 
     expanded, cursor, top = set(), 0, 0
+    cursor_dir = 1    # which way selectable_row() steps off a header row
     follow = None     # key to re-locate the cursor on after a resort/rebuild
     tab = 0           # 0 = Plugins, 1 = MCP Servers, 2 = Skills, 3 = Trust
     TAB_NAMES = ["Plugins", "MCP Servers", "Skills", "Trust"]
@@ -1474,7 +1559,8 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
             if idx is not None:
                 cursor = idx
             follow = None
-        cursor = max(0, min(cursor, len(rows) - 1))
+        cursor = selectable_row(rows, cursor, cursor_dir)
+        cursor_dir = 1
         # Computed once per frame (not just after a keypress) so the footer
         # below can react to what's under the cursor right now. A header row
         # (e.g. mcp-group) has no entry/key of its own — SPACE/l/h/D/D-footer
@@ -1907,6 +1993,7 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                                                user_json_path=CLAUDE_JSON_PATH)
                         servers = [s for s in servers
                                   if s["key"] != confirming["key"]]
+                        expanded.discard(confirming["key"])
                         referenced = set(settings.local_mcp) \
                             | set(settings.project_mcp) | set(settings.user_mcp)
                         servers = add_orphans(servers, referenced)
@@ -1927,10 +2014,12 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
             cursor += 1
         elif ch in (ord("k"), curses.KEY_UP):
             cursor -= 1
+            cursor_dir = -1
         elif ch == ord("g"):
             cursor = 0
         elif ch == ord("G"):
             cursor = len(rows) - 1
+            cursor_dir = -1
         elif ch in (ord(" "), ord("\n"), curses.KEY_ENTER) and entry:
             if entry["kind"] == "plugin":
                 _, src = settings.effective(entry["key"], entry["installed"])
@@ -2096,7 +2185,10 @@ def main():
     settings = Settings(settings_root(os.getcwd()), global_mode=args.global_mode,
                         trusted=trusted)
 
-    servers = discover_mcp_servers(os.getcwd())
+    try:
+        servers = discover_mcp_servers(os.getcwd())
+    except McpConfigError as e:
+        sys.exit(f"claude-optin: invalid MCP config: {e}")
     referenced = set(settings.local_mcp) | set(settings.project_mcp) \
         | set(settings.user_mcp)
     servers = add_orphans(servers, referenced)
