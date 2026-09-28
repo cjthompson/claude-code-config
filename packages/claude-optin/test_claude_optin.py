@@ -2572,6 +2572,216 @@ class McpInvalidConfigTests(unittest.TestCase):
             fake_curses.wrapper.assert_not_called()
 
 
+class McpAllSourcesTests(unittest.TestCase):
+    """Every on-disk source Claude Code loads: enterprise, managed, local,
+    project, user, plugin."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._tmp.name)
+        self.home = os.path.join(self.root, "home")
+        self.repo = os.path.join(self.home, "repo")
+        os.makedirs(os.path.join(self.repo, ".git"))
+        self.user_json = os.path.join(self.home, ".claude.json")
+        self.managed = os.path.join(self.root, "managed")
+        os.makedirs(self.managed)
+        self._old_claude_dir = co.CLAUDE_DIR
+        co.CLAUDE_DIR = os.path.join(self.home, ".claude")
+
+    def tearDown(self):
+        co.CLAUDE_DIR = self._old_claude_dir
+        self._tmp.cleanup()
+
+    def _discover(self, **kw):
+        kw.setdefault("managed_dir", self.managed)
+        return co.discover_mcp_servers(self.repo, home=self.home,
+                                       user_json_path=self.user_json,
+                                       stop_at=self.home, **kw)
+
+    def _settings(self, enabled=()):
+        if enabled:
+            write_json(os.path.join(self.repo, ".claude", "settings.local.json"),
+                       {"enabledMcpjsonServers": list(enabled)})
+        return co.Settings(self.repo, trusted=True)
+
+    def _by_scope(self, servers):
+        return {(s["scope"], s["name"]) for s in servers}
+
+    def test_local_scope_read_from_projects_entry(self):
+        write_json(self.user_json, {"projects": {self.repo: {
+            "mcpServers": {"L": {"type": "http", "url": "l"}}}}})
+        servers = self._discover()
+        local = next(s for s in servers if s["name"] == "L")
+        self.assertEqual(local["scope"], "local")
+        self.assertIn("local", local["group_label"])
+        status = co.mcp_row_status(local, servers, self._settings())
+        self.assertEqual(status["role"], "locked")
+        self.assertFalse(status["toggleable"])
+        self.assertFalse(status["deletable"])
+
+    def test_local_beats_enabled_project_copy(self):
+        write_json(self.user_json, {"projects": {self.repo: {
+            "mcpServers": {"S": {"type": "http", "url": "l"}}}}})
+        write_json(os.path.join(self.repo, ".mcp.json"),
+                   {"mcpServers": {"S": {"type": "http", "url": "p"}}})
+        servers = self._discover()
+        s = self._settings(enabled=["S"])
+        project = next(e for e in servers if e["scope"] == "project")
+        local = next(e for e in servers if e["scope"] == "local")
+        self.assertEqual(co.mcp_row_status(local, servers, s)["role"], "locked")
+        pst = co.mcp_row_status(project, servers, s)
+        self.assertEqual(pst["role"], "shadowed")
+        self.assertIn("local", pst["tag"])
+        self.assertFalse(pst["toggleable"])
+
+    def test_enterprise_file_is_exclusive(self):
+        write_json(os.path.join(self.managed, "managed-mcp.json"),
+                   {"mcpServers": {"E": {"type": "http", "url": "e"}}})
+        write_json(os.path.join(self.managed, "managed-settings.json"),
+                   {"managedMcpServers": {"M": {"type": "http", "url": "m"}}})
+        write_json(os.path.join(self.repo, ".mcp.json"),
+                   {"mcpServers": {"P": {"type": "http", "url": "p"}}})
+        write_json(self.user_json, {"mcpServers": {"U": {"type": "http", "url": "u"}}})
+        servers = self._discover()
+        s = self._settings(enabled=["P"])
+        roles = {e["name"]: co.mcp_row_status(e, servers, s)["role"] for e in servers}
+        self.assertEqual(roles, {"E": "locked", "M": "locked",
+                                 "P": "excluded", "U": "excluded"})
+        self.assertEqual([e["scope"] for e in servers],
+                         ["enterprise", "managed", "project", "user"])
+        p = next(e for e in servers if e["name"] == "P")
+        self.assertFalse(co.mcp_row_status(p, servers, s)["toggleable"])
+
+    def test_managed_settings_drop_ins(self):
+        write_json(os.path.join(self.managed, "managed-settings.d", "10-a.json"),
+                   {"managedMcpServers": {"A": {"type": "http", "url": "a"}}})
+        write_json(os.path.join(self.managed, "managed-settings.d", "20-b.json"),
+                   {"other": 1})
+        servers = self._discover()
+        self.assertEqual(self._by_scope(servers), {("managed", "A")})
+
+    def test_no_managed_dir_skips_org_sources(self):
+        write_json(os.path.join(self.managed, "managed-mcp.json"),
+                   {"mcpServers": {"E": {"type": "http", "url": "e"}}})
+        self.assertEqual(self._discover(managed_dir=None), [])
+
+    def test_disabled_in_mcp_marks_row(self):
+        write_json(self.user_json, {
+            "mcpServers": {"U": {"type": "http", "url": "u"}},
+            "projects": {self.repo: {"disabledMcpServers": ["U"]}}})
+        servers = self._discover()
+        status = co.mcp_row_status(servers[0], servers, self._settings())
+        self.assertEqual(status["mark"], "✗")
+        self.assertIn("disabled in /mcp", status["tag"])
+
+    def test_invalid_server_definition_raises(self):
+        write_json(os.path.join(self.repo, ".mcp.json"), {"mcpServers": {"X": "nope"}})
+        with self.assertRaisesRegex(co.McpConfigError, "server 'X'"):
+            self._discover()
+
+    def test_invalid_managed_settings_raises(self):
+        write_json(os.path.join(self.managed, "managed-settings.json"),
+                   {"managedMcpServers": ["x"]})
+        with self.assertRaisesRegex(co.McpConfigError, "managedMcpServers"):
+            self._discover()
+
+    def test_build_rows_shows_lock_reason_for_local(self):
+        write_json(self.user_json, {"projects": {self.repo: {
+            "mcpServers": {"L": {"type": "http", "url": "l"}}}}})
+        servers = self._discover()
+        rows = co.build_rows(servers, {servers[0]["key"]})
+        reasons = [t for k, _, t in rows if k == "mcp-lock-reason"]
+        self.assertTrue(reasons)
+        self.assertIn("local scope", " ".join(reasons))
+
+
+class PluginMcpDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._tmp.name)
+        self.repo = os.path.join(self.root, "repo")
+        os.makedirs(self.repo)
+        self.cache = os.path.join(self.root, "cache")
+        self.registry = os.path.join(self.root, "installed_plugins.json")
+        self._old_claude_dir = co.CLAUDE_DIR
+        co.CLAUDE_DIR = os.path.join(self.root, ".claude")
+        self.plugins = {}
+
+    def tearDown(self):
+        co.CLAUDE_DIR = self._old_claude_dir
+        self._tmp.cleanup()
+
+    def _plugin(self, key, version="1.0.0", mcp=None, manifest=None, register=True):
+        plugin, _, marketplace = key.partition("@")
+        root = os.path.join(self.cache, marketplace, plugin, version)
+        os.makedirs(root, exist_ok=True)
+        if mcp is not None:
+            write_json(os.path.join(root, ".mcp.json"), mcp)
+        if manifest is not None:
+            write_json(os.path.join(root, ".claude-plugin", "plugin.json"), manifest)
+        if register:
+            self.plugins[key] = [{"scope": "user", "installPath": root,
+                                  "version": version}]
+            write_json(self.registry, {"version": 2, "plugins": self.plugins})
+        return root
+
+    def _discover(self, local_settings=None):
+        if local_settings:
+            write_json(os.path.join(self.repo, ".claude", "settings.local.json"),
+                       local_settings)
+        settings = co.Settings(self.repo)
+        return co.discover_plugin_mcp_servers(settings, cache_dir=self.cache,
+                                              registry_path=self.registry,
+                                              repo_root=self.repo)
+
+    def test_mcp_json_with_and_without_wrapper(self):
+        self._plugin("a@m", mcp={"mcpServers": {"s1": {"command": "x"}}})
+        self._plugin("b@m", mcp={"s2": {"type": "http", "url": "u"}})
+        found = {(k, tuple(sv)) for k, _, sv in self._discover()}
+        self.assertEqual(found, {("a@m", ("s1",)), ("b@m", ("s2",))})
+
+    def test_manifest_inline_path_and_list(self):
+        root = self._plugin("c@m", manifest={"mcpServers": [
+            {"inline": {"command": "i"}}, "./extra.json", "./bundle.mcpb"]})
+        write_json(os.path.join(root, "extra.json"),
+                   {"mcpServers": {"ref": {"command": "r"}}})
+        found = {name for _, _, sv in self._discover() for name in sv}
+        self.assertEqual(found, {"inline", "ref"})
+
+    def test_disabled_plugin_skipped(self):
+        self._plugin("d@m", mcp={"mcpServers": {"s": {"command": "x"}}})
+        self.assertEqual(self._discover({"enabledPlugins": {"d@m": False}}), [])
+
+    def test_uses_registry_install_path_not_latest_cache_dir(self):
+        self._plugin("e@m", version="2.0.0", mcp={"mcpServers": {"new": {"command": "n"}}},
+                     register=False)
+        self._plugin("e@m", version="1.0.0", mcp={"mcpServers": {"old": {"command": "o"}}})
+        names = {name for _, _, sv in self._discover() for name in sv}
+        self.assertEqual(names, {"old"})
+
+    def test_rows_named_like_claude_and_locked(self):
+        self._plugin("f@m", mcp={"mcpServers": {"srv": {"command": "x"}}})
+        settings = co.Settings(self.repo)
+        plugin_servers = co.discover_plugin_mcp_servers(
+            settings, cache_dir=self.cache, registry_path=self.registry,
+            repo_root=self.repo)
+        servers = co.discover_mcp_servers(self.repo, home=self.root,
+                                          user_json_path="/nonexistent",
+                                          stop_at=self.root,
+                                          plugin_servers=plugin_servers)
+        self.assertEqual([s["name"] for s in servers], ["plugin:f:srv"])
+        self.assertEqual(servers[0]["group_label"], "plugin f@m")
+        status = co.mcp_row_status(servers[0], servers, settings)
+        self.assertEqual(status["role"], "locked")
+        self.assertIn("Plugins tab", status["lock_reason"])
+
+    def test_invalid_plugin_mcp_json_raises(self):
+        root = self._plugin("g@m")
+        write_file(os.path.join(root, ".mcp.json"), "{bad")
+        with self.assertRaises(co.McpConfigError):
+            self._discover()
+
+
 class SelectableRowTests(unittest.TestCase):
     ROWS = [("mcp-group", 0, "a"), ("mcp", 0, None), ("mcp", 1, None),
             ("mcp-group", 2, "b"), ("mcp", 2, None)]

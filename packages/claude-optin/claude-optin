@@ -6,13 +6,13 @@ startup context, in four tabs switched with TAB:
 
   • Plugins — every installed plugin (with its skills and agents), its
     effective enabled state, and where that comes from.
-  • MCP servers — every server defined in every .mcp.json found walking
-    from the current directory upward, past your home directory and any
-    git root, stopping short of /.mcp.json (matching how Claude Code itself
-    discovers them), grouped by the file it came from,
-    plus user-scope servers in ~/.claude.json. A name defined in several
-    files gets one row per file: the nearest copy is active, farther
-    copies are shown shadowed. Toggling moves a name between the
+  • MCP servers — every server Claude Code would load that's readable
+    from disk, grouped by source file in precedence order: enterprise
+    managed-mcp.json, managed settings, local scope, every .mcp.json from
+    the current directory upward (past $HOME and any git root, never
+    /.mcp.json), user scope, and enabled plugins. A name defined in
+    several places gets one row per place: the copy Claude loads is
+    active, the others are shown shadowed. Only .mcp.json rows toggle. Toggling moves a name between the
     enabledMcpjsonServers / disabledMcpjsonServers lists; a disabled
     server stays defined but isn't started, so it costs no context.
   • Skills — every discovered skill (personal, project, and active-plugin),
@@ -343,7 +343,8 @@ def discover_plugins():
 
 
 def _mcp_entry(name, definition, source, *, source_path, group, group_label,
-               scope, shadowed_by=None, overrides=()):
+               scope, shadowed_by=None, overrides=(), excluded_by=None,
+               disabled_in_mcp=False, plugin_key=None):
     """Shape an MCP server like a plugin entry so the renderer can share code.
 
     key is unique per (source file, name) — a name defined in several
@@ -368,9 +369,13 @@ def _mcp_entry(name, definition, source, *, source_path, group, group_label,
         "source_path": source_path,
         "group": group,
         "group_label": group_label,
-        "scope": scope,           # "project" | "user" | "orphan"
+        # "enterprise" | "managed" | "local" | "project" | "user" | "plugin" | "orphan"
+        "scope": scope,
         "shadowed_by": shadowed_by,
         "overrides": list(overrides),
+        "excluded_by": excluded_by,          # set when managed-mcp.json is exclusive
+        "disabled_in_mcp": disabled_in_mcp,  # projects[key].disabledMcpServers
+        "plugin_key": plugin_key,
         "transport": transport,
         "definition": definition,
         "detail_items": detail_items,
@@ -412,79 +417,239 @@ def load_mcp_doc(path, *, servers_key="mcpServers"):
     return doc
 
 
-def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None):
-    """Every server defined in every .mcp.json found walking from
-    realpath(start_dir) upward, plus user-scope mcpServers in
-    ~/.claude.json. Like Claude Code, the walk passes $HOME and any git
-    root but never reads the filesystem root's own /.mcp.json. stop_at
-    (inclusive) exists for tests only.
+def _mcp_servers_of(path, doc, *, whole_doc_fallback=False):
+    """The server map in an already-loaded MCP doc, validated: every value
+    must be an object. Plugin .mcp.json files may omit the mcpServers
+    wrapper (Claude Code reads `doc.mcpServers || doc`)."""
+    servers = doc.get("mcpServers")
+    if servers is None:
+        servers = doc if whole_doc_fallback else {}
+    if not isinstance(servers, dict):
+        raise McpConfigError(f"{path}: 'mcpServers' is not a JSON object")
+    for name, definition in servers.items():
+        if not isinstance(definition, dict):
+            raise McpConfigError(f"{path}: server {name!r} is not a JSON object")
+    return servers
 
-    Raises McpConfigError for any existing .mcp.json or ~/.claude.json
-    that isn't usable, rather than silently skipping it.
 
-    A name defined in several .mcp.json files gets one entry per file
-    (grouped by source path), not a single deduped row: the nearest file's
-    copy is the active one (shadowed_by=None, overrides=[farther labels]);
-    farther copies record shadowed_by=<nearest label>. User-scope entries
-    are always emitted, even when a .mcp.json defines the same name.
+def _managed_dir():
+    """Claude Code's system-wide managed config directory for this OS."""
+    if sys.platform == "darwin":
+        return "/Library/Application Support/ClaudeCode"
+    if sys.platform.startswith("win"):
+        return os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                            "ClaudeCode")
+    return "/etc/claude-code"
 
-    Returns entries ordered by group (nearest .mcp.json first, then the
-    user group), name case-insensitive within a group.
+
+def _managed_settings_servers(managed_dir):
+    """(path, servers) pairs for managedMcpServers in managed-settings.json
+    and each managed-settings.d/*.json drop-in (sorted, later wins)."""
+    paths = [os.path.join(managed_dir, "managed-settings.json")]
+    drop_in = os.path.join(managed_dir, "managed-settings.d")
+    if os.path.isdir(drop_in):
+        paths += [os.path.join(drop_in, n) for n in sorted(os.listdir(drop_in))
+                  if n.endswith(".json") and not n.startswith(".")]
+    out = []
+    for path in paths:
+        doc = load_mcp_doc(path, servers_key="managedMcpServers")
+        servers = doc.get("managedMcpServers") or {}
+        _mcp_servers_of(path, {"mcpServers": servers})
+        if servers:
+            out.append((path, servers))
+    return out
+
+
+def _plugin_install_path(registry_entry, repo_root):
+    """installPath for a plugin from installed_plugins.json: v2 lists one
+    record per scope (prefer one whose projectPath is this repo, then
+    user/managed); v1 is a single record."""
+    records = registry_entry if isinstance(registry_entry, list) else [registry_entry]
+    records = [r for r in records if isinstance(r, dict) and r.get("installPath")]
+    repo_root = os.path.realpath(repo_root) if repo_root else None
+    for r in records:
+        pp = r.get("projectPath")
+        if pp and repo_root and os.path.realpath(pp) == repo_root:
+            return r["installPath"]
+    for r in records:
+        if r.get("scope") in (None, "user", "managed"):
+            return r["installPath"]
+    return None
+
+
+def discover_plugin_mcp_servers(settings, *, cache_dir=None, registry_path=None,
+                                repo_root=None):
+    """(plugin_key, source_path, servers) for every enabled, installed
+    plugin that declares MCP servers — in <plugin>/.mcp.json or in
+    .claude-plugin/plugin.json "mcpServers" (an object, a path to a JSON
+    file, or a list of either). Server names are the raw names; Claude Code
+    exposes them as plugin:<plugin>:<server>. .mcpb bundles are skipped."""
+    cache_dir = cache_dir or CACHE_DIR
+    registry_path = registry_path or INSTALLED_PLUGINS_PATH
+    registry = load_json(registry_path).get("plugins", {})
+    if not isinstance(registry, dict):
+        return []
+    out = []
+    for key in sorted(registry, key=str.lower):
+        if not settings.effective(key, installed=True)[0]:
+            continue
+        root = _plugin_install_path(registry[key], repo_root)
+        if not root or not os.path.isdir(root):
+            plugin, _, marketplace = key.partition("@")
+            pdir = os.path.join(cache_dir, marketplace, plugin)
+            ver = latest_version(pdir) if os.path.isdir(pdir) else None
+            root = os.path.join(pdir, ver) if ver else None
+        if not root or not os.path.isdir(root):
+            continue
+        mcp_path = os.path.join(root, ".mcp.json")
+        if os.path.isfile(mcp_path):
+            servers = _mcp_servers_of(mcp_path, load_mcp_doc(mcp_path),
+                                      whole_doc_fallback=True)
+            if servers:
+                out.append((key, mcp_path, servers))
+        manifest_path = os.path.join(root, ".claude-plugin", "plugin.json")
+        declared = load_json(manifest_path).get("mcpServers")
+        items = declared if isinstance(declared, list) else \
+            ([] if declared is None else [declared])
+        inline = {}
+        for item in items:
+            if isinstance(item, dict):
+                inline.update(_mcp_servers_of(manifest_path, {"mcpServers": item}))
+            elif isinstance(item, str) and not item.endswith(".mcpb"):
+                ref = os.path.normpath(os.path.join(root, item))
+                if os.path.isfile(ref):
+                    servers = _mcp_servers_of(ref, load_mcp_doc(ref),
+                                              whole_doc_fallback=True)
+                    if servers:
+                        out.append((key, ref, servers))
+            elif not isinstance(item, str):
+                raise McpConfigError(
+                    f"{manifest_path}: 'mcpServers' entry is not an object or path")
+        if inline:
+            out.append((key, manifest_path, inline))
+    return out
+
+
+MCP_SCOPE_RANK = {"enterprise": 0, "managed": 1, "local": 2, "project": 3,
+                  "user": 4, "plugin": 5}
+
+
+def discover_mcp_servers(start_dir, home=None, user_json_path=None, stop_at=None,
+                         *, project_key=None, managed_dir=None, plugin_servers=()):
+    """Every MCP server Claude Code would load for a session in start_dir
+    that can be read from disk, one entry per (source file, name):
+
+      enterprise  managed_dir/managed-mcp.json — while it exists, Claude
+                  Code loads only enterprise + managed servers
+      managed     managedMcpServers in managed-settings.json (+ .d/)
+      local       ~/.claude.json projects[project_key].mcpServers
+      project     every .mcp.json walking from realpath(start_dir) upward,
+                  past $HOME and any git root, never /.mcp.json itself
+      user        ~/.claude.json top-level mcpServers
+      plugin      plugin_servers, from discover_plugin_mcp_servers()
+
+    managed_dir=None skips the enterprise/managed sources (main() passes
+    the real one). project_key defaults to resolve_trust_key(start_dir),
+    the same projects[] key Claude Code uses. stop_at (inclusive) exists
+    for tests only. claude.ai connectors, --mcp-config and IDE/chrome
+    servers exist only at runtime and aren't listed.
+
+    Within the project scope a name defined in several files keeps one
+    entry per file: the nearest is live (overrides=[farther labels]), the
+    rest record shadowed_by=<nearest label>. Cross-scope shadowing depends
+    on live approval state, so mcp_row_status() works it out per frame.
+
+    Raises McpConfigError for any existing config file that isn't usable,
+    rather than silently skipping it. Returns entries ordered by group
+    (precedence order, nearest .mcp.json first), then name.
     """
     home = os.path.realpath(home or os.path.expanduser("~"))
     user_json_path = user_json_path or CLAUDE_JSON_PATH
     stop_at = os.path.realpath(stop_at) if stop_at else None
+    start = os.path.realpath(start_dir)
+    if project_key is None:
+        project_key = resolve_trust_key(start)
 
     # Walk start_dir -> stop_at, collecting each .mcp.json found, nearest first.
     # realpath matches Claude Code, which walks realpath(process.cwd()).
     files = []
-    d = os.path.realpath(start_dir)
+    d = start
     while True:
         parent = os.path.dirname(d)
         if parent == d:   # filesystem root: Claude Code never reads /.mcp.json
             break
         mcp_path = os.path.join(d, ".mcp.json")
         if os.path.isfile(mcp_path):
-            doc_servers = load_mcp_doc(mcp_path).get("mcpServers", {})
-            files.append((mcp_path, doc_servers))
+            files.append((mcp_path, _mcp_servers_of(mcp_path, load_mcp_doc(mcp_path))))
         if d == stop_at:
             break
         d = parent
 
-    # Nearest-first list of file indices that define each name.
+    user_doc = load_mcp_doc(user_json_path)
+    user_servers = _mcp_servers_of(user_json_path, user_doc)
+    projects = user_doc.get("projects")
+    project_entry = projects.get(project_key) if isinstance(projects, dict) else None
+    project_entry = project_entry if isinstance(project_entry, dict) else {}
+    local_servers = _mcp_servers_of(f"{user_json_path} projects[{project_key}]",
+                                    project_entry)
+    disabled = project_entry.get("disabledMcpServers")
+    disabled = set(disabled) if isinstance(disabled, list) else set()
+
+    enterprise_path = excluded_by = None
+    enterprise_servers, managed_sources = {}, []
+    if managed_dir:
+        enterprise_path = os.path.join(managed_dir, "managed-mcp.json")
+        if os.path.isfile(enterprise_path):
+            enterprise_servers = _mcp_servers_of(enterprise_path,
+                                                 load_mcp_doc(enterprise_path))
+            excluded_by = "managed-mcp.json"
+        managed_sources = _managed_settings_servers(managed_dir)
+
+    # (scope, source_path, group_label, servers, plugin_key), in display order.
+    groups = []
+    if enterprise_servers:
+        groups.append(("enterprise", enterprise_path,
+                       f"{enterprise_path} (enterprise)", enterprise_servers, None))
+    for path, servers in managed_sources:
+        groups.append(("managed", path, f"{path} (managed)", servers, None))
+    if local_servers:
+        groups.append(("local", user_json_path,
+                       f"~/.claude.json (local: {_mcp_label(project_key, home)})",
+                       local_servers, None))
+    for path, servers in files:
+        groups.append(("project", path, _mcp_label(path, home), servers, None))
+    if user_servers:
+        groups.append(("user", user_json_path, "~/.claude.json (user)",
+                       user_servers, None))
+    for plugin_key, path, servers in plugin_servers:
+        groups.append(("plugin", path, f"plugin {plugin_key}", servers, plugin_key))
+
+    # Nearest-first project-file group indices that define each name.
     name_occurrences = {}
-    for i, (_, doc_servers) in enumerate(files):
-        for name in doc_servers:
-            name_occurrences.setdefault(name, []).append(i)
+    for gi, (scope, _, _, servers, _) in enumerate(groups):
+        if scope == "project":
+            for name in servers:
+                name_occurrences.setdefault(name, []).append(gi)
 
     entries = []
-    for i, (path, doc_servers) in enumerate(files):
-        group_label = _mcp_label(path, home)
-        for name, definition in doc_servers.items():
-            occurrences = name_occurrences[name]
-            nearest_idx = occurrences[0]
-            if i == nearest_idx:
-                shadowed_by = None
-                overrides = [_mcp_label(files[j][0], home) for j in occurrences[1:]]
-            else:
-                shadowed_by = _mcp_label(files[nearest_idx][0], home)
-                overrides = ()
-            entries.append(_mcp_entry(name, definition, path, source_path=path,
-                                      group=i, group_label=group_label,
-                                      scope="project", shadowed_by=shadowed_by,
-                                      overrides=overrides))
-
-    # User-scope definitions from ~/.claude.json — always emitted, even when
-    # a .mcp.json defines the same name (no static shadowing here; see
-    # mcp_row_status for the dynamic shadow check against effective state).
-    user_servers = load_mcp_doc(user_json_path).get("mcpServers", {})
-    if user_servers:
-        user_group = len(files)
-        for name, definition in user_servers.items():
-            entries.append(_mcp_entry(name, definition, user_json_path,
-                                      source_path=user_json_path, group=user_group,
-                                      group_label="~/.claude.json (user)",
-                                      scope="user"))
+    for gi, (scope, path, label, servers, plugin_key) in enumerate(groups):
+        for raw_name, definition in servers.items():
+            name = raw_name
+            if scope == "plugin":
+                name = f"plugin:{plugin_key.partition('@')[0]}:{raw_name}"
+            shadowed_by, overrides = None, ()
+            if scope == "project":
+                occ = name_occurrences[raw_name]
+                if gi == occ[0]:
+                    overrides = [groups[j][2] for j in occ[1:]]
+                else:
+                    shadowed_by = groups[occ[0]][2]
+            entries.append(_mcp_entry(
+                name, definition, path, source_path=path, group=gi,
+                group_label=label, scope=scope, shadowed_by=shadowed_by,
+                overrides=overrides,
+                excluded_by=excluded_by if scope not in ("enterprise", "managed") else None,
+                disabled_in_mcp=name in disabled, plugin_key=plugin_key))
 
     entries.sort(key=lambda e: (e["group"], e["name"].lower()))
     return entries
@@ -1066,74 +1231,123 @@ class Settings:
 
 
 MCP_USER_LOCK_REASON = "always on; enable lists don't apply"
+MCP_LOCK_REASONS = {
+    "user": MCP_USER_LOCK_REASON,
+    "local": "local scope (claude mcp add); enable lists don't apply",
+    "managed": "set by your organization in managed settings",
+    "enterprise": "set by your organization in managed-mcp.json",
+    "plugin": "provided by a plugin; toggle the plugin on the Plugins tab",
+}
+MCP_LOCKED_SCOPES = tuple(MCP_LOCK_REASONS)
+
+
+def mcp_name_winner(name, servers, settings):
+    """The entry Claude Code actually loads for `name`, or None: the
+    highest-precedence scope (managed > local > project > user > plugin),
+    where a project copy only counts if it's the nearest file's and
+    approved, and nothing counts while managed-mcp.json excludes it."""
+    best = None
+    for s in servers:
+        if s["name"] != name or s.get("scope") not in MCP_SCOPE_RANK \
+                or s.get("excluded_by"):
+            continue
+        if s["scope"] == "project" and (s.get("shadowed_by") is not None
+                                        or not settings.effective_mcp(name)[0]):
+            continue
+        rank = (MCP_SCOPE_RANK[s["scope"]], s["group"])
+        if best is None or rank < best[0]:
+            best = (rank, s)
+    return best[1] if best else None
+
+
+def _mcp_status(role, mark, color, *, dim=False, tag="", toggleable=False,
+                deletable=False, lock_reason=None, notice=None, scope_tag=None):
+    return {"role": role, "mark": mark, "color": color, "dim": dim, "tag": tag,
+            "toggleable": toggleable, "deletable": deletable,
+            "lock_reason": lock_reason, "notice": notice, "scope_tag": scope_tag}
 
 
 def mcp_row_status(entry, servers, settings):
     """Per-row facts for one MCP entry, independent of rendering.
 
     Returns {role, mark, color, dim, tag, toggleable, deletable,
-    lock_reason, notice}. `servers` is the full MCP-tab display list, used
-    to find a same-named entry in the other scope (project <-> user) for
-    cross-scope tags/shadowing.
+    lock_reason, notice, scope_tag}. `servers` is the full MCP-tab display
+    list, used to find same-named entries in other scopes for cross-scope
+    tags and shadowing. Only project (.mcp.json) rows and orphans toggle —
+    enabledMcpjsonServers/disabledMcpjsonServers don't apply to anything else.
     """
     name = entry["name"]
     scope = entry.get("scope")
+    deletable = scope == "user"
+    disabled_tag = "disabled in /mcp" if entry.get("disabled_in_mcp") else ""
 
     if scope == "orphan":
-        return {"role": "orphan", "mark": "?", "color": "yellow", "dim": False,
-                "tag": "", "toggleable": True, "deletable": False,
-                "lock_reason": None, "notice": None}
+        return _mcp_status("orphan", "?", "yellow", toggleable=True)
+
+    if entry.get("excluded_by"):
+        return _mcp_status(
+            "excluded", "·", "dim", dim=True, deletable=deletable,
+            tag=f"ignored: {entry['excluded_by']} is exclusive",
+            notice=(f"{entry['excluded_by']} is present, so Claude Code loads "
+                    "only enterprise and managed MCP servers"),
+            scope_tag=scope if scope != "project" else None)
 
     if scope == "project":
         shadowed_by = entry.get("shadowed_by")
         on, _ = settings.effective_mcp(name)
         mark, color = ("✓", "green") if on else ("✗", "red")
-        if shadowed_by is None:
-            overridden = list(entry.get("overrides") or [])
-            user_entry = next((s for s in servers if s.get("scope") == "user"
-                               and s["name"] == name), None)
-            # Project always wins over a same-named user entry while it's
-            # effectively on; fold it into the same overrides list so it
-            # reads as "overrides a, b" rather than a separate bare tag.
-            if user_entry is not None and on:
-                overridden.append(user_entry["group_label"])
-            tag = "overrides " + ", ".join(overridden) if overridden else ""
-            return {"role": "live", "mark": mark, "color": color, "dim": False,
-                    "tag": tag, "toggleable": True, "deletable": False,
-                    "lock_reason": None, "notice": None}
-        notice = (f"MCP state is per name — toggle it on the active row "
-                 f"under {shadowed_by}")
-        return {"role": "shadowed", "mark": mark, "color": color, "dim": True,
-                "tag": f"shadowed by {shadowed_by}", "toggleable": False,
-                "deletable": False, "lock_reason": None, "notice": notice}
+        if shadowed_by is not None:
+            return _mcp_status(
+                "shadowed", mark, color, dim=True, tag=f"shadowed by {shadowed_by}",
+                notice=(f"MCP state is per name — toggle it on the active row "
+                        f"under {shadowed_by}"))
+        winner = mcp_name_winner(name, servers, settings)
+        if winner is not None and winner is not entry \
+                and MCP_SCOPE_RANK[winner["scope"]] < MCP_SCOPE_RANK["project"]:
+            return _mcp_status(
+                "shadowed", mark, color, dim=True,
+                tag=f"shadowed by {winner['group_label']}",
+                notice=(f"a {winner['scope']}-scope server named {name} takes "
+                        f"precedence over this .mcp.json copy"))
+        overridden = list(entry.get("overrides") or [])
+        if on:
+            # Fold lower-precedence same-named copies into one "overrides
+            # a, b" tag rather than a separate bare tag per scope.
+            overridden += [s["group_label"] for s in servers
+                           if s["name"] == name and s is not entry
+                           and s.get("scope") in ("user", "plugin")
+                           and not s.get("excluded_by")]
+        tags = ["overrides " + ", ".join(overridden)] if overridden else []
+        if disabled_tag:
+            tags.append(disabled_tag)
+        return _mcp_status("live", mark, color, tag=" · ".join(tags),
+                           toggleable=True)
 
-    if scope == "user":
-        project_entry = next((s for s in servers if s.get("scope") == "project"
-                              and s["name"] == name and s.get("shadowed_by") is None),
-                             None)
-        shadowed = False
-        if project_entry is not None:
-            on, _ = settings.effective_mcp(name)
-            # A disabled/pending project copy yields to the user copy, whether
-            # or not the folder is trusted (FINDINGS #9-10) — same rule here.
-            if on:
-                shadowed = True
-        if shadowed:
-            notice = ("MCP state is per name — this user-scope copy is not "
-                     "active while the project copy is enabled")
-            return {"role": "locked-shadowed", "mark": "🔒", "color": "yellow",
-                    "dim": True, "tag": f"shadowed by {project_entry['group_label']}",
-                    "toggleable": False, "deletable": True, "lock_reason": None,
-                    "notice": notice}
-        notice = "user-scope MCP servers are always on; toggling here would do nothing"
-        return {"role": "locked", "mark": "🔒", "color": "yellow", "dim": False,
-                "tag": "", "toggleable": False, "deletable": True,
-                "lock_reason": MCP_USER_LOCK_REASON, "notice": notice}
+    if scope in MCP_LOCKED_SCOPES:
+        winner = mcp_name_winner(name, servers, settings)
+        if winner is not None and winner is not entry:
+            what = ("the project copy is enabled" if winner["scope"] == "project"
+                    else f"the {winner['scope']}-scope copy takes precedence")
+            return _mcp_status(
+                "locked-shadowed", "🔒", "yellow", dim=True,
+                tag=f"shadowed by {winner['group_label']}", deletable=deletable,
+                notice=f"MCP state is per name — this {scope}-scope copy is not "
+                       f"active while {what}",
+                scope_tag=scope)
+        if scope == "user":
+            notice = "user-scope MCP servers are always on; toggling here would do nothing"
+        else:
+            notice = f"{scope}-scope MCP servers can't be toggled here: {MCP_LOCK_REASONS[scope]}"
+        if disabled_tag:
+            return _mcp_status("locked", "✗", "red", tag=disabled_tag,
+                               deletable=deletable, lock_reason=MCP_LOCK_REASONS[scope],
+                               notice=notice, scope_tag=scope)
+        return _mcp_status("locked", "🔒", "yellow", deletable=deletable,
+                           lock_reason=MCP_LOCK_REASONS[scope], notice=notice,
+                           scope_tag=scope)
 
     # Shouldn't happen for a well-formed entry; degrade to orphan-like display.
-    return {"role": "unknown", "mark": "?", "color": "yellow", "dim": False,
-            "tag": "", "toggleable": True, "deletable": False,
-            "lock_reason": None, "notice": None}
+    return _mcp_status("unknown", "?", "yellow", toggleable=True)
 
 
 # ---------- TUI ----------
@@ -1313,10 +1527,10 @@ def build_rows(display, expanded, detail_wrap_width=78):
                 rows.append(("mcp-detail", i, f"{label}  {val}"))
             if not e["detail_items"]:
                 rows.append(("empty", i, "(no connection details)"))
-            if e.get("scope") in ("project", "user"):
+            if e.get("scope") not in (None, "orphan"):
                 rows.append(("mcp-detail", i, f"source  {e['source_path']}"))
-            if e.get("scope") == "user":
-                for line in textwrap.wrap(MCP_USER_LOCK_REASON,
+            if e.get("scope") in MCP_LOCK_REASONS:
+                for line in textwrap.wrap(MCP_LOCK_REASONS[e["scope"]],
                                           max(20, detail_wrap_width)):
                     rows.append(("mcp-lock-reason", i, line))
         elif e["kind"] == "trust":
@@ -1710,7 +1924,13 @@ def run(stdscr, plugins, servers, skills, settings, trust_key, trust_entries):
                     color = color_map.get(status["color"], DIM_WHITE)
                     row_dim = curses.A_DIM if status["dim"] else 0
                 editable = "user" if settings.global_mode else "local"
-                if status["role"] != "live":
+                if status["scope_tag"]:
+                    # Not governed by the enable lists: show where it's defined.
+                    short = {"enterprise": "org", "managed": "org"}.get(
+                        status["scope_tag"], status["scope_tag"])
+                    src_tag = f"{short[:7]:<8}"
+                    tag_src = None
+                elif status["role"] != "live":
                     src_tag = {"local": "local   ", "project": "project ",
                                "user": "user    "}.get(st["source"], "default ")
                     tag_src = st["source"]
@@ -2186,7 +2406,10 @@ def main():
                         trusted=trusted)
 
     try:
-        servers = discover_mcp_servers(os.getcwd())
+        servers = discover_mcp_servers(
+            os.getcwd(), project_key=trust_key, managed_dir=_managed_dir(),
+            plugin_servers=discover_plugin_mcp_servers(
+                settings, repo_root=settings.repo_root))
     except McpConfigError as e:
         sys.exit(f"claude-optin: invalid MCP config: {e}")
     referenced = set(settings.local_mcp) | set(settings.project_mcp) \
