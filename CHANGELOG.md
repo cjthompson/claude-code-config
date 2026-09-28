@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.0.89 - 2026-09-27
+
+### Features
+- **claude-optin**: the MCP tab now lists every server Claude Code loads from disk, grouped by the file it comes from, in precedence order: enterprise `managed-mcp.json`, `managedMcpServers` in managed settings, local scope (`~/.claude.json` → `projects[<repo>].mcpServers`), every `.mcp.json` walking up from the current directory, user scope, and enabled plugins (`plugin:<plugin>:<server>`). Only `.mcp.json` rows toggle; the others are locked and say why.
+- **claude-optin**: a name defined in several places gets one row per place. The copy Claude actually runs is live (managed > local > project if approved > user > plugin) and the rest are marked shadowed. While `managed-mcp.json` exists, every other row is marked ignored. Servers turned off in `/mcp` show "disabled in /mcp".
+- **claude-optin**: `D` on a user-scope MCP server deletes it from `~/.claude.json` after a confirm.
+
+### Fixes
+- **claude-optin**: the `.mcp.json` walk now goes past `$HOME` and git roots like Claude Code does, and never reads `/.mcp.json`.
+- **claude-optin**: an invalid MCP config file (bad JSON, or a server map that isn't an object) exits with an error naming the file instead of crashing.
+- **claude-optin**: edits to `~/.claude.json` (trust, MCP delete) re-read and re-apply if Claude Code writes the file mid-update.
+- **claude-optin**: the cursor skips MCP group header rows.
+
 ## v0.0.88 - 2026-09-27
 
 ### Fixes
