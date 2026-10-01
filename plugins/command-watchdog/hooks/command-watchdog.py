@@ -23,7 +23,7 @@ past the cap is itself the bug, not real work.
 
 A third, independent trigger: orphan detection. This process records its
 ppid at startup; every poll (≤1s) it re-checks os.getppid(). If that value
-changes, our original parent (whatever invoked this script — Claude Code's
+changes, our original parent (whatever invoked this script — the agent's
 own process, or the PreToolUse hook process for the rtk-decision sub-call)
 has exited and we've been reparented (to launchd/init or a subreaper). That
 parent is never coming back to read our output or care about our result, so
@@ -84,6 +84,8 @@ The child command always starts at the lowest CPU priority (niceness 20 on
 macOS, 19 elsewhere), inherited by everything it spawns. WATCHDOG_NICE is
 ignored. If setting priority fails, the command is not executed. The watchdog
 itself keeps its inherited priority so hang detection stays responsive under load.
+SIGINT, SIGTERM, and SIGHUP stop the task group and reap the direct child
+before returning 128 + signal, including when a Codex exec session is canceled.
 
 Invoked via /usr/bin/python3 (the system interpreter), deliberately bypassing
 any `mise`/`pyenv`/etc. shim: this process's env (PATH, GEM_HOME, ...) is
@@ -744,7 +746,35 @@ def main() -> int:
         return 125
     else:
         os.close(w_fd)
-    pgid = os.getpgid(proc.pid)
+    # child_setup established pgid == pid before exec. Reading it back can
+    # race with an immediately exiting command.
+    pgid = proc.pid
+
+    def cancel(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    previous_handlers = {}
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous_handlers[sig] = signal.signal(sig, cancel)
+        return supervise(cmd, proc, pgid, r_fd)
+    except BaseException:
+        # Tasks have their own process group, so terminal cancellation of
+        # the watchdog does not reach them automatically. Reap our child and
+        # stop its descendants before propagating cancellation or failure.
+        # A repeated interrupt must not cut cleanup short before SIGKILL.
+        for sig in previous_handlers:
+            signal.signal(sig, signal.SIG_IGN)
+        kill_group(pgid, proc)
+        proc.wait()
+        raise
+    finally:
+        os.close(r_fd)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+
+
+def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -> int:
 
     tracker = PollTracker(cmd, proc.pid, pgid) if is_poll_loop(cmd) else None
     targeted = tracker is not None and tracker.has_targets
@@ -839,10 +869,6 @@ def main() -> int:
         break
 
     reader_thread.join(2)
-    try:
-        os.close(r_fd)
-    except OSError:
-        pass
 
     if hung:
         debug_log({"stage": "cw-exit", "hung": True, "proc_returncode": proc.returncode, "exit_code": 124})

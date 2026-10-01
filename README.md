@@ -12,7 +12,7 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
-The Python and TypeScript development plugins also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install a listed language plugin by name. Cursor manifests are included alongside them.
+The Python and TypeScript development plugins, project-tasks, and command-watchdog also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install a listed plugin with `codex plugin add <name>@cjthompson`. Cursor manifests are included alongside the language plugins.
 
 ### Available plugins
 
@@ -128,7 +128,22 @@ Custom Claude Code hooks, located in `plugins/<name>/hooks/`. Like skills, each 
 
 ### command-watchdog
 
+The same plugin and watchdog engine support Claude Code and Codex. Codex maps both shell commands and `exec_command` to the `Bash` hook protocol, including nested tool calls from code mode. The hook supervises those shell tasks; it does not change the priority of Codex itself or independently running services. Packaging was verified with Codex CLI 0.159.3.
+
+From the repository root, install in Codex with:
+
+```sh
+codex plugin marketplace add .agents/plugins
+codex plugin add command-watchdog@cjthompson
+```
+
+Open `/hooks` in Codex to review and trust the plugin's hook before using it. Installation alone does not trust hooks; changed definitions require another review. See [Codex hooks](https://learn.chatgpt.com/docs/hooks) and [plugin packaging](https://developers.openai.com/plugins/build/plugins).
+
+**macOS sandbox limitation:** Codex CLI 0.159.3's workspace sandbox denies `setpriority`. In that context, wrapped commands exit 125 without executing the task. Retry only through Codex's normal approval flow for an execution context that permits priority changes and process inspection. The plugin does not request escalation or disable sandboxing automatically, and never falls back to normal priority. This permission requirement also applies to any other restricted execution environment that denies the watchdog's process operations.
+
 A `PreToolUse` hook on the `Bash` tool. Every command runs under an idle-hang watchdog: it tees output live and kills the command if both stdout/stderr *and* the process group's cumulative CPU time stay flat for a configurable window (default 90s; `hooks/watchdog-patterns.txt` sets per-command overrides, e.g. `rspec` and `.sh` scripts). A slow-but-working command (silent, but burning CPU) is left alone; a true hang (silent and CPU-flat) gets killed and dumps a diagnostic (`ps` tree + a `sample` stack trace) before doing so. Wrapped commands always start at the lowest CPU priority (`nice` 20 on macOS, 19 elsewhere), which their descendants inherit, so long builds and test runs don't bog the machine down. `WATCHDOG_NICE` is ignored, including for RTK rewrite decisions. If priority cannot be set, the watchdog exits with code 125 without running the command. It also kills the command immediately if the watchdog's parent process exits. If `rtk` is installed, its token-saving rewrite is applied first. RTK uses the same lowest priority and retains its 15-second runtime cap; CPU contention can cause it to time out and skip rewriting.
+
+Interrupting or terminating the watchdog (`SIGINT`, `SIGTERM`, or `SIGHUP`) stops its task process group and reaps its direct child before exiting with `128 + signal`. Command stdout and stderr are streamed together on the watchdog's stdout; normal task exit codes are preserved.
 
 **Wait loops.** A sleeping `until` or `while` loop with a simple `pgrep`, `grep -q`, or file-test condition is judged by what it waits on, not by its own `echo -n .` output or the CPU of its checks. Ordinary work loops such as `while read …; do curl …; sleep 1; done` retain normal output based idle detection:
 

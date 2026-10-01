@@ -1,0 +1,24 @@
+{
+  "name": "command-watchdog",
+  "description": "Supervise Codex shell commands at lowest CPU priority and stop idle, overlong, or orphaned tasks.",
+  "version": "2.0.0",
+  "author": {
+    "name": "cjthompson"
+  },
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "bash",
+    "watchdog",
+    "idle-detection",
+    "cpu-priority"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Command Watchdog",
+    "shortDescription": "Supervise shell tasks at lowest CPU priority.",
+    "longDescription": "Wrap Codex shell and exec_command calls with the shared command watchdog. Stream output, preserve command exit status, and stop tasks when output and CPU stop progressing, their parent exits, or a configured runtime cap expires. Requires process permissions for priority changes and supervision; restricted macOS execution can return 125 without starting the task.",
+    "developerName": "cjthompson",
+    "category": "Development"
+  }
+}

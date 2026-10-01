@@ -2,6 +2,12 @@
 
 ## v0.0.90 - 2026-10-01
 
+### Features
+- **command-watchdog** `2.0.0`: add Codex plugin metadata and marketplace registration using the shared Claude-compatible hook and runner. Document installation, hook trust, and the macOS workspace sandbox's priority restriction; denied priority changes still stop execution with code 125.
+
+### Fixes
+- **command-watchdog**: stop the task group and reap its direct child when the watchdog receives SIGINT, SIGTERM, or SIGHUP. Cancellation exits with `128 + signal`.
+
 ### Changes
 - **command-watchdog** `2.0.0`: every task starts at the lowest CPU priority (niceness 20 on macOS, 19 elsewhere), which descendants inherit. `WATCHDOG_NICE` no longer overrides priority, including for RTK rewrite decisions. If priority setup fails, the task is not executed and the watchdog exits 125 with the OS error. RTK retains its 15-second cap and skips rewriting if CPU contention causes a timeout.
 
