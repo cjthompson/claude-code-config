@@ -74,7 +74,7 @@
       "name": "command-watchdog",
       "source": "./plugins/command-watchdog",
       "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
-      "version": "1.5.3",
+      "version": "2.0.0",
       "keywords": [
         "hooks",
         "bash",
