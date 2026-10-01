@@ -1,24 +1,28 @@
 {
-    "name": "command-watchdog",
-    "version": "1.5.3",
-    "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
-    "author": { "name": "cjthompson" },
-    "license": "MIT",
-    "keywords": [
-        "hooks",
-        "bash",
-        "watchdog",
-        "idle-detection",
-        "orphan-detection",
-        "wait-loops",
-        "rspec",
-        "rtk"
-    ],
-    "interface": {
-        "displayName": "Command Watchdog",
-        "shortDescription": "Claude Code Bash watchdog; Codex hook support is unavailable.",
-        "longDescription": "This plugin's watchdog is a Claude Code PreToolUse hook. Codex plugins do not load this Claude-format hooks/hooks.json file, and this plugin currently provides no Codex runtime component.",
-        "developerName": "cjthompson",
-        "category": "Development"
-    }
+  "name": "command-watchdog",
+  "description": "Supervise noninteractive Codex shell tasks at lowest CPU priority and stop idle, overlong, or orphaned tasks.",
+  "version": "2.0.0",
+  "author": {
+    "name": "cjthompson"
+  },
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "bash",
+    "watchdog",
+    "idle-detection",
+    "orphan-detection",
+    "wait-loops",
+    "rspec",
+    "rtk",
+    "cpu-priority"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Command Watchdog",
+    "shortDescription": "Supervise shell tasks at lowest CPU priority.",
+    "longDescription": "Wrap Codex shell and exec_command calls with the shared command watchdog. Stream output, preserve command exit status, and stop tasks when output and CPU stop progressing, their parent exits, or a configured runtime cap expires. Requires process permissions for priority changes and supervision; restricted macOS execution can return 125 without starting the task. Interactive sessions are unsupported: output is piped, terminal reads from the task group can receive SIGTTIN, and waiting for input remains subject to the idle timeout.",
+    "developerName": "cjthompson",
+    "category": "Development"
+  }
 }

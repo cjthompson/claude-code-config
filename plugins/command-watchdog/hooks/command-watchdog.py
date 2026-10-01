@@ -23,7 +23,7 @@ past the cap is itself the bug, not real work.
 
 A third, independent trigger: orphan detection. This process records its
 ppid at startup; every poll (≤1s) it re-checks os.getppid(). If that value
-changes, our original parent (whatever invoked this script — Claude Code's
+changes, our original parent (whatever invoked this script — the agent's
 own process, or the PreToolUse hook process for the rtk-decision sub-call)
 has exited and we've been reparented (to launchd/init or a subreaper). That
 parent is never coming back to read our output or care about our result, so
@@ -84,6 +84,8 @@ The child command always starts at the lowest CPU priority (niceness 20 on
 macOS, 19 elsewhere), inherited by everything it spawns. WATCHDOG_NICE is
 ignored. If setting priority fails, the command is not executed. The watchdog
 itself keeps its inherited priority so hang detection stays responsive under load.
+SIGINT, SIGTERM, and SIGHUP stop the task group and reap the direct child
+before exiting with 128 + signal, including when a Codex exec session is canceled.
 
 Invoked via /usr/bin/python3 (the system interpreter), deliberately bypassing
 any `mise`/`pyenv`/etc. shim: this process's env (PATH, GEM_HOME, ...) is
@@ -703,18 +705,22 @@ class PollTracker:
 
 # --- main -----------------------------------------------------------------------
 
-def kill_group(pgid: int, proc: "subprocess.Popen[bytes]") -> None:
+def kill_group(pgid: int, proc: "subprocess.Popen[bytes]", initial_signal: int = signal.SIGTERM) -> None:
     # Signal the whole group via a negative pid (killpg-equivalent). Ignore
     # ProcessLookupError (already gone) and PermissionError (a group member we
     # can't signal); the KILL escalation and the direct-pid fallback cover
     # stragglers.
-    for sig, name in ((signal.SIGTERM, "SIGTERM"), (signal.SIGKILL, "SIGKILL")):
+    for sig in (initial_signal, signal.SIGKILL):
+        name = signal.Signals(sig).name
         for target in (-pgid, proc.pid):
+            if target == proc.pid and proc.returncode is not None:
+                break  # Never fall back to a PID that has already been reaped.
             try:
                 os.kill(target, sig)
+                break  # Only use the direct PID if signaling the group failed.
             except (ProcessLookupError, PermissionError) as e:
                 debug_log({"stage": "kill-signal-failed", "sig": name, "target": target, "error": type(e).__name__})
-        if sig == signal.SIGTERM:
+        if sig != signal.SIGKILL:
             deadline = time.time() + 3
             while time.time() < deadline and proc.poll() is None:
                 time.sleep(0.1)
@@ -729,22 +735,72 @@ def main() -> int:
     # Launch the child in its OWN process group so we can signal the whole tree
     # (e.g. a test runner + any forked browsers/vite). pgid == pid.
     r_fd, w_fd = os.pipe()
+    cancel_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    # Queue cancellation until Popen has returned a child we can clean up.
+    # The child restores the inherited mask before exec.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+    proc: Optional["subprocess.Popen[bytes]"] = None
+    cancelled: Optional[int] = None
+    previous_handlers = {}
+
+    def cancel(signum: int, _frame: object) -> None:
+        nonlocal cancelled
+        signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+        for sig in cancel_signals:
+            signal.signal(sig, signal.SIG_IGN)
+        cancelled = signum
+        raise SystemExit(128 + signum)
+
+    def setup() -> None:
+        child_setup()
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
     try:
-        proc = subprocess.Popen(
-            ["/bin/bash", "-c", cmd], stdout=w_fd, stderr=w_fd, preexec_fn=child_setup
-        )
-    except (OSError, subprocess.SubprocessError) as error:
+        for sig in cancel_signals:
+            previous_handlers[sig] = signal.signal(sig, cancel)
+        try:
+            proc = subprocess.Popen(
+                ["/bin/bash", "-c", cmd], stdout=w_fd, stderr=w_fd, preexec_fn=setup
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            os.close(w_fd)
+            w_fd = -1
+            # Popen reaped the failed child. Closing our writer lets this
+            # read its setup diagnostic (or EOF) without waiting for a task.
+            detail = os.read(r_fd, 65_536).decode("utf-8", errors="replace").strip() or str(error)
+            debug_log({"stage": "cw-launch-failed", "cmd": cmd, "error": detail})
+            print("command-watchdog: unable to start command: {}".format(detail), file=sys.stderr)
+            print("Tasks require lowest CPU priority; if the sandbox denied setup, retry through the host's normal approval flow.", file=sys.stderr)
+            return 125
         os.close(w_fd)
-        # Popen has reaped the failed child; with our writer closed, this
-        # reads its setup diagnostic (or EOF) without waiting for a task.
-        detail = os.read(r_fd, 65_536).decode("utf-8", errors="replace").strip() or str(error)
+        w_fd = -1
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        # child_setup established pgid == pid before exec. Reading it back
+        # can race with an immediately exiting command.
+        return supervise(cmd, proc, proc.pid, r_fd)
+    except BaseException:
+        # Tasks have their own process group, so terminal cancellation of
+        # the watchdog does not reach them automatically. Reap our child and
+        # stop its descendants before propagating cancellation or failure.
+        # A repeated interrupt must not cut cleanup short before SIGKILL.
+        signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+        for sig in cancel_signals:
+            signal.signal(sig, signal.SIG_IGN)
+        if proc is not None and proc.returncode is None:
+            kill_group(proc.pid, proc, cancelled or signal.SIGTERM)
+            proc.wait()
+        raise
+    finally:
+        signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
         os.close(r_fd)
-        debug_log({"stage": "cw-launch-failed", "cmd": cmd, "error": detail})
-        print("command-watchdog: unable to start command at lowest CPU priority: {}".format(detail), file=sys.stderr)
-        return 125
-    else:
-        os.close(w_fd)
-    pgid = os.getpgid(proc.pid)
+        if w_fd >= 0:
+            os.close(w_fd)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -> int:
 
     tracker = PollTracker(cmd, proc.pid, pgid) if is_poll_loop(cmd) else None
     targeted = tracker is not None and tracker.has_targets
@@ -839,10 +895,6 @@ def main() -> int:
         break
 
     reader_thread.join(2)
-    try:
-        os.close(r_fd)
-    except OSError:
-        pass
 
     if hung:
         debug_log({"stage": "cw-exit", "hung": True, "proc_returncode": proc.returncode, "exit_code": 124})

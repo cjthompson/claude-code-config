@@ -1,7 +1,7 @@
 {
     "name": "command-watchdog",
     "displayName": "Command Watchdog",
-    "version": "1.5.3",
+    "version": "2.0.0",
     "description": "Claude Code PreToolUse watchdog. Cursor hook support is not available yet.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
