@@ -79,10 +79,11 @@ Env overrides:
                         output/CPU activity (default 0 = disabled)
   WATCHDOG_POLL_CAP     wall-clock cap for wait loops with no parseable
                         target (default 1800)
-  WATCHDOG_NICE         niceness for the child command and everything it
-                        spawns (default 19 = lowest priority, 0 = unchanged).
-                        The watchdog itself keeps normal priority so hang
-                        detection stays responsive under load.
+
+The child command always starts at the lowest CPU priority (niceness 20 on
+macOS, 19 elsewhere), inherited by everything it spawns. WATCHDOG_NICE is
+ignored. If setting priority fails, the command is not executed. The watchdog
+itself keeps its inherited priority so hang detection stays responsive under load.
 
 Invoked via /usr/bin/python3 (the system interpreter), deliberately bypassing
 any `mise`/`pyenv`/etc. shim: this process's env (PATH, GEM_HOME, ...) is
@@ -114,7 +115,7 @@ IDLE_LIMIT = int(os.environ.get("WATCHDOG_IDLE", "90"))
 POLL = int(os.environ.get("WATCHDOG_POLL", "5"))
 MAX_RUNTIME = int(os.environ.get("WATCHDOG_MAX_RUNTIME", "0"))  # 0 = disabled
 POLL_CAP = int(os.environ.get("WATCHDOG_POLL_CAP", "1800"))
-NICE = int(os.environ.get("WATCHDOG_NICE", "19"))
+NICE = 20 if sys.platform == "darwin" else 19
 CPU_EPSILON = 0.05  # seconds of CPU advance that counts as "still working"
 TARGET_GONE_GRACE = 3 * POLL
 PARENT_PID = os.getppid()  # captured before our own parent can possibly exit
@@ -599,17 +600,16 @@ def dump_diagnostics(pgid, busiest, reason, detail="", grace=None):
     sys.stdout.flush()
 
 
-def child_setup():
-    """Runs in the forked child before exec: own process group, then lowered
-    priority (inherited by every descendant). Never raise — a failed
-    priority change must not stop the command from running."""
+def child_setup() -> None:
+    """Create the task's process group and require lowest priority before exec."""
     os.setpgrp()
-    if NICE > 0:
-        try:
-            current = os.getpriority(os.PRIO_PROCESS, 0)
-            os.setpriority(os.PRIO_PROCESS, 0, max(current, min(NICE, 20)))
-        except OSError:
-            pass
+    try:
+        os.setpriority(os.PRIO_PROCESS, 0, NICE)
+    except OSError as error:
+        # Popen replaces preexec exceptions with a generic SubprocessError.
+        # Preserve the OS diagnostic on the child's redirected stderr.
+        os.write(2, (str(error) + "\n").encode("utf-8"))
+        raise
 
 
 
@@ -729,10 +729,21 @@ def main() -> int:
     # Launch the child in its OWN process group so we can signal the whole tree
     # (e.g. a test runner + any forked browsers/vite). pgid == pid.
     r_fd, w_fd = os.pipe()
-    proc = subprocess.Popen(
-        ["/bin/bash", "-c", cmd], stdout=w_fd, stderr=w_fd, preexec_fn=child_setup
-    )
-    os.close(w_fd)
+    try:
+        proc = subprocess.Popen(
+            ["/bin/bash", "-c", cmd], stdout=w_fd, stderr=w_fd, preexec_fn=child_setup
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        os.close(w_fd)
+        # Popen has reaped the failed child; with our writer closed, this
+        # reads its setup diagnostic (or EOF) without waiting for a task.
+        detail = os.read(r_fd, 65_536).decode("utf-8", errors="replace").strip() or str(error)
+        os.close(r_fd)
+        debug_log({"stage": "cw-launch-failed", "cmd": cmd, "error": detail})
+        print("command-watchdog: unable to start command at lowest CPU priority: {}".format(detail), file=sys.stderr)
+        return 125
+    else:
+        os.close(w_fd)
     pgid = os.getpgid(proc.pid)
 
     tracker = PollTracker(cmd, proc.pid, pgid) if is_poll_loop(cmd) else None

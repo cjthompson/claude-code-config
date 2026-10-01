@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.90 - 2026-10-01
+
+### Changes
+- **command-watchdog** `2.0.0`: every task starts at the lowest CPU priority (niceness 20 on macOS, 19 elsewhere), which descendants inherit. `WATCHDOG_NICE` no longer overrides priority, including for RTK rewrite decisions. If priority setup fails, the task is not executed and the watchdog exits 125 with the OS error. RTK retains its 15-second cap and skips rewriting if CPU contention causes a timeout.
+
 ## v0.0.89 - 2026-09-27
 
 ### Features

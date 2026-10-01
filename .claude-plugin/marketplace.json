@@ -74,7 +74,7 @@
       "name": "command-watchdog",
       "source": "./plugins/command-watchdog",
       "description": "Idle-hang watchdog for every Bash command — kills it when output and CPU both go flat, when its parent exits, or (for until/while wait loops) when the processes and files it waits on stop making progress.",
-      "version": "1.5.3",
+      "version": "2.0.0",
       "keywords": ["hooks", "bash", "watchdog", "idle-detection"],
       "category": "development"
     },
