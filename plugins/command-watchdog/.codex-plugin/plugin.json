@@ -16,10 +16,9 @@
     ],
     "interface": {
         "displayName": "Command Watchdog",
-        "shortDescription": "Stop shell commands that hang, run too long, or outlive their parent.",
-        "longDescription": "A PreToolUse hook that wraps each shell command in a watchdog. It stops commands whose output and CPU both go flat, that run past their limit, or whose parent has exited, and it judges until/while wait loops by the processes and files they wait on. Codex loads the hook from hooks/hooks.json and must trust it before it runs.",
+        "shortDescription": "Claude Code Bash watchdog; Codex hook support is unavailable.",
+        "longDescription": "This plugin's watchdog is a Claude Code PreToolUse hook. Codex plugins do not load this Claude-format hooks/hooks.json file, and this plugin currently provides no Codex runtime component.",
         "developerName": "cjthompson",
-        "category": "Development",
-        "capabilities": ["Hooks", "Shell"]
+        "category": "Development"
     }
 }

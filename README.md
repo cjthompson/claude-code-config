@@ -12,7 +12,9 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
-The Python and TypeScript development plugins also include Codex manifests and are listed in the repo-local Codex marketplace. From this checkout, add it with `codex plugin marketplace add .agents/plugins`, then install a listed language plugin by name. Cursor manifests are included alongside them.
+This repository has host-specific plugin catalogs. Add the Codex catalog from this checkout with `codex plugin marketplace add .agents/plugins`. The Codex and Cursor catalogs currently list these eight skill-bundle plugins: `project-tasks`, `python-scripting`, `python-development`, `typescript-development`, `agent-team-development`, `orchestration-strategy`, `rust-coding`, and `textual`. For Cursor, import this repository's `.cursor-plugin/marketplace.json` from the Plugins settings.
+
+`command-watchdog`, `lean-agents`, and `output-styles` are not listed in the Codex or Cursor catalogs yet because their host-specific runtime components are not available there. In particular, Codex and Cursor do not load the Claude Code watchdog hook from `hooks/hooks.json`.
 
 ### Available plugins
 

@@ -2,7 +2,7 @@
     "name": "rust-coding",
     "displayName": "Rust Coding",
     "version": "1.0.1",
-    "description": "Guide Claude in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
+    "description": "Guide an AI coding assistant in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
     "homepage": "https://github.com/cjthompson/claude-code-config",

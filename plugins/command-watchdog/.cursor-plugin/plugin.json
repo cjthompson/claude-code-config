@@ -2,7 +2,7 @@
     "name": "command-watchdog",
     "displayName": "Command Watchdog",
     "version": "1.5.3",
-    "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
+    "description": "Claude Code PreToolUse watchdog. Cursor hook support is not available yet.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
     "homepage": "https://github.com/cjthompson/claude-code-config",
@@ -18,6 +18,5 @@
         "rspec",
         "rtk"
     ],
-    "category": "developer-tools",
-    "hooks": {}
+    "category": "developer-tools"
 }

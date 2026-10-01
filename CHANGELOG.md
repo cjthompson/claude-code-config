@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.90 - 2026-09-30
+
+### Fixes
+- Codex now lists the four additional skill-bundle plugins in its repository marketplace. Added a Cursor repository marketplace for the same eight plugins.
+- Marked command-watchdog as unavailable on Codex and Cursor until host-native runtime support exists; removed the empty Cursor hook declaration and the false Codex hook-loading claim.
+
 ## v0.0.89 - 2026-09-27
 
 ### Features
