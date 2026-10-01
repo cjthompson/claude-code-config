@@ -1,0 +1,21 @@
+{
+    "name": "orchestration-strategy",
+    "version": "1.0.1",
+    "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["orchestration", "parallel", "agents", "worktree"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Orchestration Strategy",
+        "shortDescription": "Choose between solo, parallel, sequential, or team execution.",
+        "longDescription": "Evaluates a multi-task workload and recommends the most cost-efficient way to run it: a single agent, parallel subagents, sequential subagents, or a coordinated agent team, with worktree isolation where tasks would collide.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Workflow", "Agents"],
+        "defaultPrompt": [
+            "How should I orchestrate these five tasks?",
+            "Should these changes run in parallel or sequentially?"
+        ]
+    }
+}

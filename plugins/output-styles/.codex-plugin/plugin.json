@@ -1,0 +1,16 @@
+{
+    "name": "output-styles",
+    "version": "1.0.1",
+    "description": "Custom output styles for Claude Code — selectable via /output-style.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["output", "output-styles", "formatting", "terse", "concise"],
+    "interface": {
+        "displayName": "Output Styles",
+        "shortDescription": "Terse and Concise response styles for Claude Code.",
+        "longDescription": "Two Claude Code output styles, Terse and Concise, selectable via /output-style. Codex has no output-style component, so this plugin installs no Codex components yet.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Formatting"]
+    }
+}

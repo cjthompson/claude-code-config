@@ -1,14 +1,14 @@
 {
-    "name": "python-scripting",
-    "displayName": "Python Scripting",
+    "name": "agent-team-development",
+    "displayName": "Agent Team Development",
     "version": "1.0.1",
-    "description": "Low-context guidance for safe one-off Python helpers, typed scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+    "description": "End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agent communication and worktree isolation.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
     "homepage": "https://github.com/cjthompson/claude-code-config",
     "repository": "https://github.com/cjthompson/claude-code-config",
     "license": "MIT",
-    "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
+    "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
     "category": "developer-tools",
     "skills": "./skills/"
 }

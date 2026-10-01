@@ -1,0 +1,14 @@
+{
+    "name": "lean-agents",
+    "displayName": "Lean Agents",
+    "version": "1.0.3",
+    "description": "Reduced-toolset sub-agent profiles (read-only, lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with project-tasks, which dispatches to these agents by name.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["subagents", "token-overhead", "context-window", "routing", "escalation"],
+    "category": "developer-tools",
+    "agents": []
+}

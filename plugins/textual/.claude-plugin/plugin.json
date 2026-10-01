@@ -1,6 +1,6 @@
 {
     "name": "textual",
-    "description": "Reference skills for the Textual TUI framework — CSS properties and widget API",
+    "description": "Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes.",
     "author": { "name": "cjthompson" },
     "keywords": ["textual", "tui", "python", "css", "widgets"],
     "license": "MIT"

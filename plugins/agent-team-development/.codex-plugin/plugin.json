@@ -1,0 +1,21 @@
+{
+    "name": "agent-team-development",
+    "version": "1.0.1",
+    "description": "End-to-end Agent Teams orchestration for cross-cutting work requiring inter-agent communication and worktree isolation.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["agent-teams", "worktree", "cherry-pick", "coordination"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Agent Team Development",
+        "shortDescription": "Coordinate multi-agent work with worktree isolation.",
+        "longDescription": "A workflow for cross-cutting changes that need inter-agent communication: splitting work across agents, isolating each in its own git worktree, and cherry-picking results back together. Written for Claude Code Agent Teams; on other hosts the leader coordinates agents directly.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code", "Workflow", "Agents"],
+        "defaultPrompt": [
+            "Plan this cross-layer change as an agent team",
+            "Split this refactor across agents in separate worktrees"
+        ]
+    }
+}

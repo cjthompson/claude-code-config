@@ -136,6 +136,13 @@ class PythonPluginStructureTests(unittest.TestCase):
                 self.assertIn("interface", manifest)
 
     def test_cross_host_manifest_metadata_is_consistent(self) -> None:
+        claude_marketplace = json.loads(
+            (ROOT / ".claude-plugin/marketplace.json").read_text()
+        )
+        marketplace_versions = {
+            entry["name"]: entry["version"]
+            for entry in claude_marketplace["plugins"]
+        }
         for plugin_name in EXPECTED_SKILLS:
             plugin = PLUGINS / plugin_name
             claude = json.loads(
@@ -151,10 +158,14 @@ class PythonPluginStructureTests(unittest.TestCase):
                 self.assertEqual(claude["name"], plugin_name)
                 self.assertTrue(claude["description"])
                 self.assertEqual(cursor["name"], plugin_name)
-                self.assertEqual(cursor["version"], "1.0.0")
+                self.assertEqual(
+                    cursor["version"], marketplace_versions[plugin_name]
+                )
                 self.assertEqual(cursor["skills"], "./skills/")
                 self.assertEqual(codex["name"], plugin_name)
-                self.assertEqual(codex["version"], "1.0.0")
+                self.assertEqual(
+                    codex["version"], marketplace_versions[plugin_name]
+                )
                 self.assertEqual(codex["skills"], "./skills/")
 
     def test_codex_marketplace_registers_both_python_plugins(self) -> None:

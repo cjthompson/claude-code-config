@@ -1,7 +1,7 @@
 {
     "name": "python-scripting",
-    "version": "1.0.0",
-    "description": "Low-context guidance for type-safe Python scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+    "version": "1.0.1",
+    "description": "Low-context guidance for safe one-off Python helpers, typed scripts, lightweight quality checks, and zero-dependency macOS utilities.",
     "author": { "name": "cjthompson" },
     "license": "MIT",
     "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],

@@ -1,0 +1,21 @@
+{
+    "name": "rust-coding",
+    "version": "1.0.1",
+    "description": "Guide Claude in writing idiomatic Rust with proper data modeling, traits, macros, and build-speed best practices.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["rust", "coding", "idioms", "traits"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Rust Coding",
+        "shortDescription": "Write idiomatic, well-structured Rust.",
+        "longDescription": "Guidance for idiomatic, efficient Rust: data modeling, traits and impl organization, macros, and build-speed best practices for Cargo projects.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code"],
+        "defaultPrompt": [
+            "Review this Rust module for idiomatic design",
+            "Model this domain with Rust types and traits"
+        ]
+    }
+}

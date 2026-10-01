@@ -1,0 +1,25 @@
+{
+    "name": "command-watchdog",
+    "version": "1.5.3",
+    "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": [
+        "hooks",
+        "bash",
+        "watchdog",
+        "idle-detection",
+        "orphan-detection",
+        "wait-loops",
+        "rspec",
+        "rtk"
+    ],
+    "interface": {
+        "displayName": "Command Watchdog",
+        "shortDescription": "Stop shell commands that hang, run too long, or outlive their parent.",
+        "longDescription": "A PreToolUse hook that wraps each shell command in a watchdog. It stops commands whose output and CPU both go flat, that run past their limit, or whose parent has exited, and it judges until/while wait loops by the processes and files they wait on. Codex loads the hook from hooks/hooks.json and must trust it before it runs.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Hooks", "Shell"]
+    }
+}

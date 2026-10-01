@@ -2,6 +2,6 @@
     "name": "output-styles",
     "description": "Custom output styles for Claude Code — selectable via /output-style.",
     "author": { "name": "cjthompson" },
-    "keywords": ["output", "styles", "formatting"],
+    "keywords": ["output", "output-styles", "formatting", "terse", "concise"],
     "license": "MIT"
 }

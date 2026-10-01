@@ -1,0 +1,23 @@
+{
+    "name": "command-watchdog",
+    "displayName": "Command Watchdog",
+    "version": "1.5.3",
+    "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": [
+        "hooks",
+        "bash",
+        "watchdog",
+        "idle-detection",
+        "orphan-detection",
+        "wait-loops",
+        "rspec",
+        "rtk"
+    ],
+    "category": "developer-tools",
+    "hooks": {}
+}

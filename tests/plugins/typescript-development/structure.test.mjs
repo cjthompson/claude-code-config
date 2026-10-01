@@ -31,12 +31,14 @@ test("cross-host manifests expose the same TypeScript development plugin", async
     const claude = await readJson(join(PLUGIN, ".claude-plugin/plugin.json"));
     const codex = await readJson(join(PLUGIN, ".codex-plugin/plugin.json"));
     const cursor = await readJson(join(PLUGIN, ".cursor-plugin/plugin.json"));
+    const marketplace = await readJson(join(ROOT, ".claude-plugin/marketplace.json"));
+    const { version } = marketplace.plugins.find(({ name }) => name === "typescript-development");
 
     assert.equal(claude.name, "typescript-development");
     assert.equal("version" in claude, false);
     for (const manifest of [codex, cursor]) {
         assert.equal(manifest.name, "typescript-development");
-        assert.equal(manifest.version, "1.0.0");
+        assert.equal(manifest.version, version);
         assert.equal(manifest.skills, "./skills/");
     }
     assert.deepEqual(codex.interface.capabilities, [
@@ -72,12 +74,12 @@ test("plugin contains exactly the six approved model-unpinned skills", async () 
 
 test("plugin registers in Claude and Codex marketplaces", async () => {
     const claude = await readJson(join(ROOT, ".claude-plugin/marketplace.json"));
-    const claudeEntry = claude.plugins.find(({ name }) => name === "typescript-development");
+    const { version, ...claudeEntry } = claude.plugins.find(({ name }) => name === "typescript-development");
+    assert.match(version, /^\d+\.\d+\.\d+$/);
     assert.deepEqual(claudeEntry, {
         name: "typescript-development",
         source: "./plugins/typescript-development",
         description: "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
-        version: "1.0.1",
         keywords: ["typescript", "testing", "tooling", "modules", "typing", "packaging", "lsp"],
         category: "development",
     });

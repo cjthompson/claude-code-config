@@ -12,7 +12,7 @@
       "name": "project-tasks",
       "source": "./plugins/project-tasks",
       "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
       "category": "development"
     },
@@ -33,9 +33,9 @@
     {
       "name": "output-styles",
       "source": "./plugins/output-styles",
-      "description": "Various output-styles",
+      "description": "Custom output styles for Claude Code — selectable via /output-style.",
       "version": "1.0.1",
-      "keywords": ["output", "output-styles", "terse", "concise"],
+      "keywords": ["output", "output-styles", "formatting", "terse", "concise"],
       "category": "development"
     },
     {
@@ -73,9 +73,18 @@
     {
       "name": "command-watchdog",
       "source": "./plugins/command-watchdog",
-      "description": "Idle-hang watchdog for every Bash command — kills it when output and CPU both go flat, when its parent exits, or (for until/while wait loops) when the processes and files it waits on stop making progress.",
+      "description": "PreToolUse hook that supervises every Bash command, stops idle, overlong or orphaned commands, tracks real targets for wait loops, and supervises rtk's rewrite decision.",
       "version": "1.5.3",
-      "keywords": ["hooks", "bash", "watchdog", "idle-detection"],
+      "keywords": [
+        "hooks",
+        "bash",
+        "watchdog",
+        "idle-detection",
+        "orphan-detection",
+        "wait-loops",
+        "rspec",
+        "rtk"
+      ],
       "category": "development"
     },
     {
@@ -98,7 +107,7 @@
       "name": "typescript-development",
       "source": "./plugins/typescript-development",
       "description": "Deep TypeScript production guidance for testing, tooling, modules, packaging, and type-system work.",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "keywords": [
         "typescript",
         "testing",

@@ -1,14 +1,14 @@
 {
-    "name": "python-scripting",
-    "displayName": "Python Scripting",
+    "name": "orchestration-strategy",
+    "displayName": "Orchestration Strategy",
     "version": "1.0.1",
-    "description": "Low-context guidance for safe one-off Python helpers, typed scripts, lightweight quality checks, and zero-dependency macOS utilities.",
+    "description": "Evaluate multi-task workloads and select the most cost-efficient orchestration approach: solo, parallel, sequential, or Agent Teams.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
     "homepage": "https://github.com/cjthompson/claude-code-config",
     "repository": "https://github.com/cjthompson/claude-code-config",
     "license": "MIT",
-    "keywords": ["python", "scripts", "typing", "ruff", "ty", "macos"],
+    "keywords": ["orchestration", "parallel", "agents", "worktree"],
     "category": "developer-tools",
     "skills": "./skills/"
 }

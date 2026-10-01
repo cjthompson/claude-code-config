@@ -1,0 +1,13 @@
+{
+    "name": "output-styles",
+    "displayName": "Output Styles",
+    "version": "1.0.1",
+    "description": "Custom output styles for Claude Code — selectable via /output-style.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["output", "output-styles", "formatting", "terse", "concise"],
+    "category": "developer-tools"
+}

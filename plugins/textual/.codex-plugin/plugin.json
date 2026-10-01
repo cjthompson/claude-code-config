@@ -1,0 +1,21 @@
+{
+    "name": "textual",
+    "version": "1.0.1",
+    "description": "Reference skills for the Textual Python TUI framework — valid CSS properties and complete widget API with reactive attributes.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["textual", "tui", "python", "css", "widgets"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Textual",
+        "shortDescription": "Textual TUI CSS and widget API reference.",
+        "longDescription": "Reference material for the Textual Python TUI framework: the valid CSS properties, and the widget API including constructor parameters, reactive attributes, and emitted messages.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Code", "Reference"],
+        "defaultPrompt": [
+            "Which Textual CSS properties control layout?",
+            "What reactive attributes does a Textual DataTable have?"
+        ]
+    }
+}

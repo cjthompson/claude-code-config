@@ -1,0 +1,15 @@
+{
+    "name": "project-tasks",
+    "displayName": "Project Tasks",
+    "version": "2.3.0",
+    "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
+    "author": { "name": "cjthompson" },
+    "publisher": "cjthompson",
+    "homepage": "https://github.com/cjthompson/claude-code-config",
+    "repository": "https://github.com/cjthompson/claude-code-config",
+    "license": "MIT",
+    "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
+    "category": "developer-tools",
+    "skills": "./skills/",
+    "commands": "./commands/"
+}

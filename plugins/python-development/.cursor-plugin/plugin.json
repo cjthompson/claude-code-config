@@ -1,7 +1,7 @@
 {
     "name": "python-development",
     "displayName": "Python Development",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Deep Python production guidance for testing, project tooling, concurrency, and type-system work.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",

@@ -1,0 +1,16 @@
+{
+    "name": "lean-agents",
+    "version": "1.0.3",
+    "description": "Reduced-toolset sub-agent profiles (read-only, lean-executor, standard-executor, main, full-executor) that lower System-tools token overhead vs. spawning the default agent. Pair with project-tasks, which dispatches to these agents by name.",
+    "author": { "name": "cjthompson" },
+    "license": "MIT",
+    "keywords": ["subagents", "token-overhead", "context-window", "routing", "escalation"],
+    "interface": {
+        "displayName": "Lean Agents",
+        "shortDescription": "Reduced-toolset sub-agent profiles for Claude Code.",
+        "longDescription": "Five Claude Code sub-agent profiles, from read-only to full-executor, that carry only the tools a sub-task needs. Codex plugins cannot bundle custom agents, so this plugin installs no Codex components yet.",
+        "developerName": "cjthompson",
+        "category": "Development",
+        "capabilities": ["Agents"]
+    }
+}
