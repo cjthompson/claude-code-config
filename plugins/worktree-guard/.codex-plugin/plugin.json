@@ -1,0 +1,18 @@
+{
+  "name": "worktree-guard",
+  "description": "Hooks that keep edits out of a repository's main checkout: blocks apply_patch edits targeting a main checkout, plus a SessionStart rule telling Codex to work in a git worktree.",
+  "version": "1.0.0",
+  "author": {
+    "name": "cjthompson"
+  },
+  "license": "MIT",
+  "keywords": ["hooks", "git", "worktree", "safety", "parallel-agents"],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Worktree Guard",
+    "shortDescription": "Keep edits out of a repository's main checkout.",
+    "longDescription": "A PreToolUse hook resolves the repository of every file an apply_patch call touches and denies the edit when any file is in a main checkout rather than a linked git worktree. Codex hooks cannot prompt, so the edit is blocked outright; launch Codex with WORKTREE_GUARD_DISABLE=1 to allow main-checkout edits for a session. A SessionStart hook adds the worktree rule to the model's context. Shell-based writes are not intercepted.",
+    "developerName": "cjthompson",
+    "category": "Development"
+  }
+}

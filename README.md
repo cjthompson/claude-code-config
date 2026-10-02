@@ -12,9 +12,9 @@ Install skills directly using Claude Code's built-in plugin system:
 
 Then browse and install individual plugins from the `/plugin` UI.
 
-This repository has host-specific plugin catalogs. Add the Codex catalog from this checkout with `codex plugin marketplace add .agents/plugins`, then install a listed plugin with `codex plugin add <name>@cjthompson`. The Codex and Cursor catalogs list these eight skill-bundle plugins: `project-tasks`, `python-scripting`, `python-development`, `typescript-development`, `agent-team-development`, `orchestration-strategy`, `rust-coding`, and `textual`. The Codex catalog also lists `command-watchdog`, which uses the shared hook and runner. For Cursor, import this repository's `.cursor-plugin/marketplace.json` from the Plugins settings.
+This repository has host-specific plugin catalogs. Add the Codex catalog from this checkout with `codex plugin marketplace add .agents/plugins`, then install a listed plugin with `codex plugin add <name>@cjthompson`. The Codex and Cursor catalogs list these eight skill-bundle plugins: `project-tasks`, `python-scripting`, `python-development`, `typescript-development`, `agent-team-development`, `orchestration-strategy`, `rust-coding`, and `textual`. The Codex catalog also lists the hook plugins `command-watchdog` and `worktree-guard`, which share their hooks with Claude Code. For Cursor, import this repository's `.cursor-plugin/marketplace.json` from the Plugins settings.
 
-`lean-agents` and `output-styles` are not listed in the Codex or Cursor catalogs because their host-specific runtime components are unavailable there. `command-watchdog` is not listed in the Cursor catalog because Cursor runtime support is unavailable. See the watchdog section below for Codex installation, hook trust, and execution limitations.
+`lean-agents` and `output-styles` are not listed in the Codex or Cursor catalogs because their host-specific runtime components are unavailable there. `command-watchdog` and `worktree-guard` are not listed in the Cursor catalog because Cursor runtime support is unavailable. See the watchdog section below for Codex installation, hook trust, and execution limitations.
 
 ### Available plugins
 
@@ -31,6 +31,7 @@ This repository has host-specific plugin catalogs. Add the Codex catalog from th
 | **python-scripting** | One-off Python helpers, practical typing, standalone-file quality checks, and standard-library macOS automation |
 | **python-development** | Deep Python standards, testing, repository tooling and quality checks, concurrency, the full typing specification, and focused type tightening |
 | **typescript-development** | Deep TypeScript standards, testing, project tooling, modules and packaging, focused official references, and low-churn type tightening |
+| **worktree-guard** | Asks before any `Edit`/`Write`/`NotebookEdit` that targets a repository's main checkout (Codex: blocks the `apply_patch`), and tells the agent at session start to work in a git worktree |
 
 ## Installer
 
@@ -158,6 +159,21 @@ Interrupting or terminating the watchdog (`SIGINT`, `SIGTERM`, or `SIGHUP`) forw
 If none move for the idle window the loop is killed (`poll-idle`). A loop with no parseable target keeps the normal rules plus a 30-minute cap (`WATCHDOG_POLL_CAP`). Tests: `/usr/bin/python3 -m unittest discover -s plugins/command-watchdog/tests -v`.
 
 To add a pattern, edit `plugins/command-watchdog/hooks/watchdog-patterns.txt` — one `<regex>  [idle_seconds]` per line. See the file's header comment for the exact matching rules.
+
+### worktree-guard
+
+Keeps agent file edits out of a repository's **main checkout** so parallel sessions and agents don't tangle uncommitted work. Supports Claude Code and Codex from one `hooks/hooks.json`. Two hooks:
+
+- **`PreToolUse`** on `Edit|Write|NotebookEdit|apply_patch` — resolves the repository containing each *edited file* (not the session's working directory). A file is gated when it is in a main checkout (the working tree whose git dir equals the common dir). Files in a linked worktree, outside any repository, or in a bare repository pass silently. Any internal error fails open.
+  - **Claude Code** — returns `permissionDecision: "ask"`, so you approve or reject the edit. Approving is the per-edit bypass.
+  - **Codex** — returns `permissionDecision: "deny"`. Codex parses `"ask"` but does not support it yet (it logs a hook failure and lets the edit through), so blocking is the only effective gate. Every path in the patch's `*** Add File:`, `*** Update File:`, `*** Delete File:`, and `*** Move to:` headers is checked.
+- **`SessionStart`** — injects `hooks/worktree-rule.md` as context: work in a worktree, treat the prompt or denial as the cue to create one, and honor user bypass phrases such as "edit main directly".
+
+To disable the guard for a whole session — the only bypass in Codex — launch `claude` or `codex` with `WORKTREE_GUARD_DISABLE=1`. Shell-based writes (`sed -i`, redirects) are not intercepted.
+
+Install in Codex from the repository root with `codex plugin marketplace add .agents/plugins` and `codex plugin add worktree-guard@cjthompson`, then review and trust the hooks in `/hooks`.
+
+Tests: `/usr/bin/python3 -m unittest discover -s plugins/worktree-guard/tests -v`.
 
 ## Output Styles
 

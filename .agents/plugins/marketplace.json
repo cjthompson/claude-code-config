@@ -111,6 +111,18 @@
                 "authentication": "ON_INSTALL"
             },
             "category": "Development"
+        },
+        {
+            "name": "worktree-guard",
+            "source": {
+                "source": "local",
+                "path": "./plugins/worktree-guard"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Development"
         }
     ]
 }

@@ -1,0 +1,10 @@
+{
+    "name": "worktree-guard",
+    "description": "Hooks that keep edits out of a repository's main checkout: a PreToolUse ask-prompt on Edit/Write/NotebookEdit (deny on Codex apply_patch) targeting a main checkout, plus a SessionStart rule telling Claude to work in a git worktree.",
+    "author": {
+        "name": "cjthompson"
+    },
+    "keywords": ["hooks", "git", "worktree", "safety", "parallel-agents"],
+    "license": "MIT",
+    "version": "1.0.0"
+}
