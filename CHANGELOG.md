@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.92 - 2026-10-01
+
+### Features
+- **worktree-guard** (new plugin): gates any file edit whose target is in a repository's main checkout, so edits happen in a git worktree instead. Claude Code asks for approval before the `Edit`/`Write`/`NotebookEdit`; Codex blocks the `apply_patch`, because Codex hooks cannot prompt. The check follows each edited file's repository, not the session's working directory. A `SessionStart` hook adds the worktree rule and user bypass phrases to the agent's context. Launch with `WORKTREE_GUARD_DISABLE=1` to turn it off for a session. Listed in the Claude Code and Codex catalogs.
+
 ## v0.0.91 - 2026-10-01
 
 ### Features
