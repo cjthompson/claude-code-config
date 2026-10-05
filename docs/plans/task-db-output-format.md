@@ -73,8 +73,9 @@ depends on how many parts a result has:
 | `md` | every part, in order, preceded by a `## <part>` heading | GFM table with the declared columns (header and delimiter only when empty) | emitted verbatim |
 
 `pipe` escaping is lossless so every record and text block stays on one line: backslash
-doubled, `|` as `\|`, newline as `\n`, and a leading `#` as `\#` so no escaped line can be
-mistaken for a `## <part>` header. This also fixes titles that contain `|`.
+doubled, `|` as `\|`, newline as `\n`, and a leading `##` as `\##` so no escaped line can be
+mistaken for a `## <part>` header. A single leading `#` is left alone, so display IDs such as
+`#001` in a first column stay unescaped. This also fixes titles that contain `|`.
 
 `emit()` stays the only stdout writer; it receives the formatted string.
 
