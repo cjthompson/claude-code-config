@@ -38,7 +38,7 @@ The user says:
    ```
 
 3. The helper returns `#001`, which the skill reports to the user.
-4. `$TASK_DB task get --project "claude-monitor" --seq "#001"` shows:
+4. `$TASK_DB task get --project "claude-monitor" --seq "#001" --format json` shows, in `task[0]`:
    - `type`: `fix`
    - `title`: `Log lines should never exceed one line`
    - `priority`: `high`

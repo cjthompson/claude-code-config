@@ -15,17 +15,17 @@ acting on the post-execution decision menu.
 
 ## Preconditions
 
-1. Read the task and require status `pending`. Do not duplicate an
+1. Read the task (`task get --format json`; fields are in `task[0]`) and require status `pending`. Do not duplicate an
    `in_progress`, `scouting`, `executing`, `awaiting_decision`, or `validating`
    pipeline. Completed/cancelled work needs a new task or explicit rerun with a
    fresh context.
 2. Check dependencies:
 
    ```bash
-   $TASK_DB task deps check --project "$PROJECT" --seq "#{SEQ}"
+   $TASK_DB task deps check --project "$PROJECT" --seq "#{SEQ}" --format json
    ```
 
-   Any output means blocked; report each `#NNN|title|status` row and stop.
+   The task is blocked when the `dependencies` part is non-empty; report each row's `number`, `title`, and `status` and stop.
 3. Create/reuse the deterministic Scout task-list entry and sync `pending`.
 4. Require `activeDispatch` to be empty.
 
@@ -168,8 +168,8 @@ but still record the real completion time.
 
 After completion:
 
-- run `task deps unblocked` and report newly unblocked tasks;
-- if linked to a plan, use the task's returned `plan_seq` and `plan_project` to
+- run `task deps unblocked --format md` and print its output verbatim to report newly unblocked tasks;
+- if linked to a plan, use `task[0].plan_seq` and `task[0].plan_project` from `task get --format json` to
   check `plan progress --counts`; offer closure only when total is nonzero and
   pending/in-progress/blocked are all zero;
 - update `CHANGELOG.md` using `task-commands.md`;

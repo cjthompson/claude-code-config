@@ -20,7 +20,7 @@ baseline snapshot, and ownership boundary before dispatch.
 
 ## Default Pipeline
 
-1. Check dependencies with `$TASK_DB task deps check`.
+1. Check dependencies with `$TASK_DB task deps check --format json`.
 2. Create the two TaskList entries with `syncTaskToList(seq, "pending", ...)`.
 3. Dispatch a background Planning Scout using the read-only profile and the
    host-resolved **Strong tier**.

@@ -21,12 +21,12 @@
  */
 
 import { isAbsolute } from 'node:path';
-import { COMMANDS, GROUPS, RENAMES, GLOBALS, HELP_FLAGS } from './registry.mjs';
+import { COMMANDS, GROUPS, RENAMES, GLOBALS, HELP_FLAGS, ENUMS } from './registry.mjs';
 import { normalizeProject, slugify } from './normalize.mjs';
 
 /**
  * @typedef {{ kind:'run', command:string, route:string[], handler:string,
- *             opts:Object, global:{ project:string|null, outputFile:string|null } }} RunAction
+ *             opts:Object, global:{ project:string|null, outputFile:string|null, format:string } }} RunAction
  * @typedef {{ kind:'help', command:string|null, usage:string }} HelpAction
  * @typedef {{ project:string, seq:number }} TaskRef
  * @typedef {RunAction|HelpAction} Action
@@ -251,8 +251,8 @@ function coerce(flag, value, opt, command) {
 
             // `--seq` accepts the display form the helper itself prints.
             //
-            // Every output names a row as `P002` or `#004`, and `task get`
-            // returns `plan_seq` as the string "P002" — so the natural move,
+            // Every output names a row as `P002` or `#004`, and `task get --format json`
+            // returns `plan_seq` as the string "P002" in its `task` part — so the natural move,
             // for a person and for a small model alike, is to hand that value
             // straight back. Rejecting it taught nothing: the reader saw
             // "expects an integer" and had to work out that the P is
@@ -352,6 +352,43 @@ function coerce(flag, value, opt, command) {
     throw new CliError('unreachable');
 }
 
+// ── format validation ─────────────────────────────────────────
+
+/**
+ * Extract and validate --format value early, before route resolution.
+ * Must NOT remove the token (so the `exclusive` rule can still fire).
+ *
+ * @param {string[]} tokens
+ * @returns {void}
+ * @throws {CliError}
+ */
+function extractFormat(tokens) {
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const eq = token.indexOf('=');
+        const flag = eq === -1 ? token : token.slice(0, eq);
+
+        if (flag === '--format') {
+            let value;
+            if (eq !== -1) {
+                value = token.slice(eq + 1);
+            } else if (i + 1 < tokens.length) {
+                value = tokens[i + 1];
+            } else {
+                // Missing value will be caught by the main parser
+                return;
+            }
+
+            if (value && !ENUMS.format.includes(value)) {
+                fail(
+                    `ERROR: invalid value '${value}' for '--format'.`,
+                    `Expected one of: ${ENUMS.format.join(', ')}.`,
+                );
+            }
+        }
+    }
+}
+
 // ── the parser ────────────────────────────────────────────────
 
 /**
@@ -386,6 +423,9 @@ export function parseArgv(argv) {
         return { kind: 'help', command, usage: usageFor(command) };
     }
 
+    // Validate --format early before route resolution
+    extractFormat(tokens);
+
     const route = resolveRoute(words);
     if (route.kind === 'help') {
         return { kind: 'help', command: route.command, usage: usageFor(route.command) };
@@ -404,8 +444,7 @@ export function parseArgv(argv) {
     const seen = new Set();
     /** @type {Record<string, string>} */
     const rawValues = {};
-    let project = null;
-    let outputFile = null;
+    const global = { project: null, outputFile: null, format: null };
 
     /** Is this token a flag this command would recognize? */
     const isKnownFlag = (token) =>
@@ -477,11 +516,11 @@ export function parseArgv(argv) {
         if (flag === '--project') {
             const normalized = normalizeProject(value);
             if (normalized === '') fail(`ERROR: '--project' value '${value}' normalizes to nothing.`);
-            project = normalized;
+            global.project = normalized;
             continue;
         }
         if (isGlobal) {
-            outputFile = coerce(flag, value, opt, command);
+            global[opt.key] = coerce(flag, value, opt, command);
             continue;
         }
 
@@ -495,7 +534,7 @@ export function parseArgv(argv) {
         }
     }
 
-    if (spec.project && project === null) {
+    if (spec.project && global.project === null) {
         fail(`ERROR: '--project' is required for '${command}'.`);
     }
 
@@ -515,13 +554,20 @@ export function parseArgv(argv) {
         else if ('default' in opt) opts[opt.key] = opt.default;
     }
 
+    // Apply defaults for global options that weren't seen
+    for (const [flag, opt] of Object.entries(GLOBALS)) {
+        if (seen.has(flag)) continue;
+        if (flag === '--project') continue; // Already handled above
+        global[opt.key] = 'default' in opt ? opt.default : null;
+    }
+
     return {
         kind: 'run',
         command,
         route: command.split(' '),
         handler: spec.handler,
         opts,
-        global: { project, outputFile },
+        global,
     };
 }
 

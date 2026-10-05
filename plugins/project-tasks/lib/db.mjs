@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, posix, win32 } from 'node:path';
+import { format, result, statusPart } from './format.mjs';
 
 /**
  * A user-facing failure raised below the parser.
@@ -215,16 +216,6 @@ export function transaction(statements, flags = []) {
 export function sqlJson(query) {
     const out = sql(query, ['-json']);
     return out ? JSON.parse(out) : [];
-}
-
-/**
- * Run a query in pipe-separated mode — the row shape every list command emits.
- *
- * @param {string} query
- * @returns {string}
- */
-export function sqlRows(query) {
-    return sql(query, ['-separator', '|']);
 }
 
 /**
@@ -580,13 +571,14 @@ export function noteDeleteSql(planId, noteId) {
  * The single stdout choke point.
  *
  * With `--output-file` the payload goes to the file (parent dirs created,
- * overwritten) and only a one-line confirmation reaches stdout. Exit codes are
+ * overwritten) and only a confirmation reaches stdout (a formatted `status` part when `format` is set). Exit codes are
  * untouched by redirection, so a handler's 0/2/3/4 signal survives it.
  *
  * @param {string} payload
  * @param {string|null} [outputFile]
- * @param {{ raw?: boolean }} [options] `raw` writes the bytes verbatim, for
- *   content round-trips where a helpfully-added newline would break `diff`.
+ * @param {{ raw?: boolean, format?: string }} [options] `raw` writes the bytes verbatim, for
+ *   content round-trips where a helpfully-added newline would break `diff`. When `format` and
+ *   `outputFile` are both set, stdout gets a formatted status part in the specified format.
  */
 export function emit(payload, outputFile = null, options = {}) {
     const text = payload == null ? '' : String(payload);
@@ -595,10 +587,30 @@ export function emit(payload, outputFile = null, options = {}) {
     if (outputFile) {
         mkdirSync(dirname(outputFile), { recursive: true });
         writeFileSync(outputFile, body);
-        process.stdout.write(`${Buffer.byteLength(body)} bytes → ${outputFile}\n`);
+
+        // If format is specified, emit a formatted status part to stdout
+        if (options.format) {
+            const bytes = Buffer.byteLength(body);
+            const statusResult = result(statusPart('success', `${bytes} bytes → ${outputFile}`));
+            const formatted = format(statusResult, options.format);
+            process.stdout.write(`${formatted}\n`);
+        } else {
+            process.stdout.write(`${Buffer.byteLength(body)} bytes → ${outputFile}\n`);
+        }
         return;
     }
     if (body !== '') process.stdout.write(body);
+}
+
+/**
+ * Emit a Result object with formatting.
+ *
+ * @param {Object} res - Result object
+ * @param {Object} global - Global options (format, outputFile)
+ */
+export function emitResult(res, global) {
+    const formatted = format(res, global.format);
+    emit(formatted, global.outputFile, { format: global.format });
 }
 
 /**

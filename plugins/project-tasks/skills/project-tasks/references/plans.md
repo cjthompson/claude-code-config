@@ -28,11 +28,11 @@ refuses a task id by name rather than resolving it as a plan number.
 no display form and rejects `P###`. Resolve it before inserting tasks:
 
 ```bash
-$TASK_DB plan get --project "$PROJECT" --seq {plan_seq}
+$TASK_DB plan get --project "$PROJECT" --seq {plan_seq} --format json
 ```
 
-`plan get` prints a JSON **array** holding one object, so the value `--plan-id` wants is the
-`id` field of the first element, not of the payload itself.
+`plan get --format json` prints one object, `{"plan":[{…}]}`, so the value `--plan-id` wants
+is `plan[0].id` — the `id` of the first row of the `plan` part, not a field of the payload itself.
 
 **Placeholders below name their space:** `{plan_seq}` is the `P###` number, `{task_seq}` is
 a task's `#NNN`, `{plan_id}` is the global integer from `plan get`, `{note_id}` is a note id
@@ -102,7 +102,7 @@ $TASK_DB plan get --project "$PROJECT" --seq N --content-only --output-file /abs
 
 Turning a plan body into tasks:
 
-1. Read the body (`plan get --seq {plan_seq} --with-content`) and decompose it into steps —
+1. Read the body (`plan get --seq {plan_seq} --with-content --format json`; the body is `plan[0].content`) and decompose it into steps —
    one task per step heading. **If the body is empty, stop and say so.** A plan created from
    a description is title-only until a body arrives via
    `plan propose --seq {plan_seq} --content-file <path>`; never invent steps from the title.
@@ -111,7 +111,7 @@ Turning a plan body into tasks:
 3. **Present the derived list for approval before inserting anything.** Show step heading,
    derived title, type, and priority. Let the user edit or drop rows.
 4. Insert each approved step, passing the resolved global `--plan-id` — the integer from
-   `plan get`, never a `P###` and never a task seq:
+   `plan[0].id` from `plan get --format json`, never a `P###` and never a task seq:
 
 ```bash
 $TASK_DB task add --project "$PROJECT" --type {type} --title "..." --plan-id {plan_id} --anchor "..." --priority {priority}
@@ -168,12 +168,13 @@ and suggest renaming a heading. Do not guess an anchor and do not annotate both.
 **2. Classify by anchor.** Read the current rows:
 
 ```bash
-$TASK_DB plan tasks --project "$PROJECT" --seq {plan_seq}
+$TASK_DB plan tasks --project "$PROJECT" --seq {plan_seq} --format json
 ```
 
-Rows are `#NNN|project|anchor|type|title|priority|status` — the **anchor is the third
-field**, and it is the join key for everything below. Cancelled children are included, so
-filter on the status field rather than assuming the list is live work. The `project` column
+The `tasks` part holds one object per child with fields `number`, `project`, `anchor`, `type`,
+`title`, `priority`, `status` — the **`anchor` field** is the join key for everything below.
+Cancelled children are included, so filter on `status` rather than assuming the list is live
+work. The `project` field
 is there because a plan is global: `--project` names the plan's owner and never filters its
 children, so rows from other repositories appear here by design.
 
@@ -261,11 +262,11 @@ applied or discarded. Run the reconciliation loop, then delete.
 ## Listing and inspecting
 
 ```bash
-$TASK_DB plan list --project "$PROJECT"
-$TASK_DB plan list --project "$PROJECT" --status pending
+$TASK_DB plan list --project "$PROJECT" --format md
+$TASK_DB plan list --project "$PROJECT" --status pending --format md
 ```
 
-Rows are `P001|title|source|status|done|total|drift`. A non-empty drift indicator means a
+Print the output verbatim. Its `plans` table has columns `number`, `title`, `source`, `status`, `done`, `total`, `drift`. A non-empty drift indicator means a
 candidate is staged or the linked file no longer matches the applied hash.
 
 The two artifacts are different views and are not interchangeable:
@@ -295,13 +296,13 @@ For `show plan PNNN`, render `plan status` and follow it with `plan progress`.
 
 ## Running a plan (`run plan PNNN`)
 
-List the plan's tasks, filter to `pending` in the current project, drop anything `task deps
-blocked` reports, then dispatch each through Preconditions and Start the task in
+List the plan's tasks, filter to `pending` in the current project, drop any task whose `number` appears in the `blocked` part of `task deps blocked --format json`
+(which has `number`, `type`, `title`, `priority`, `status` set to `pending (blocked)`, `tags`, `dependencies`, `plan` columns), then dispatch each through Preconditions and Start the task in
 `task-execution.md`. The first child moved to `in_progress` promotes the plan automatically — never
 set the plan's status by hand for that.
 
 ```bash
-$TASK_DB plan tasks --project "$PROJECT" --seq N --status pending
+$TASK_DB plan tasks --project "$PROJECT" --seq N --status pending --format json
 ```
 
 ## Closing and cancelling
@@ -357,7 +358,7 @@ Notes are the plan's audit trail; `plan status` renders them inline.
 
 ```bash
 $TASK_DB plan note add --project "$PROJECT" --seq {plan_seq} --note "..." --task "github.com/acme/backend#001" --task "github.com/acme/frontend#001"
-$TASK_DB plan note list --project "$PROJECT" --seq {plan_seq} --limit {count}
+$TASK_DB plan note list --project "$PROJECT" --seq {plan_seq} --limit {count} --format json
 $TASK_DB plan note replace --project "$PROJECT" --seq {plan_seq} --id {note_id} --note "..."
 $TASK_DB plan note delete --project "$PROJECT" --seq {plan_seq} --id {note_id}
 ```
@@ -368,8 +369,8 @@ $TASK_DB plan note delete --project "$PROJECT" --seq {plan_seq} --id {note_id}
   `plan status` files the note under the right step, so a wrong qualified reference remains
   in History rather than attaching to another project's child with the same sequence.
 - Existing stored integer task references are legacy data. They are interpreted as belonging
-  to the plan owner only while rendering; they are never rewritten, and `plan note list`
-  returns the original stored JSON.
+  to the plan owner only while rendering; they are never rewritten, and the `tasks` field in the `notes` part of
+  `plan note list --format json` holds the stored refs unchanged.
 - `--id` is a note id from `plan note list`, unrelated to both task and plan numbering.
 - `--kind` on `add` accepts only `manual` (the default), `tasks-created`, and `reconciled`.
   `created`, `applied`, and `status` are written by the helper's own lifecycle hooks and
@@ -383,6 +384,8 @@ $TASK_DB plan note delete --project "$PROJECT" --seq {plan_seq} --id {note_id}
 ## Output files
 
 Every command accepts the global `--output-file <path>`: the payload goes to the file
-(parent directories created, existing file overwritten) and a one-line `<n> bytes → <path>`
-confirmation goes to stdout. Exit codes are untouched, so `plan propose`'s `0`/`3`/`4` still
+(parent directories created, existing file overwritten). On the reads listed under
+**Output formats** in `SKILL.md`, stdout gets a `status` part (`success`, message
+`<n> bytes → <path>`) in the selected `--format`; every other command, including
+`plan get --content-only`, prints a one-line `<n> bytes → <path>` confirmation. Exit codes are untouched, so `plan propose`'s `0`/`3`/`4` still
 mean the same thing when the diff is redirected.

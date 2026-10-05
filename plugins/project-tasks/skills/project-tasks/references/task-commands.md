@@ -40,10 +40,10 @@ the assigned `#NNN` returned by the helper.
 If dependencies were supplied, validate them after insertion:
 
 ```bash
-$TASK_DB task deps validate --project "$PROJECT" --dep N [--dep N...]
+$TASK_DB task deps validate --project "$PROJECT" --format json --dep N [--dep N...]
 ```
 
-Any output identifies nonexistent dependency sequences. Warn the user, but
+A non-empty `missing` part lists the nonexistent dependency sequences (each row's `seq`). Warn the user, but
 leave the newly logged task in place; dependency validation does not roll back
 task creation.
 
@@ -65,14 +65,13 @@ execution-choice prompt. Each task still receives its own context and decision.
 ## List tasks
 
 ```bash
-$TASK_DB task list --project "$PROJECT"
-$TASK_DB task list --project "$PROJECT" --status pending
-$TASK_DB task deps blocked --project "$PROJECT"
+$TASK_DB task list --project "$PROJECT" --format md
+$TASK_DB task list --project "$PROJECT" --status pending --format md
 ```
 
-Rows are `#NNN|type|title|priority|status|tags|depends_on|plan`. Render a concise
-Markdown table, parse JSON tags/dependencies, and mark pending rows returned by
-`deps blocked` as blocked.
+Print the output verbatim — never retype or hand-convert rows. Its `tasks` table has
+columns `number`, `type`, `title`, `priority`, `status`, `tags`, `dependencies`, `plan`;
+pending tasks with an incomplete dependency already show status `pending (blocked)`.
 
 ## Hide task list
 
@@ -114,7 +113,7 @@ $TASK_DB task update --project "$PROJECT" --seq "#NNN" --priority high
 
 ## Remove a task's plan link
 
-Read the task first and retain its `plan_seq` and `plan_project`, then:
+Read the task first (`task get --format json`) and retain `task[0].plan_seq` and `task[0].plan_project`, then:
 
 ```bash
 $TASK_DB task update --project "$PROJECT" --seq "#NNN" --clear-plan
@@ -151,16 +150,16 @@ serialize them so ownership remains attributable. Each task follows
 Auto-update after completion:
 
 ```bash
-$TASK_DB task changelog list --project "$PROJECT" --new-only
+$TASK_DB task changelog list --project "$PROJECT" --new-only --format json
 ```
 
 Explicit regeneration:
 
 ```bash
-$TASK_DB task changelog list --project "$PROJECT"
+$TASK_DB task changelog list --project "$PROJECT" --format json
 ```
 
-Rows are `seq|date|type|title|tags|plan`. Write:
+The `tasks` part holds one object per completed task with fields `seq` (integer), `date`, `type`, `title`, `tags` (array), and `plan` (plan label, empty when none). Write:
 
 ```markdown
 # Changelog
@@ -197,8 +196,8 @@ For explicit full regeneration, mark `--all`.
 At the start of a new project conversation, use:
 
 ```bash
-$TASK_DB task recent --project "$PROJECT"
+$TASK_DB task recent --project "$PROJECT" --format json
 ```
 
-Use the result to avoid reimplementing completed work; do not treat it as
+Use the `tasks` part (`number`, `type`, `title`, `status`) to avoid reimplementing completed work; do not treat it as
 authorization to modify task state.

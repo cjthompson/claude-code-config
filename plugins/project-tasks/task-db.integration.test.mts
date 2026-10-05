@@ -15,12 +15,14 @@
 import { describe, it } from 'node:test';
 import { deepStrictEqual, match, notStrictEqual, ok, strictEqual } from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { COMMANDS, RENAMES } from './lib/registry.mjs';
 import { HANDLERS } from './lib/handlers.mjs';
+import { micromark } from 'micromark';
+import { gfmTable, gfmTableHtml } from 'micromark-extension-gfm-table';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, 'bin', 'task-db');
@@ -40,6 +42,23 @@ function run(home: string, args: string[]): Result {
         encoding: 'utf-8',
     });
     return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
+}
+
+/** Invoke with `--format json`; assert exit 0 and return the parsed object. */
+function runJson(home: string, args: string[]): any {
+    const r = run(home, [...args, '--format', 'json']);
+    strictEqual(r.code, 0, r.err);
+    return JSON.parse(r.out);
+}
+
+/** Invoke the real binary keeping stdout byte-for-byte (no trim), optionally in `cwd`. */
+function runRaw(home: string, args: string[], cwd?: string): { code: number; stdout: string; stderr: string } {
+    const r = spawnSync(process.execPath, [BIN, ...args], {
+        cwd,
+        env: { ...process.env, PROJECT_TASKS_HOME: home },
+        encoding: 'utf-8',
+    });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 /** Read-only query straight to sqlite3, bypassing the binary entirely. */
@@ -277,8 +296,8 @@ describe('db init — additive migration against an old-schema database', () => 
     it('keeps the old rows usable through the new surface', () => {
         const listed = run(home, ['task', 'list', '--project', 'github.com/o/beta']);
         strictEqual(listed.code, 0);
-        strictEqual(listed.out.split('\n').length, 7);
-        match(listed.out, /^#007\|task\|Row 14 for github\.com\/o\/beta\|/);
+        strictEqual(listed.out.split('\n').length, 8); // `## tasks` + 7 rows
+        match(listed.out, /^## tasks\n#007\|task\|Row 14 for github\.com\/o\/beta\|/);
     });
 });
 
@@ -496,7 +515,7 @@ describe('task changelog list — dates by completion, not last edit', () => {
         run(home, ['task', 'update', '--project', 'p', '--seq', '1', '--status', 'completed', '--completed-at', '2026-01-15 09:00']);
         // A later, unrelated edit moves `updated` but must not move the date.
         run(home, ['task', 'update', '--project', 'p', '--seq', '1', '--tag', 'late-edit']);
-        match(run(home, ['task', 'changelog', 'list', '--project', 'p']).out, /^1\|2026-01-15\|/);
+        strictEqual(runJson(home, ['task', 'changelog', 'list', '--project', 'p']).tasks[0].date, '2026-01-15');
     });
 
     it('falls back to updated when completed_at is absent', () => {
@@ -506,7 +525,7 @@ describe('task changelog list — dates by completion, not last edit', () => {
             `INSERT INTO tasks(project,seq,type,title,status,created,updated,in_changelog)
               VALUES('p',1,'task','Legacy','completed','2026-01-01 00:00','2026-02-20 11:00',0);`,
         );
-        match(run(home, ['task', 'changelog', 'list', '--project', 'p']).out, /^1\|2026-02-20\|/);
+        strictEqual(runJson(home, ['task', 'changelog', 'list', '--project', 'p']).tasks[0].date, '2026-02-20');
     });
 });
 
@@ -522,25 +541,18 @@ describe('task list / changelog list — the trailing plan label', () => {
         run(home, ['task', 'add', '--project', 'proj', '--type', 'task', '--title', 'None']);
         return home;
     }
-    const labels = (out: string) => out.split('\n').map((line) => line.split('|').pop());
+    const labels = (home: string, args: string[]) => runJson(home, args).tasks.map((row: any) => row.plan);
 
     it('labels same-project, cross-project and plan-less rows distinctly', () => {
         const home = seeded();
         // Listed newest first: None, Foreign, Own.
-        deepStrictEqual(labels(run(home, ['task', 'list', '--project', 'proj']).out), [
-            '', 'P001 (other/repo)', 'P001',
-        ]);
+        deepStrictEqual(labels(home, ['task', 'list', '--project', 'proj']), ['', 'P001 (other/repo)', 'P001']);
     });
 
     it('qualifies a foreign plan whose seq collides with a local one', () => {
         const home = seeded();
-        const out = run(home, ['task', 'list', '--project', 'proj']).out;
-        const [foreign, own] = [out.split('\n')[1], out.split('\n')[2]];
-        notStrictEqual(
-            foreign.split('|').pop(),
-            own.split('|').pop(),
-            'two different plans both numbered P001 must not render identically',
-        );
+        const [, foreign, own] = labels(home, ['task', 'list', '--project', 'proj']);
+        notStrictEqual(foreign, own, 'two different plans both numbered P001 must not render identically');
     });
 
     it('carries the same label through task changelog list', () => {
@@ -548,7 +560,7 @@ describe('task list / changelog list — the trailing plan label', () => {
         for (const seq of ['1', '2', '3']) {
             run(home, ['task', 'update', '--project', 'proj', '--seq', seq, '--status', 'completed', '--completed-at', '2026-08-14 10:00']);
         }
-        const found = labels(run(home, ['task', 'changelog', 'list', '--project', 'proj']).out).sort();
+        const found = labels(home, ['task', 'changelog', 'list', '--project', 'proj']).sort();
         deepStrictEqual(found, ['', 'P001', 'P001 (other/repo)']);
     });
 });
@@ -903,40 +915,43 @@ describe('the 13 ported commands, end to end', () => {
     it('task list is scoped to its project and hides cancelled rows by default', () => {
         const listed = run(home, ['task', 'list', '--project', 'testproj']);
         deepStrictEqual(listed.out.split('\n'), [
+            '## tasks',
             // The trailing field is the plan label, empty for a plan-less task.
-            '#002|fix|Second\'s task|high|pending|["auth","api"]|[1]|',
+            '#002|fix|Second\'s task|high|pending (blocked)|["auth","api"]|[1]|',
             '#001|task|First task|medium|pending|[]|[]|',
         ]);
     });
 
     it('task get returns JSON', () => {
-        const parsed = JSON.parse(run(home, ['task', 'get', '--project', 'testproj', '--seq', '2']).out);
-        strictEqual(parsed[0].title, "Second's task");
-        strictEqual(parsed[0].priority, 'high');
+        const { task } = runJson(home, ['task', 'get', '--project', 'testproj', '--seq', '2']);
+        strictEqual(task[0].title, "Second's task");
+        strictEqual(task[0].priority, 'high');
+        deepStrictEqual(task[0].tags, ['auth', 'api']);
+        deepStrictEqual(task[0].depends_on, [1]);
     });
 
     it('task get returns plan-less tasks with the plan fields null', () => {
-        const parsed = JSON.parse(run(home, ['task', 'get', '--project', 'testproj', '--seq', '2']).out);
-        strictEqual(parsed.length, 1, 'the LEFT JOIN must not drop plan-less rows');
-        strictEqual(parsed[0].plan_id, null);
-        strictEqual(parsed[0].plan_seq, null);
-        strictEqual(parsed[0].plan_project, null);
+        const { task } = runJson(home, ['task', 'get', '--project', 'testproj', '--seq', '2']);
+        strictEqual(task.length, 1, 'the LEFT JOIN must not drop plan-less rows');
+        strictEqual(task[0].plan_id, null);
+        strictEqual(task[0].plan_seq, null);
+        strictEqual(task[0].plan_project, null);
     });
 
     it('task recent honours --limit', () => {
-        strictEqual(run(home, ['task', 'recent', '--project', 'testproj', '--limit', '1']).out, '#002|fix|Second\'s task|pending');
+        strictEqual(run(home, ['task', 'recent', '--project', 'testproj', '--limit', '1']).out, "## tasks\n#002|fix|Second's task|pending");
     });
 
     it('task deps check lists incomplete dependencies', () => {
-        strictEqual(run(home, ['task', 'deps', 'check', '--project', 'testproj', '--seq', '2']).out, '#001|First task|pending');
+        strictEqual(run(home, ['task', 'deps', 'check', '--project', 'testproj', '--seq', '2']).out, '## dependencies\n#001|First task|pending');
     });
 
     it('task deps blocked lists pending tasks with incomplete dependencies', () => {
-        strictEqual(run(home, ['task', 'deps', 'blocked', '--project', 'testproj']).out, '2');
+        strictEqual(run(home, ['task', 'deps', 'blocked', '--project', 'testproj']).out, '## blocked\n#002|fix|Second\'s task|high|pending (blocked)|["auth","api"]|[1]|');
     });
 
     it('task deps validate names dependencies that do not exist', () => {
-        strictEqual(run(home, ['task', 'deps', 'validate', '--project', 'testproj', '--dep', '1', '--dep', '99']).out, '99');
+        strictEqual(run(home, ['task', 'deps', 'validate', '--project', 'testproj', '--dep', '1', '--dep', '99']).out, '## missing\n99');
     });
 
     it('task update writes the mutation and stamps completed_at once', () => {
@@ -954,14 +969,14 @@ describe('the 13 ported commands, end to end', () => {
     });
 
     it('task deps unblocked reports what the completion released', () => {
-        strictEqual(run(home, ['task', 'deps', 'unblocked', '--project', 'testproj', '--seq', '1']).out, '#002|Second\'s task');
+        strictEqual(run(home, ['task', 'deps', 'unblocked', '--project', 'testproj', '--seq', '1']).out, "## unblocked\n#002|Second's task");
     });
 
     it('task changelog list and mark round-trip through in_changelog', () => {
-        match(run(home, ['task', 'changelog', 'list', '--project', 'testproj']).out, /^1\|\d{4}-\d{2}-\d{2}\|task\|First task\|\[\]\|$/);
-        notStrictEqual(run(home, ['task', 'changelog', 'list', '--project', 'testproj', '--new-only']).out, '');
+        match(run(home, ['task', 'changelog', 'list', '--project', 'testproj']).out, /^## tasks\n1\|\d{4}-\d{2}-\d{2}\|task\|First task\|\[\]\|$/);
+        deepStrictEqual(runJson(home, ['task', 'changelog', 'list', '--project', 'testproj', '--new-only']).tasks.map((r: any) => r.seq), [1]);
         strictEqual(run(home, ['task', 'changelog', 'mark', '--project', 'testproj', '--all']).code, 0);
-        strictEqual(run(home, ['task', 'changelog', 'list', '--project', 'testproj', '--new-only']).out, '');
+        deepStrictEqual(runJson(home, ['task', 'changelog', 'list', '--project', 'testproj', '--new-only']), { tasks: [] });
     });
 
     it('task changelog mark accepts explicit sequences', () => {
@@ -1005,7 +1020,7 @@ describe('task get — plan resolution', () => {
             '--plan-id', String(planId), '--anchor', 'step-one',
         ]);
 
-        const [row] = JSON.parse(run(home, ['task', 'get', '--project', 'testproj', '--seq', '1']).out);
+        const [row] = runJson(home, ['task', 'get', '--project', 'testproj', '--seq', '1']).task;
         // `plan_id` feeds --plan-id; `plan_seq` feeds every `plan *` --seq.
         strictEqual(row.plan_id, planId);
         strictEqual(row.plan_seq, 'P001');
@@ -1024,7 +1039,7 @@ describe('task get — plan resolution', () => {
             '--plan-id', String(frontendPlan), '--anchor', 'backend-step',
         ]);
 
-        const [row] = JSON.parse(run(home, ['task', 'get', '--project', 'backend', '--seq', '1']).out);
+        const [row] = runJson(home, ['task', 'get', '--project', 'backend', '--seq', '1']).task;
         strictEqual(row.plan_id, frontendPlan);
         // P002, not P001: `plans.seq` is project-local to the plan's OWNER.
         strictEqual(row.plan_seq, 'P002');
@@ -1107,8 +1122,8 @@ describe('plan create — inline', () => {
     it('records tags', () => {
         const home = initialized();
         run(home, ['plan', 'create', '--project', 'testproj', '--title', 'T', '--tag', 'auth', '--tag', 'urgent']);
-        const [row] = JSON.parse(run(home, ['plan', 'get', '--project', 'testproj', '--seq', '1']).out);
-        strictEqual(row.tags, '["auth","urgent"]');
+        const [row] = runJson(home, ['plan', 'get', '--project', 'testproj', '--seq', '1']).plan;
+        deepStrictEqual(row.tags, ['auth', 'urgent']);
     });
 
     it('writes exactly one auto-note of kind created', () => {
@@ -1213,7 +1228,7 @@ describe('plan get', () => {
     it('default JSON includes the global id and excludes content', () => {
         const home = initialized();
         run(home, ['plan', 'create', '--project', 'testproj', '--title', 'T']);
-        const [row] = JSON.parse(run(home, ['plan', 'get', '--project', 'testproj', '--seq', '1']).out);
+        const [row] = runJson(home, ['plan', 'get', '--project', 'testproj', '--seq', '1']).plan;
         ok(Number.isInteger(row.id));
         strictEqual(row.seq, 1);
         strictEqual(row.title, 'T');
@@ -1225,10 +1240,17 @@ describe('plan get', () => {
         const file = join(home, 'p.md');
         writeFileSync(file, 'Body\n');
         run(home, ['plan', 'create', '--project', 'testproj', '--title', 'T', '--path', file]);
-        const [row] = JSON.parse(
-            run(home, ['plan', 'get', '--project', 'testproj', '--seq', '1', '--with-content']).out,
-        );
+        const [row] = runJson(home, ['plan', 'get', '--project', 'testproj', '--seq', '1', '--with-content']).plan;
         strictEqual(row.content, 'Body\n');
+    });
+
+    it('reports a NULL notes column as null, not []', () => {
+        const home = initialized();
+        seedPlan(home);
+        exec(home, "UPDATE plans SET notes=NULL WHERE project='testproj' AND seq=1;");
+        const [row] = runJson(home, ['plan', 'get', '--project', 'testproj', '--seq', '1']).plan;
+        strictEqual(row.notes, null);
+        deepStrictEqual(row.tags, []);
     });
 
     it('--content-only prints the raw body with no JSON wrapper', () => {
@@ -1271,7 +1293,7 @@ describe('plan list', () => {
         run(home, ['task', 'add', '--project', 'testproj', '--type', 'task', '--title', 'S2', '--plan-id', String(planId), '--anchor', 's2']);
         run(home, ['task', 'update', '--project', 'testproj', '--seq', '1', '--status', 'completed']);
 
-        strictEqual(run(home, ['plan', 'list', '--project', 'testproj']).out, 'P001|With tasks|inline|pending|1|2|n/a');
+        strictEqual(run(home, ['plan', 'list', '--project', 'testproj']).out, '## plans\nP001|With tasks|inline|pending|1|2|n/a');
     });
 
     it('drift is n/a for an inline plan', () => {
@@ -1326,7 +1348,9 @@ describe('plan list', () => {
         const r = run(home, ['plan', 'list', '--project', 'testproj', '--output-file', target]);
         strictEqual(r.code, 0);
         ok(existsSync(target));
-        match(readFileSync(target, 'utf-8'), /^P001\|T\|inline\|pending\|0\|0\|n\/a\n$/);
+        const body = readFileSync(target, 'utf-8');
+        match(body, /^## plans\nP001\|T\|inline\|pending\|0\|0\|n\/a\n$/);
+        strictEqual(r.out, `## status\nsuccess|${Buffer.byteLength(body)} bytes → ${target}`);
     });
 });
 
@@ -1417,9 +1441,7 @@ describe('plan note list', () => {
         seedPlan(home);
         run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', 'one']);
         run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', 'two']);
-        const r = run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']);
-        strictEqual(r.code, 0);
-        const notes = JSON.parse(r.out);
+        const { notes } = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']);
         deepStrictEqual(notes.map((n: any) => n.note), ['two', 'one']);
     });
 
@@ -1429,14 +1451,14 @@ describe('plan note list', () => {
         for (const n of ['one', 'two', 'three']) {
             run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', n]);
         }
-        const r = run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1', '--limit', '2']);
-        deepStrictEqual(JSON.parse(r.out).map((n: any) => n.note), ['three', 'two']);
+        deepStrictEqual(runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1', '--limit', '2']).notes.map((n: any) => n.note), ['three', 'two']);
     });
 
     it('returns an empty array for a plan with no notes', () => {
         const home = initialized();
         seedPlan(home);
-        strictEqual(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out, '[]');
+        deepStrictEqual(runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']), { notes: [] });
+        strictEqual(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out, '## notes');
     });
 });
 
@@ -1445,7 +1467,7 @@ describe('plan note replace', () => {
         const home = initialized();
         seedPlan(home);
         run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', 'original', '--task', 'github.com/acme/backend#001']);
-        const [before] = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        const [before] = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
 
         const r = run(home, [
             'plan', 'note', 'replace', '--project', 'testproj', '--seq', '1',
@@ -1453,7 +1475,7 @@ describe('plan note replace', () => {
         ]);
         strictEqual(r.code, 0);
 
-        const [after] = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        const [after] = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
         strictEqual(after.id, before.id);
         strictEqual(after.ts, before.ts);
         strictEqual(after.kind, before.kind);
@@ -1467,8 +1489,9 @@ describe('plan note replace', () => {
         seedPlan(home);
         run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', 'original', '--task', 'github.com/acme/backend#001']);
         run(home, ['plan', 'note', 'replace', '--project', 'testproj', '--seq', '1', '--id', '1', '--note', 'revised']);
-        const [after] = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
-        strictEqual('tasks' in after, false);
+        const [after] = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
+        // Declared columns always emit every key; an absent `tasks` reads as null.
+        strictEqual(after.tasks, null);
     });
 
     it('preserves unaffected qualified refs as JSON objects through replace and delete', () => {
@@ -1481,13 +1504,13 @@ describe('plan note replace', () => {
             'plan', 'note', 'replace', '--project', 'testproj', '--seq', '1',
             '--id', '1', '--note', 'revised', '--task', 'github.com/acme/backend#002',
         ]);
-        let stored = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        let stored = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
         deepStrictEqual(stored.find((n: any) => n.id === 2).tasks, [
             { project: 'github.com/acme/frontend', seq: 1 },
         ]);
 
         run(home, ['plan', 'note', 'delete', '--project', 'testproj', '--seq', '1', '--id', '1']);
-        stored = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        stored = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
         deepStrictEqual(stored[0].tasks, [{ project: 'github.com/acme/frontend', seq: 1 }]);
     });
 
@@ -1497,7 +1520,7 @@ describe('plan note replace', () => {
         const r = run(home, ['plan', 'note', 'replace', '--project', 'testproj', '--seq', '1', '--id', '1', '--note', 'tampered']);
         notStrictEqual(r.code, 0);
         match(r.err, /--force/);
-        const [note] = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        const [note] = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
         strictEqual(note.note, 'Plan created.');
         strictEqual(note.kind, 'created');
     });
@@ -1510,7 +1533,7 @@ describe('plan note replace', () => {
             '--id', '1', '--note', 'corrected', '--force',
         ]);
         strictEqual(r.code, 0);
-        const [note] = JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out);
+        const [note] = runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes;
         strictEqual(note.note, 'corrected');
         strictEqual(note.kind, 'created');
     });
@@ -1549,11 +1572,11 @@ describe('plan note delete', () => {
         const refused = run(home, ['plan', 'note', 'delete', '--project', 'testproj', '--seq', '1', '--id', '1']);
         notStrictEqual(refused.code, 0);
         match(refused.err, /--force/);
-        strictEqual(JSON.parse(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out).length, 1);
+        strictEqual(runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).notes.length, 1);
 
         const forced = run(home, ['plan', 'note', 'delete', '--project', 'testproj', '--seq', '1', '--id', '1', '--force']);
         strictEqual(forced.code, 0);
-        strictEqual(run(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']).out, '[]');
+        deepStrictEqual(runJson(home, ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']), { notes: [] });
     });
 
     it('errors when the note id does not exist', () => {
@@ -1587,6 +1610,13 @@ describe('dispatch', () => {
         match(r.err, /'--seq' is required/);
     });
 
+    it('rejects an unknown --format value with exit 1', () => {
+        const r = run(initialized(), ['task', 'list', '--project', 'p', '--format', 'xml']);
+        strictEqual(r.code, 1);
+        strictEqual(r.out, '');
+        match(r.err, /invalid value.*--format|--format.*xml/i);
+    });
+
     it('rejects --project on a db command rather than ignoring it', () => {
         const r = run(initialized(), ['db', 'init', '--project', 'p']);
         strictEqual(r.code, 1);
@@ -1617,8 +1647,8 @@ describe('--output-file', () => {
         ok(existsSync(target), 'parent directories should be created');
 
         const body = readFileSync(target, 'utf-8');
-        strictEqual(body, '#001|task|A|medium|pending|[]|[]|\n');
-        strictEqual(r.out, `${Buffer.byteLength(body)} bytes → ${target}`);
+        strictEqual(body, '## tasks\n#001|task|A|medium|pending|[]|[]|\n');
+        strictEqual(r.out, `## status\nsuccess|${Buffer.byteLength(body)} bytes → ${target}`);
         ok(!r.out.includes('#001'), 'the payload must not also go to stdout');
     });
 
@@ -1629,7 +1659,7 @@ describe('--output-file', () => {
         run(home, ['task', 'list', '--project', 'p', '--output-file', target]);
         run(home, ['task', 'add', '--project', 'p', '--type', 'task', '--title', 'B']);
         run(home, ['task', 'list', '--project', 'p', '--output-file', target]);
-        strictEqual(readFileSync(target, 'utf-8').split('\n').filter(Boolean).length, 2);
+        strictEqual(readFileSync(target, 'utf-8'), '## tasks\n#002|task|B|medium|pending|[]|[]|\n#001|task|A|medium|pending|[]|[]|\n');
     });
 
     it('does not disturb the exit code', () => {
@@ -1637,5 +1667,119 @@ describe('--output-file', () => {
         strictEqual(run(home, ['db', 'init']).code, 2);
         const r = run(home, ['task', 'get', '--project', 'p', '--seq', '1', '--output-file', join(home, 'x.json')]);
         strictEqual(r.code, 0);
+    });
+});
+
+// ── --format on the converted reads ───────────────────────────
+
+describe('--format — converted reads', () => {
+    // Four tasks: #1 completed (plan child), #2 depends on #1 (unblocked, plan child),
+    // #3 pending with a `|` in its title, #4 depends on #3 (blocked). A plan with a note.
+    const home = initialized();
+    run(home, ['plan', 'create', '--project', 'testproj', '--title', 'Plan']);
+    const planId = query(home, "SELECT id FROM plans WHERE project='testproj' AND seq=1;");
+    run(home, ['task', 'add', '--project', 'testproj', '--type', 'task', '--title', 'First', '--plan-id', planId, '--anchor', 'first']);
+    run(home, ['task', 'add', '--project', 'testproj', '--type', 'fix', '--title', 'Second', '--tag', 'auth', '--dep', '1', '--plan-id', planId, '--anchor', 'second']);
+    run(home, ['task', 'add', '--project', 'testproj', '--type', 'todo', '--title', 'Third | piped']);
+    run(home, ['task', 'add', '--project', 'testproj', '--type', 'task', '--title', 'Fourth', '--dep', '3']);
+    run(home, ['task', 'update', '--project', 'testproj', '--seq', '1', '--status', 'completed']);
+    run(home, ['plan', 'note', 'add', '--project', 'testproj', '--seq', '1', '--note', 'hello']);
+
+    /** [command, part name, argv] for every converted read. */
+    const READS: [string, string, string[]][] = [
+        ['task get', 'task', ['task', 'get', '--project', 'testproj', '--seq', '2']],
+        ['task list', 'tasks', ['task', 'list', '--project', 'testproj']],
+        ['task recent', 'tasks', ['task', 'recent', '--project', 'testproj']],
+        ['task deps check', 'dependencies', ['task', 'deps', 'check', '--project', 'testproj', '--seq', '4']],
+        ['task deps validate', 'missing', ['task', 'deps', 'validate', '--project', 'testproj', '--dep', '1', '--dep', '99']],
+        ['task deps blocked', 'blocked', ['task', 'deps', 'blocked', '--project', 'testproj']],
+        ['task deps unblocked', 'unblocked', ['task', 'deps', 'unblocked', '--project', 'testproj', '--seq', '1']],
+        ['task changelog list', 'tasks', ['task', 'changelog', 'list', '--project', 'testproj']],
+        ['plan list', 'plans', ['plan', 'list', '--project', 'testproj']],
+        ['plan get', 'plan', ['plan', 'get', '--project', 'testproj', '--seq', '1']],
+        ['plan tasks', 'tasks', ['plan', 'tasks', '--project', 'testproj', '--seq', '1']],
+        ['plan note list', 'notes', ['plan', 'note', 'list', '--project', 'testproj', '--seq', '1']],
+    ];
+
+    it('covers all twelve converted reads', () => {
+        strictEqual(new Set(READS.map(([name]) => name)).size, 12);
+    });
+
+    for (const [name, part, argv] of READS) {
+        it(`${name}: no-flag output equals --format pipe byte for byte`, () => {
+            const plain = runRaw(home, argv);
+            const piped = runRaw(home, [...argv, '--format', 'pipe']);
+            strictEqual(plain.code, 0, plain.stderr);
+            strictEqual(piped.code, 0, piped.stderr);
+            strictEqual(plain.stdout, piped.stdout);
+            ok(plain.stdout.startsWith(`## ${part}\n`), plain.stdout);
+            ok(plain.stdout.split('\n').length > 2, `${name} should print at least one row here`);
+        });
+
+        it(`${name}: --format json is one object keyed by part name`, () => {
+            const obj = runJson(home, argv);
+            ok(obj && typeof obj === 'object' && !Array.isArray(obj));
+            deepStrictEqual(Object.keys(obj), [part]);
+            ok(Array.isArray(obj[part]) && obj[part].length > 0);
+        });
+    }
+
+    it('pipe output escapes a | inside a field', () => {
+        ok(run(home, ['task', 'list', '--project', 'testproj']).out.includes('#003|todo|Third \\| piped|'));
+    });
+
+    it('--format md never creates a file named md', () => {
+        for (const flag of [['--format', 'md'], ['--format=md']]) {
+            const cwd = mkdtempSync(join(tmpdir(), 'task-db-cwd-'));
+            const r = runRaw(home, ['task', 'list', '--project', 'testproj', ...flag], cwd);
+            strictEqual(r.code, 0, r.stderr);
+            ok(r.stdout.startsWith('## tasks\n\n| number |'), r.stdout);
+            strictEqual(existsSync(join(cwd, 'md')), false);
+            deepStrictEqual(readdirSync(cwd), []);
+            rmSync(cwd, { recursive: true, force: true });
+        }
+    });
+
+    it('--output-file with --format json writes JSON and prints a JSON status', () => {
+        const target = join(home, 'out', 'list.json');
+        const r = runRaw(home, ['task', 'list', '--project', 'testproj', '--format', 'json', '--output-file', target]);
+        strictEqual(r.code, 0, r.stderr);
+        const body = readFileSync(target, 'utf-8');
+        ok(body.endsWith('\n'));
+        const parsed = JSON.parse(body);
+        deepStrictEqual(Object.keys(parsed), ['tasks']);
+        strictEqual(parsed.tasks.length, 4);
+        const status = { status: [{ status: 'success', message: `${Buffer.byteLength(body)} bytes → ${target}` }] };
+        strictEqual(r.stdout, `${JSON.stringify(status)}\n`);
+    });
+});
+
+describe('task list --format md is valid GFM (micromark)', () => {
+    const render = (md: string) => micromark(md, { extensions: [gfmTable()], htmlExtensions: [gfmTableHtml()] });
+    const count = (html: string, re: RegExp) => (html.match(re) ?? []).length;
+
+    it('a populated project renders exactly one 8-column table with one row per task', () => {
+        const home = initialized();
+        run(home, ['task', 'add', '--project', 'p', '--type', 'task', '--title', 'A | piped', '--tag', 'x', '--tag', 'y']);
+        run(home, ['task', 'add', '--project', 'p', '--type', 'fix', '--title', 'B', '--dep', '1']);
+        const r = runRaw(home, ['task', 'list', '--project', 'p', '--format', 'md']);
+        strictEqual(r.code, 0, r.stderr);
+        const html = render(r.stdout);
+        strictEqual(count(html, /<table>/g), 1);
+        strictEqual(count(html, /<th>/g), 8);
+        strictEqual(count(html, /<tr>/g) - 1, 2);
+        strictEqual(count(html, /<td>/g), 16);
+        ok(html.includes('pending (blocked)'));
+    });
+
+    it('an empty project renders exactly one 8-column table with no body rows', () => {
+        const home = initialized();
+        const r = runRaw(home, ['task', 'list', '--project', 'nothing-here', '--format', 'md']);
+        strictEqual(r.code, 0, r.stderr);
+        const html = render(r.stdout);
+        strictEqual(count(html, /<table>/g), 1);
+        strictEqual(count(html, /<th>/g), 8);
+        strictEqual(count(html, /<tr>/g), 1);
+        strictEqual(count(html, /<td>/g), 0);
     });
 });

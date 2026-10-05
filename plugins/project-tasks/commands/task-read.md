@@ -8,7 +8,7 @@ If this invocation has not already completed `commands/init.md`, run it now to
 resolve `$TASK_DB` and `$PROJECT`. Otherwise, reuse those resolved values. Then:
 
 ```bash
-$TASK_DB task get --project "<current project>" --seq <seq>
+$TASK_DB task get --project "<current project>" --seq <seq> --format md
 ```
 
-Print the full record.
+Print the output verbatim.

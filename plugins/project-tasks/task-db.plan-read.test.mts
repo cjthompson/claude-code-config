@@ -45,6 +45,13 @@ function run(home: string, args: string[]): Result {
     return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
 }
 
+/** `plan tasks --format json` for testproj P001; asserts exit 0 and returns the `tasks` part. */
+function planTasksJson(home: string, extra: string[] = []): any[] {
+    const r = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1', ...extra, '--format', 'json']);
+    strictEqual(r.code, 0, r.err);
+    return JSON.parse(r.out).tasks;
+}
+
 /** Read-only query straight to sqlite3, bypassing the binary entirely. */
 function query(home: string, text: string): string {
     const r = spawnSync('sqlite3', ['-readonly', join(home, 'tasks.db')], {
@@ -176,10 +183,10 @@ describe('plan tasks', () => {
         const home = initialized();
         spreadPlan(home);
         const rows = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out.split('\n');
-        deepStrictEqual(rows[0].split('|'), [
-            '#001', 'testproj', 'step-one', 'task', 'One', 'medium', 'pending',
-        ]);
-        strictEqual(rows.length, 4);
+        strictEqual(rows[0], '## tasks');
+        deepStrictEqual(rows[1].split('|'), ['#001', 'testproj', 'step-one', 'task', 'One', 'medium', 'pending']);
+        strictEqual(rows.length, 5);
+        deepStrictEqual(Object.keys(planTasksJson(home)[0]), ['number', 'project', 'anchor', 'type', 'title', 'priority', 'status']);
     });
 
     it('returns children in every status, including cancelled, with no default filter', () => {
@@ -189,27 +196,22 @@ describe('plan tasks', () => {
         // cascade skipped the completed child.
         const home = initialized();
         spreadPlan(home);
-        const statuses = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out
-            .split('\n')
-            .map((line) => line.split('|')[6]);
-        deepStrictEqual(statuses, ['pending', 'in_progress', 'completed', 'cancelled']);
+        deepStrictEqual(planTasksJson(home).map((t: any) => t.status), ['pending', 'in_progress', 'completed', 'cancelled']);
     });
 
     it('--status filters exactly, with no implicit second predicate', () => {
         const home = initialized();
         spreadPlan(home);
-        const r = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1', '--status', 'cancelled']);
-        strictEqual(r.code, 0);
-        deepStrictEqual(r.out.split('\n').map((line) => line.split('|')[0]), ['#004']);
+        deepStrictEqual(planTasksJson(home, ['--status', 'cancelled']).map((t: any) => t.number), ['#004']);
     });
 
     it('returns every child regardless of repository, distinguished by the project column', () => {
         const home = initialized();
         crossProjectPlan(home);
-        const rows = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out.split('\n');
-        strictEqual(rows.length, 2, 'both children must come back, not just the owner project’s');
-        deepStrictEqual(rows.map((line) => line.split('|')[0]), ['#001', '#001']);
-        deepStrictEqual(rows.map((line) => line.split('|')[1]), ['testproj', 'frontend']);
+        const tasks = planTasksJson(home);
+        strictEqual(tasks.length, 2, 'both children must come back, not just the owner project’s');
+        deepStrictEqual(tasks.map((t: any) => t.number), ['#001', '#001']);
+        deepStrictEqual(tasks.map((t: any) => t.project), ['testproj', 'frontend']);
     });
 
     it('--project identifies the plan owner, so the child’s project does not find the plan', () => {
@@ -229,20 +231,16 @@ describe('plan tasks', () => {
         addChild(home, 'frontend', planId, 'F1', 'f1');
         addChild(home, 'testproj', planId, 'B1', 'b1');
         addChild(home, 'frontend', planId, 'F2', 'f2');
-        deepStrictEqual(
-            run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out
-                .split('\n')
-                .map((line) => line.split('|')[2]),
-            ['f1', 'b1', 'f2'],
-        );
+        deepStrictEqual(planTasksJson(home).map((t: any) => t.anchor), ['f1', 'b1', 'f2']);
     });
 
-    it('succeeds with empty output for a plan that owns no tasks', () => {
+    it('succeeds with an empty tasks part for a plan that owns no tasks', () => {
         const home = initialized();
         makePlan(home, 'testproj', 'Empty');
         const r = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']);
         strictEqual(r.code, 0);
-        strictEqual(r.out, '');
+        strictEqual(r.out, '## tasks');
+        deepStrictEqual(planTasksJson(home), []);
     });
 
     it('fails naming the P### when the plan does not exist', () => {
@@ -259,9 +257,9 @@ describe('plan tasks', () => {
         const home = initialized();
         spreadPlan(home);
         run(home, ['task', 'update', '--project', 'testproj', '--seq', '1', '--clear-plan']);
-        const rows = run(home, ['plan', 'tasks', '--project', 'testproj', '--seq', '1']).out.split('\n');
-        strictEqual(rows.length, 3);
-        deepStrictEqual(rows.map((line) => line.split('|')[0]), ['#002', '#003', '#004']);
+        const tasks = planTasksJson(home);
+        strictEqual(tasks.length, 3);
+        deepStrictEqual(tasks.map((t: any) => t.number), ['#002', '#003', '#004']);
     });
 });
 

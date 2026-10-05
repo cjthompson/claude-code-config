@@ -171,6 +171,24 @@ There is no Retry choice. Validation never mutates work. Repair preserves the
 current implementation; restart is the only validation outcome that discards
 task-owned implementation work, and it requires confirmation.
 
+## Output formats
+
+`task-db` accepts an optional `--format md|json|pipe` on every command; it defaults
+to `pipe`. These reads return formatted results: `task get`, `task list`,
+`task recent`, `task deps check`, `task deps validate`, `task deps blocked`,
+`task deps unblocked`, `task changelog list`, `plan list`, `plan get`, `plan tasks`,
+`plan note list`. Always pass `--format` on them:
+
+- `--format md` to show the result to the user — print it verbatim; never retype or
+  hand-convert rows into a table.
+- `--format json` to read fields. Output is always one JSON object keyed by part name,
+  each part an array of row objects, e.g. `{"task":[{…}]}` — read `task[0].plan_seq`,
+  not the top level. An empty part is `[]`.
+
+Never parse `pipe` output. `plan get --content-only` prints the raw body and rejects
+`--format`. With `--output-file`, the formatted output goes to the file and stdout
+gets a `status` part in the same format.
+
 ## Quick reference
 
 | User request | Action |
@@ -186,3 +204,4 @@ task-owned implementation work, and it requires confirmation.
 | `hide list` | Hide task-list entries; workers continue |
 | `generate changelog` | Rebuild from completed tasks |
 | any `plan` request | Read `references/plans.md` first |
+| Show or read helper results | `--format md` (print verbatim) or `--format json` (read fields) |

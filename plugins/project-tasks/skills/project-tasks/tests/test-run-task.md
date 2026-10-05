@@ -26,8 +26,8 @@ pipeline. It does not call `sqlite3` directly.
 
 ## Expected Behavior
 
-1. Run `$TASK_DB task get --project "..." --seq 1` and
-   `$TASK_DB task deps check --project "..." --seq 1`.
+1. Run `$TASK_DB task get --project "..." --seq 1 --format json` (fields from `task[0]`) and
+   `$TASK_DB task deps check --project "..." --seq 1 --format json` (blocked when `dependencies` is non-empty).
 2. Set the task `in_progress` and create the Scout/Execute TaskList entries.
 3. Record path, branch, base commit, baseline snapshot, and later task-owned
    paths before dispatching write-capable work.

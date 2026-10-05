@@ -26,6 +26,7 @@ Module ownership is split as follows:
 | `lib/plan-read.mjs` | Plan reporting |
 | `lib/plan-sync.mjs` | Reconciliation and lifecycle mutations |
 | `lib/gfm.mjs` | GFM writer (table/cell/heading/paragraph/blockquote) |
+| `lib/format.mjs` | Result model (record/text parts) and the md/json/pipe formatter |
 
 ## Test files
 
@@ -36,14 +37,15 @@ Module ownership is split as follows:
 | `plugins/project-tasks/task-db.plan-read.test.mts` | Plan tasks, status, and progress |
 | `plugins/project-tasks/task-db.plan-sync.test.mts` | Propose/apply/discard, attach/detach, lifecycle updates, and atomic rollback |
 | `plugins/project-tasks/task-db.gfm.test.mts` | GFM writer (`lib/gfm.mjs`): table/cell/heading/paragraph/blockquote output and GFM validity |
+| `plugins/project-tasks/task-db.format.test.mts` | Result model and formatter (`lib/format.mjs`): parts, json/pipe/md output, pipe escaping round-trip, warnings |
 
 ## Running
 
-The canonical five-suite command is below. Run `npm install` first:
-`task-db.gfm.test.mts` imports the `micromark` devDependencies.
+The canonical six-suite command is below. Run `npm install` first:
+`task-db.gfm.test.mts` and `task-db.integration.test.mts` import the `micromark` devDependencies.
 
 ```bash
-node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts plugins/project-tasks/task-db.gfm.test.mts
+node --experimental-strip-types --test plugins/project-tasks/task-db.test.mts plugins/project-tasks/task-db.integration.test.mts plugins/project-tasks/task-db.plan-read.test.mts plugins/project-tasks/task-db.plan-sync.test.mts plugins/project-tasks/task-db.gfm.test.mts plugins/project-tasks/task-db.format.test.mts
 ```
 
 ## Structure

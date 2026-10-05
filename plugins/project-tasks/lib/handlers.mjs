@@ -33,8 +33,9 @@ import { ADDITIVE_TASK_COLUMNS, CREATE_INDEXES, CREATE_PLANS, CREATE_TASKS } fro
 import {
     addNote, DbError, emit, esc, findNote, noteDeleteSql, noteInsertSql, noteReplaceSql,
     notesJson, now, planDrift, resolvePlanId, sourceSnapshot,
-    sql, sqlBody, sqlJson, sqlRows, tableColumns, transaction,
+    sql, sqlBody, sqlJson, tableColumns, transaction,
 } from './db.mjs';
+import { records, result } from './format.mjs';
 
 // ── db ────────────────────────────────────────────────────────
 
@@ -305,7 +306,7 @@ function taskUpdate(action) {
 }
 
 /**
- * One task as JSON, with its plan resolved in the same query.
+ * One task as a `task` part, with its plan resolved in the same query.
  *
  * Both id spaces are returned deliberately. `plan_id` is the global numeric id
  * that `--plan-id` consumes; `plan_seq` is the project-local `P###` that every
@@ -323,7 +324,7 @@ function taskUpdate(action) {
  */
 function taskGet(action) {
     const p = esc(action.global.project);
-    const result = sql(
+    const rows = sqlJson(
         `SELECT t.seq, t.type, t.title, t.priority, t.tags, t.reqs, t.depends_on, t.status,
                 t.plan_id,
                 CASE WHEN p.id IS NULL THEN NULL ELSE printf('P%03d', p.seq) END AS plan_seq,
@@ -331,10 +332,18 @@ function taskGet(action) {
            FROM tasks t
            LEFT JOIN plans p ON p.id = t.plan_id
           WHERE t.project='${p}' AND t.seq=${Number(action.opts.seq)};`,
-        ['-json'],
     );
-    emit(result, action.global.outputFile);
-    return 0;
+
+    // Parse JSON columns
+    for (const row of rows) {
+        row.tags = JSON.parse(row.tags ?? '[]');
+        row.reqs = JSON.parse(row.reqs ?? '[]');
+        row.depends_on = JSON.parse(row.depends_on ?? '[]');
+    }
+
+    return result(
+        records('task', ['seq', 'type', 'title', 'priority', 'tags', 'reqs', 'depends_on', 'status', 'plan_id', 'plan_seq', 'plan_project'], rows),
+    );
 }
 
 /** @param {any} action */
@@ -342,52 +351,60 @@ function taskList(action) {
     const p = esc(action.global.project);
     const status = action.opts.status;
     const where = status ? `AND t.status='${esc(status)}'` : "AND t.status!='cancelled'";
-    emit(
-        sqlRows(
-            `SELECT printf('#%03d',t.seq),t.type,t.title,t.priority,t.status,t.tags,t.depends_on,
-                    ${PLAN_LABEL}
-               FROM tasks t
-               LEFT JOIN plans pl ON pl.id = t.plan_id
-              WHERE t.project='${p}' ${where}
-              ORDER BY t.seq DESC;`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',t.seq) AS number, t.type, t.title, t.priority,
+                CASE WHEN t.status='pending' AND EXISTS (SELECT 1 FROM json_each(t.depends_on) j JOIN tasks d ON d.project=t.project AND d.seq=j.value WHERE d.status!='completed') THEN 'pending (blocked)' ELSE t.status END AS status,
+                t.tags, t.depends_on AS dependencies,
+                ${PLAN_LABEL} AS plan
+           FROM tasks t
+           LEFT JOIN plans pl ON pl.id = t.plan_id
+          WHERE t.project='${p}' ${where}
+          ORDER BY t.seq DESC;`,
     );
-    return 0;
+
+    // Parse JSON columns
+    for (const row of rows) {
+        row.tags = JSON.parse(row.tags ?? '[]');
+        row.dependencies = JSON.parse(row.dependencies ?? '[]');
+    }
+
+    return result(
+        records('tasks', ['number', 'type', 'title', 'priority', 'status', 'tags', 'dependencies', 'plan'], rows),
+    );
 }
 
 /** @param {any} action */
 function taskRecent(action) {
     const p = esc(action.global.project);
-    emit(
-        sqlRows(
-            `SELECT printf('#%03d',seq),type,title,status FROM tasks
-              WHERE project='${p}' ORDER BY seq DESC LIMIT ${Number(action.opts.limit)};`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',seq) AS number, type, title, status FROM tasks
+          WHERE project='${p}' ORDER BY seq DESC LIMIT ${Number(action.opts.limit)};`,
     );
-    return 0;
+
+    return result(
+        records('tasks', ['number', 'type', 'title', 'status'], rows),
+    );
 }
 
 /**
- * Incomplete dependencies of one task, as `#NNN|title|status`.
+ * Incomplete dependencies of one task, as a `dependencies` part.
  * @param {any} action
  */
 function taskDepsCheck(action) {
     const p = esc(action.global.project);
-    emit(
-        sqlRows(
-            `SELECT printf('#%03d',seq),title,status FROM tasks
-              WHERE project='${p}'
-                AND seq IN (
-                    SELECT j.value FROM tasks t, json_each(t.depends_on) j
-                     WHERE t.project='${p}' AND t.seq=${Number(action.opts.seq)}
-                )
-                AND status!='completed';`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',seq) AS number, title, status FROM tasks
+          WHERE project='${p}'
+            AND seq IN (
+                SELECT j.value FROM tasks t, json_each(t.depends_on) j
+                 WHERE t.project='${p}' AND t.seq=${Number(action.opts.seq)}
+            )
+            AND status!='completed';`,
     );
-    return 0;
+
+    return result(
+        records('dependencies', ['number', 'title', 'status'], rows),
+    );
 }
 
 /**
@@ -397,18 +414,21 @@ function taskDepsCheck(action) {
 function taskDepsValidate(action) {
     const p = esc(action.global.project);
     const deps = esc(JSON.stringify(action.opts.deps));
-    emit(
-        sql(
-            `SELECT j.value FROM json_each('${deps}') j
-              WHERE j.value NOT IN (SELECT seq FROM tasks WHERE project='${p}');`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT j.value AS seq FROM json_each('${deps}') j
+          WHERE j.value NOT IN (SELECT seq FROM tasks WHERE project='${p}');`,
     );
-    return 0;
+
+    return result(
+        records('missing', ['seq'], rows),
+    );
 }
 
 /**
- * Sequence numbers of pending tasks with incomplete dependencies.
+ * Pending tasks with incomplete dependencies, as a `blocked` part.
+ *
+ * Returns the full task rows (same columns as `task list`) with status showing
+ * `pending (blocked)` for each blocked task.
  *
  * The outer table is aliased `t` and `depends_on` is qualified with it. That is
  * a bug fix carried over from the flat implementation, not a style change: the
@@ -421,23 +441,35 @@ function taskDepsValidate(action) {
  */
 function taskDepsBlocked(action) {
     const p = esc(action.global.project);
-    emit(
-        sql(
-            `SELECT t.seq FROM tasks t
-              WHERE t.project='${p}' AND t.status='pending' AND t.depends_on!='[]'
-                AND EXISTS (
-                    SELECT 1 FROM json_each(t.depends_on) j
-                      JOIN tasks d ON d.project='${p}' AND d.seq=j.value
-                     WHERE d.status!='completed'
-                );`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',t.seq) AS number, t.type, t.title, t.priority,
+                'pending (blocked)' AS status,
+                t.tags, t.depends_on AS dependencies,
+                ${PLAN_LABEL} AS plan
+           FROM tasks t
+           LEFT JOIN plans pl ON pl.id = t.plan_id
+          WHERE t.project='${p}' AND t.status='pending' AND t.depends_on!='[]'
+            AND EXISTS (
+                SELECT 1 FROM json_each(t.depends_on) j
+                  JOIN tasks d ON d.project='${p}' AND d.seq=j.value
+                 WHERE d.status!='completed'
+            )
+          ORDER BY t.seq DESC;`,
     );
-    return 0;
+
+    // Parse JSON columns
+    for (const row of rows) {
+        row.tags = JSON.parse(row.tags ?? '[]');
+        row.dependencies = JSON.parse(row.dependencies ?? '[]');
+    }
+
+    return result(
+        records('blocked', ['number', 'type', 'title', 'priority', 'status', 'tags', 'dependencies', 'plan'], rows),
+    );
 }
 
 /**
- * Tasks newly unblocked by completing `--seq`, as `#NNN|title`.
+ * Tasks newly unblocked by completing `--seq`, as an `unblocked` part.
  *
  * Same qualification fix as `blocked`, and here the consequence was worse than
  * an empty answer: the unqualified `depends_on` made the NOT EXISTS clause
@@ -449,44 +481,49 @@ function taskDepsBlocked(action) {
 function taskDepsUnblocked(action) {
     const p = esc(action.global.project);
     const seq = Number(action.opts.seq);
-    emit(
-        sqlRows(
-            `SELECT printf('#%03d',t.seq),t.title FROM tasks t
-              WHERE t.project='${p}' AND t.status='pending' AND t.depends_on!='[]'
-                AND EXISTS (SELECT 1 FROM json_each(t.depends_on) j WHERE j.value=${seq})
-                AND NOT EXISTS (
-                    SELECT 1 FROM json_each(t.depends_on) j
-                      JOIN tasks d ON d.project='${p}' AND d.seq=j.value
-                     WHERE d.status!='completed'
-                );`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',t.seq) AS number, t.title FROM tasks t
+          WHERE t.project='${p}' AND t.status='pending' AND t.depends_on!='[]'
+            AND EXISTS (SELECT 1 FROM json_each(t.depends_on) j WHERE j.value=${seq})
+            AND NOT EXISTS (
+                SELECT 1 FROM json_each(t.depends_on) j
+                  JOIN tasks d ON d.project='${p}' AND d.seq=j.value
+                 WHERE d.status!='completed'
+            );`,
     );
-    return 0;
+
+    return result(
+        records('unblocked', ['number', 'title'], rows),
+    );
 }
 
 /** @param {any} action */
 function taskChangelogList(action) {
     const p = esc(action.global.project);
     const filter = action.opts.newOnly ? 'AND t.in_changelog=0' : '';
-    emit(
-        sqlRows(
-            // COALESCE, because `completed_at` is the honest completion date and
-            // `updated` is merely the last time the row was touched — a later
-            // edit (a tag, a feedback note) would otherwise re-date a task to
-            // long after it was finished, and re-sort the changelog with it.
-            // Rows written before `completed_at` was populated have none, so
-            // `updated` remains the fallback rather than the source.
-            `SELECT t.seq,substr(COALESCE(t.completed_at,t.updated),1,10),t.type,t.title,t.tags,
-                    ${PLAN_LABEL}
-               FROM tasks t
-               LEFT JOIN plans pl ON pl.id = t.plan_id
-              WHERE t.project='${p}' AND t.status='completed' ${filter}
-              ORDER BY COALESCE(t.completed_at,t.updated) DESC;`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        // COALESCE, because `completed_at` is the honest completion date and
+        // `updated` is merely the last time the row was touched — a later
+        // edit (a tag, a feedback note) would otherwise re-date a task to
+        // long after it was finished, and re-sort the changelog with it.
+        // Rows written before `completed_at` was populated have none, so
+        // `updated` remains the fallback rather than the source.
+        `SELECT t.seq, substr(COALESCE(t.completed_at,t.updated),1,10) AS date, t.type, t.title, t.tags,
+                ${PLAN_LABEL} AS plan
+           FROM tasks t
+           LEFT JOIN plans pl ON pl.id = t.plan_id
+          WHERE t.project='${p}' AND t.status='completed' ${filter}
+          ORDER BY COALESCE(t.completed_at,t.updated) DESC;`,
     );
-    return 0;
+
+    // Parse JSON columns
+    for (const row of rows) {
+        row.tags = JSON.parse(row.tags ?? '[]');
+    }
+
+    return result(
+        records('tasks', ['seq', 'date', 'type', 'title', 'tags', 'plan'], rows),
+    );
 }
 
 /** @param {any} action */
@@ -585,7 +622,7 @@ function planCreate(action) {
 }
 
 /**
- * One plan as JSON (default: metadata only; `--with-content` adds the body),
+ * One plan as a `plan` part (default: metadata only; `--with-content` adds the body),
  * or the raw stored body with `--content-only`.
  *
  * `--content-only` goes through `sqlBody`, not `sql`: `sql()` trims ALL
@@ -607,24 +644,33 @@ function planGet(action) {
     }
 
     const contentColumn = action.opts.withContent ? ', content' : '';
-    const result = sql(
+    const rows = sqlJson(
         `SELECT id, project, seq, title, source, path, origin_path, content_hash,
                 synced_at, pending_hash, pending_at, status, notes, tags, created, updated${contentColumn}
            FROM plans
           WHERE project='${p}' AND seq=${seq};`,
-        ['-json'],
     );
-    emit(result, action.global.outputFile);
-    return 0;
+
+    // Parse JSON columns
+    for (const row of rows) {
+        row.notes = row.notes == null ? null : JSON.parse(row.notes);
+        row.tags = JSON.parse(row.tags ?? '[]');
+    }
+
+    const columns = ['id', 'project', 'seq', 'title', 'source', 'path', 'origin_path', 'content_hash',
+                     'synced_at', 'pending_hash', 'pending_at', 'status', 'notes', 'tags', 'created', 'updated'];
+    if (action.opts.withContent) columns.push('content');
+
+    return result(
+        records('plan', columns, rows),
+    );
 }
 
 /**
- * Every plan as `P%03d|title|source|status|done|total|drift`.
+ * Every plan as a `plans` part: number, title, source, status, done, total, drift.
  *
  * `drift` cannot be computed in SQL — it depends on the live filesystem — so
- * this handler fetches rows as JSON, computes drift in JS via `planDrift`,
- * and builds the pipe-separated line itself. It is the one list handler that
- * cannot use `sqlRows`.
+ * this handler fetches rows as JSON and computes drift in JS via `planDrift`.
  *
  * Hiding cancelled plans by default and `ORDER BY seq DESC` mirror `taskList`.
  *
@@ -644,17 +690,23 @@ function planList(action) {
           ORDER BY seq DESC;`,
     );
 
-    const lines = rows.map((row) => {
-        const drift = planDrift({
+    for (const row of rows) {
+        row.drift = planDrift({
             source: row.source,
             path: row.path,
             content_hash: row.content_hash,
             pending_hash: row.pending_hash ?? null,
         });
-        return `${row.display_seq}|${row.title}|${row.source}|${row.status}|${row.done}|${row.total}|${drift}`;
-    });
-    emit(lines.join('\n'), action.global.outputFile);
-    return 0;
+        row.number = row.display_seq;
+        delete row.display_seq;
+        delete row.path;
+        delete row.content_hash;
+        delete row.pending_hash;
+    }
+
+    return result(
+        records('plans', ['number', 'title', 'source', 'status', 'done', 'total', 'drift'], rows),
+    );
 }
 
 // Kinds a caller cannot forge from argv on `add` (the parser already
@@ -718,7 +770,7 @@ function planNoteAdd(action) {
 }
 
 /**
- * A plan's notes as a JSON array, most-recent-id first, optionally capped to
+ * A plan's notes as a `notes` part, most-recent-id first, optionally capped to
  * the last `--limit` entries.
  *
  * @param {any} action
@@ -727,8 +779,23 @@ function planNoteList(action) {
     const o = action.opts;
     const p = esc(action.global.project);
     const planId = resolvePlanId(p, Number(o.seq));
-    emit(notesJson(planId, o.limit ?? null), action.global.outputFile);
-    return 0;
+    const notesJsonText = notesJson(planId, o.limit ?? null);
+    const rows = JSON.parse(notesJsonText || '[]');
+
+    // Ensure all expected keys exist for missing fields
+    for (const row of rows) {
+        row.id = row.id ?? null;
+        row.ts = row.ts ?? null;
+        row.kind = row.kind ?? null;
+        row.note = row.note ?? null;
+        row.tasks = row.tasks ?? null;
+        row.hash = row.hash ?? null;
+        row.edited = row.edited ?? null;
+    }
+
+    return result(
+        records('notes', ['id', 'ts', 'kind', 'note', 'tasks', 'hash', 'edited'], rows),
+    );
 }
 
 /**

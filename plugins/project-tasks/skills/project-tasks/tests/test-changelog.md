@@ -68,7 +68,7 @@ The user says:
 1. The skill runs:
 
    ```bash
-   $TASK_DB task changelog list --project "claude-monitor"
+   $TASK_DB task changelog list --project "claude-monitor" --format json
    ```
 
 2. It creates `CHANGELOG.md` with exactly:
@@ -141,7 +141,7 @@ A task completes and the skill auto-updates the changelog.
 1. The skill requests only new entries:
 
    ```bash
-   $TASK_DB task changelog list --project "claude-monitor" --new-only
+   $TASK_DB task changelog list --project "claude-monitor" --new-only --format json
    ```
 
 2. It prepends the 2026-03-04 section without changing or duplicating the

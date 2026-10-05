@@ -36,6 +36,7 @@ export const ENUMS = {
   status: ['pending', 'in_progress', 'completed', 'cancelled'],
   type: ['fix', 'task', 'todo'],
   priority: ['high', 'medium', 'low'],
+  format: ['md', 'json', 'pipe'],
   noteKind: ['created', 'tasks-created', 'applied', 'reconciled', 'status', 'manual'],
   // Kinds a caller may WRITE. `created`, `applied`, and `status` are emitted only by
   // the helper's own lifecycle hooks; accepting them from argv would let a caller forge
@@ -48,10 +49,14 @@ export const ENUMS = {
 // Global options. `--project` is required on every `task *` and `plan *` command
 // (see each command's `project` field) and rejected on `db *`. On `plan *` it scopes
 // the P### sequence lookup — it identifies whose plan, and never filters a plan's
-// child tasks, which may span repositories. Both land in `action.global`, not `opts`.
+// child tasks, which may span repositories. Every command accepts `--format` and
+// `--output-file`; in this step only the converted reads format their output, and the
+// other commands accept `--format` without changing what they print.
+// All land in `action.global`, not `opts`.
 export const GLOBALS = {
   '--project': { key: 'project', type: 'str' },
   '--output-file': { key: 'outputFile', type: 'path' },
+  '--format': { key: 'format', type: 'enum', values: ENUMS.format, default: 'pipe' },
 };
 
 // `--help` / `-h` short-circuits to { kind:'help' } at any depth.
@@ -259,7 +264,7 @@ export const COMMANDS = {
       '--content-only': { key: 'contentOnly', type: 'bool' },
     },
     rules: {
-      exclusive: [['--with-content', '--content-only']],
+      exclusive: [['--with-content', '--content-only'], ['--content-only', '--format']],
     },
   },
 

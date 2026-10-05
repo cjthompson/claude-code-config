@@ -9,9 +9,9 @@ resolve `$TASK_DB` and `$PROJECT`. Otherwise, reuse those resolved values. Then
 run both:
 
 ```bash
-$TASK_DB plan get --project "<current project>" --seq <seq>
-$TASK_DB plan tasks --project "<current project>" --seq <seq>
+$TASK_DB plan get --project "<current project>" --seq <seq> --format md
+$TASK_DB plan tasks --project "<current project>" --seq <seq> --format md
 ```
 
-Print the plan's own record, then its task list. (This is deliberately the
+Print both outputs verbatim: the plan's own record, then its task list. (This is deliberately the
 raw record + task rows, not the skill's "show plan PNNN" annotated view.)

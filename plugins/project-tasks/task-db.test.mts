@@ -1288,6 +1288,11 @@ describe('cli — Group D: enums', () => {
       bad: 'urgent',
     },
     {
+      enumName: 'format',
+      argv: (v) => ['task', 'list', '--project', 'p', '--format', v],
+      bad: 'xml',
+    },
+    {
       enumName: 'noteKindWritable',
       argv: (v) => ['plan', 'note', 'add', '--project', 'p', '--seq', '1', '--note', 'n', '--kind', v],
       bad: 'applied',
@@ -1316,6 +1321,55 @@ describe('cli — Group D: enums', () => {
     for (const kind of ENUMS.noteKindWritable) {
       parseOk(['plan', 'note', 'add', '--project', 'p', '--seq', '1', '--note', 'n', '--kind', kind]);
     }
+  });
+});
+
+describe('cli — Group D: --format global option', () => {
+  it('--format md populates global.format', () => {
+    const action = parseOk(['task', 'list', '--project', 'p', '--format', 'md']);
+    strictEqual(action.kind, 'run');
+    strictEqual((action as any).global.format, 'md');
+  });
+
+  it('--format json works with equals syntax', () => {
+    const action = parseOk(['task', 'list', '--project', 'p', '--format=json']);
+    strictEqual(action.kind, 'run');
+    strictEqual((action as any).global.format, 'json');
+  });
+
+  it('--format pipe is the default when not specified', () => {
+    const action = parseOk(['task', 'list', '--project', 'p']);
+    strictEqual(action.kind, 'run');
+    strictEqual((action as any).global.format, 'pipe');
+  });
+
+  it('invalid --format value throws with valid options', () => {
+    const err = parseFail(['task', 'list', '--project', 'p', '--format', 'xml']);
+    match(err.message, /invalid value.*--format/i);
+    match(err.message, /md.*json.*pipe/);
+  });
+
+  it('repeated --format throws', () => {
+    const err = parseFail(['task', 'list', '--project', 'p', '--format', 'md', '--format', 'json']);
+    match(err.message, /repeated/i);
+  });
+
+  it('--output-file and --format can both be specified', () => {
+    const action = parseOk(['task', 'list', '--project', 'p', '--format', 'json', '--output-file', '/tmp/out.json']);
+    strictEqual(action.kind, 'run');
+    strictEqual((action as any).global.format, 'json');
+    strictEqual((action as any).global.outputFile, '/tmp/out.json');
+  });
+
+  it('plan get --content-only and --format are mutually exclusive', () => {
+    const err = parseFail(['plan', 'get', '--project', 'p', '--seq', '1', '--content-only', '--format', 'md']);
+    match(err.message, /mutually exclusive/i);
+  });
+
+  it('outputFile is null when not specified', () => {
+    const action = parseOk(['task', 'list', '--project', 'p']);
+    strictEqual(action.kind, 'run');
+    strictEqual((action as any).global.outputFile, null);
   });
 });
 

@@ -30,7 +30,8 @@
  */
 
 import { CliError, parseArgv } from '../lib/cli.mjs';
-import { DbError } from '../lib/db.mjs';
+import { DbError, emitResult } from '../lib/db.mjs';
+import { isResult } from '../lib/format.mjs';
 import { HANDLERS } from '../lib/handlers.mjs';
 
 /** @returns {number} the process exit code */
@@ -50,7 +51,12 @@ function main() {
             `ERROR: internal: no handler named '${action.handler}' for '${action.command}'.`,
         );
     }
-    return handler(action) ?? 0;
+    const out = handler(action);
+    if (isResult(out)) {
+        emitResult(out, action.global);
+        return 0;
+    }
+    return out ?? 0;
 }
 
 try {

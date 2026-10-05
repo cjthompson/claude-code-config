@@ -32,7 +32,8 @@
  * and vice versa.
  */
 
-import { emit, esc, notesJson, planDrift, resolvePlanId, sqlJson, sqlRows } from './db.mjs';
+import { emit, esc, notesJson, planDrift, resolvePlanId, sqlJson } from './db.mjs';
+import { records, result } from './format.mjs';
 import { table } from './gfm.mjs';
 import { slugify } from './normalize.mjs';
 
@@ -127,7 +128,7 @@ function taskRefLabel(ref) {
 // ── plan tasks ────────────────────────────────────────────────
 
 /**
- * A plan's child tasks as `#NNN|project|anchor|type|title|priority|status`.
+ * A plan's child tasks as a `tasks` part (number, project, anchor, type, title, priority, status).
  *
  * `project` is the second column and is not optional: a plan is global, so two
  * children can both be `#003` in different repositories. Callers filter on that
@@ -148,17 +149,17 @@ function planTasks(action) {
     const status = action.opts.status;
     const where = status ? ` AND t.status='${esc(status)}'` : '';
 
-    emit(
-        sqlRows(
-            `SELECT printf('#%03d',t.seq), t.project, COALESCE(t.plan_anchor,''),
-                    t.type, t.title, t.priority, t.status
-               FROM tasks t
-              WHERE t.plan_id=${planId}${where}
-              ORDER BY t.id;`,
-        ),
-        action.global.outputFile,
+    const rows = sqlJson(
+        `SELECT printf('#%03d',t.seq) AS number, t.project, COALESCE(t.plan_anchor,'') AS anchor,
+                t.type, t.title, t.priority, t.status
+           FROM tasks t
+          WHERE t.plan_id=${planId}${where}
+          ORDER BY t.id;`,
     );
-    return 0;
+
+    return result(
+        records('tasks', ['number', 'project', 'anchor', 'type', 'title', 'priority', 'status'], rows),
+    );
 }
 
 // ── plan status ───────────────────────────────────────────────
