@@ -5,7 +5,7 @@
     },
     "metadata": {
         "description": "Codex and Cursor skill plugins for Python, TypeScript, Rust, Textual, task management, and agent orchestration.",
-        "version": "0.0.90"
+        "version": "0.0.91"
     },
     "plugins": [
         {
@@ -36,7 +36,7 @@
             "name": "project-tasks",
             "source": "./plugins/project-tasks",
             "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
-            "version": "2.3.0",
+            "version": "2.4.0",
             "keywords": ["tasks", "plans", "changelog", "sqlite", "subagents"],
             "category": "developer-tools"
         },

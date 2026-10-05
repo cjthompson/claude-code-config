@@ -1,7 +1,7 @@
 {
     "name": "project-tasks",
     "displayName": "Project Tasks",
-    "version": "2.3.0",
+    "version": "2.4.0",
     "description": "Capture tasks inline with task:/fix:/todo:/plan: prefixes, store in SQLite, group work under plans, dispatch to subagents, and auto-generate changelogs.",
     "author": { "name": "cjthompson" },
     "publisher": "cjthompson",
