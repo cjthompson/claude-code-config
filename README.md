@@ -97,6 +97,8 @@ Tasks created from a plan carry an *anchor*, a slug of the step heading they cam
 
 > **Upgrading to 2.0:** the `task-db` helper moved from 13 flat commands to a nested surface (`task add`, `task deps blocked`, `plan note add`, …). There are no aliases — every old name errors with a message naming its replacement. The database itself migrates additively in place; no task is renumbered and nothing is rebuilt. Only the skill invokes the helper directly, so this matters only if you scripted against it.
 
+> **Output formats:** read commands (`task get`, `task list`, `task deps blocked`, `plan get`, `plan list`, `plan tasks`, `plan note list`, …) accept `--format md|json|pipe`. The default is `pipe`, so `task get`, `plan get`, and `plan note list` no longer print JSON unless you pass `--format json`. JSON output is always one object keyed by part name, for example `{"task":[{…}]}`.
+
 ### orchestration-strategy
 
 Evaluates multi-task workloads and selects the most cost-efficient orchestration approach: solo, parallel agents, sequential subagents, or Agent Teams. Analyzes file overlap and dependency graphs to determine isolation strategy, then hands off to the appropriate execution skill.

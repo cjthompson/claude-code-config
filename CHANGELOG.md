@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.96 - 2026-10-04
+
+### Features
+- **project-tasks**: `task-db` read commands accept `--format md|json|pipe` (default `pipe`). `md` prints GFM tables for showing results, and `json` always prints one object keyed by part name. `--output-file` now confirms with a formatted `status` part.
+- **project-tasks**: `task deps blocked` returns full task rows, the same columns as `task list`, with status `pending (blocked)`.
+
+### Breaking
+- **project-tasks**: `task get`, `plan get`, and `plan note list` default to `pipe` instead of JSON. Pass `--format json` for the old behavior. The skill and its references now pass `--format` explicitly.
+
 ## v0.0.95 - 2026-10-04
 
 ### Docs
