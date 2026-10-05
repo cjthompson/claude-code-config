@@ -9,17 +9,20 @@ import tempfile
 import unittest
 
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks", "worktree-guard.py")
+# A session launched with the documented disable switch, or inside a git hook, must not skew results.
+SCRUBBED_VARS = ("WORKTREE_GUARD_DISABLE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+BASE_ENV = {k: v for k, v in os.environ.items() if k not in SCRUBBED_VARS}
 
 
 def git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env=BASE_ENV)
 
 
 def run_guard(mode, payload, **env):
     r = subprocess.run(
         ["/usr/bin/python3", GUARD, mode],
         input=json.dumps(payload), capture_output=True, text=True,
-        env=dict(os.environ, **env), timeout=30,
+        env=dict(BASE_ENV, **env), timeout=30,
     )
     return r.returncode, r.stdout.strip()
 
