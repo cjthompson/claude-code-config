@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.94 - 2026-10-04
+
+### Fixes
+- **worktree-guard**: the test suite no longer picks up `WORKTREE_GUARD_DISABLE` or `GIT_DIR`-style variables from the shell that runs it. Running the tests from a session launched with the documented disable switch had failed 10 of 17.
+
 ## v0.0.93 - 2026-10-04
 
 ### Docs
