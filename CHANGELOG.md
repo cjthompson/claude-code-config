@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.93 - 2026-10-04
+
+### Docs
+- `CLAUDE.md`: version bumps and `CHANGELOG.md` entries happen only on `main`, never on a feature branch or in a worktree.
+
+### Chores
+- Pinned this repo's project-tasks name to `claude-code-config` in `.claude/project-tasks.json`, matching the name its existing plans and tasks are stored under.
+
 ## v0.0.92 - 2026-10-01
 
 ### Features
