@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.97 - 2026-10-04
+
+### Chores
+- **project-tasks**: plugin version `2.4.0` in all three host manifests and both marketplace catalogs, so marketplace installs pick up `--format`. Claude marketplace metadata `1.0.3`, Cursor `0.0.91`.
+
 ## v0.0.96 - 2026-10-04
 
 ### Features
