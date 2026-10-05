@@ -2,7 +2,9 @@
 
 ## Post-Commit Tasks
 
-After every `git commit` or `git merge` on the `main` always perform the following steps:
+After every `git commit` or `git merge` on the `main` branch always perform the following steps:
+
+**These steps happen only on `main`.** Never bump versions or add `CHANGELOG.md` entries on a feature branch or in a worktree — those changes get their bump after they are merged into `main`.
 
 1. **Bump the patch version in `package.json`** — Increment the `version` field by one patch version (e.g., `1.0.0` → `1.0.1`). If no `version` field exists, add one starting at `0.0.1`.
 
