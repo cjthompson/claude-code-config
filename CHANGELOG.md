@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.0.95 - 2026-10-04
+
+### Docs
+- **project-tasks**: the task-db output-format plan now says pipe output escapes only a leading `##`, matching the code. A single leading `#` is left alone, so IDs like `#001` stay unescaped.
+
 ## v0.0.94 - 2026-10-04
 
 ### Fixes
