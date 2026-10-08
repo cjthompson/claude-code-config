@@ -15,25 +15,31 @@ Three files in `plugins/project-tasks` and one test file:
 - `skills/project-tasks/references/task-execution.md` — read the plan once
   before dispatch and inline a `Plan:` block into both prompt templates.
 - `commands/task-read.md` — render the linked plan line and a hint.
-- `lib/task-db.integration.test.mts` — extend existing fixtures.
+- `task-db.integration.test.mts` — extend existing fixtures. This file sits at
+  the plugin root, not under `lib/`.
 
 No schema migration. No `create-tasks` workflow change. No new CLI subcommand.
 
 ## `taskGet` output
 
-The handler at `lib/handlers.mjs:324–338` currently returns
+The handler at `lib/handlers.mjs:325–347` currently returns
 `seq, type, title, priority, tags, reqs, depends_on, status, plan_id,
-plan_seq, plan_project` from a `LEFT JOIN plans p ON p.id = t.plan_id`.
+plan_seq, plan_project` from a `LEFT JOIN plans p ON p.id = t.plan_id`. That
+field list appears twice: in the SELECT, and in the `records('task', [...])`
+column list at line 345. The Result model emits only the listed columns, so
+both must change.
 
-Add two fields:
+Add two fields to both:
 
 - `p.title AS plan_title` — alias is required because `t.title` is already
   selected; the `-json` output emits one `title` key per column name.
 - `t.plan_anchor` — the per-task step slug from the partial unique index
   `idx_tasks_plan_anchor`.
 
-Update the doc comment at lines 307–321 to name all five plan fields:
-`plan_id, plan_seq, plan_project, plan_title, plan_anchor`.
+Update the doc comment at lines 308–324 to name all five plan fields:
+`plan_id, plan_seq, plan_project, plan_title, plan_anchor`. Its closing
+sentence (lines 320–321, wrapped) reads "with the three plan fields null";
+change "three" to "five".
 
 ## Plan body retrieval
 
@@ -43,9 +49,10 @@ The lead agent calls, once, between `task get` and Scout dispatch:
 $TASK_DB plan get --project "{plan_project}" --seq {plan_seq} --content-only
 ```
 
-The handler at `lib/handlers.mjs:603–606` returns the stored body verbatim.
+The handler at `lib/handlers.mjs:640–644` returns the stored body verbatim.
 No status blockquotes, no `## History` footer, no stderr warnings. An empty
-body comes back as an empty string.
+body comes back as an empty string. `--content-only` is mutually exclusive
+with `--format` (`lib/registry.mjs:267`), so the call must not pass `--format`.
 
 `plan status` and `plan status --limit N` are not suitable — `--limit` only
 bounds the `## History` footer, and `plan status` adds annotations under each
@@ -62,8 +69,11 @@ task's `plan_seq` and `plan_project` travel as a pair; both come from the
 
 ## Step-body slicing
 
-The lead agent slices the body itself; no CLI helper does it. Match
-`planStatus`'s logic at `lib/plan-read.mjs:45` and `lib/normalize.mjs:59`:
+The lead agent slices the body itself; no CLI helper does it. Heading detection
+and slugging match `planStatus` (`HEADING_RE` at `lib/plan-read.mjs:46`,
+`slugify` at `lib/normalize.mjs:59`). The end-of-step rule below has no
+existing counterpart: `planStatus` uses headings only to attach annotations and
+never cuts a section. The lead agent applies this rule as written:
 
 - A heading line matches the regex `^#{1,6}\s+(.*)$`.
 - A heading's slug is its text lowercased, with each run of characters
@@ -119,8 +129,13 @@ only; do not carry out sibling-step work."
 
 ## `task-read.md` edit
 
-Replace line 14 (`Print the full record.`) with: print the record, then, if
-`plan_seq` is non-null, print one line `Plan: {plan_seq} — {plan_title}`.
+The command renders `task get --format md` (line 11) and line 14 says
+`Print the output verbatim.` Keep both. After the verbatim output, run
+`$TASK_DB task get --project "<current project>" --seq <seq> --format json`
+and read `task[0]`. If `plan_seq` is non-null, print one line
+`Plan: {plan_seq} — {plan_title}`. The md table also gains `plan_title` and
+`plan_anchor` columns from the `handlers.mjs` change; the `Plan:` line is
+separate from that table.
 
 Hint line — only when `plan_project` equals the current project:
 
@@ -138,12 +153,15 @@ repository. No hint line.
 All edits land in `task-db.integration.test.mts`, not `task-db.test.mts`
 (the latter holds parser and doc-lint tests):
 
-- **Non-linked control** at line 918 — add
-  `strictEqual(parsed[0].plan_title, null)` and
-  `strictEqual(parsed[0].plan_anchor, null)`.
-- **Plan-linked** at line 1000 — add
+Assertions read `runJson(home, [...]).task[0]`, the shape the existing tests
+use. The existing `task get` tests read `parsed[0]`; that form is stale.
+
+- **Non-linked control** at line 933 — add
+  `strictEqual(task[0].plan_title, null)` and
+  `strictEqual(task[0].plan_anchor, null)`.
+- **Plan-linked** at line 1015 — add
   `plan_title === 'Seeded plan'` and `plan_anchor === 'step-one'`.
-- **Cross-repo** at line 1016 — extend `seedPlan` (lines 115–122) with an
+- **Cross-repo** at line 1030 — extend `seedPlan` (lines 134–141) with an
   optional `title` argument, seed distinct titles per plan, and assert the
   correct plan's title plus `plan_anchor === 'backend-step'`. Distinct
   titles are required: `seedPlan` currently hard-codes `'Seeded plan'` and
