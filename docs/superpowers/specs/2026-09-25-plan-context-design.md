@@ -14,7 +14,8 @@ Three files in `plugins/project-tasks` and one test file:
 - `lib/handlers.mjs` — extend the `taskGet` SELECT.
 - `skills/project-tasks/references/task-execution.md` — read the plan once
   before dispatch and inline a `Plan:` block into both prompt templates.
-- `commands/task-read.md` — render the linked plan line and a hint.
+- `commands/task-read.md` — add the plan hint line only; the md table
+  carries the plan columns.
 - `task-db.integration.test.mts` — extend existing fixtures. This file sits at
   the plugin root, not under `lib/`.
 
@@ -118,7 +119,7 @@ Plan step:
 {planStepContext}
 ```
 
-In the Executor prompt template (lines 110–124), insert the same block
+In the Executor prompt template (lines 111–124), insert the same block
 after line 117 (`- {each requirement}`) and before line 119
 (`Implementation Map:`).
 
@@ -129,13 +130,17 @@ only; do not carry out sibling-step work."
 
 ## `task-read.md` edit
 
+The md renderer needs no change. `formatMd` in `lib/format.mjs` prints every
+declared column of a records part as a table, the same way `formatJson` and
+`formatPipe` emit every declared column. The `plan_title` and `plan_anchor`
+columns added to `taskGet` therefore appear in md output automatically,
+alongside `plan_seq` and `plan_project`. The md output carries the plan
+information in the same form as the json and pipe output.
+
 The command renders `task get --format md` (line 11) and line 14 says
-`Print the output verbatim.` Keep both. After the verbatim output, run
-`$TASK_DB task get --project "<current project>" --seq <seq> --format json`
-and read `task[0]`. If `plan_seq` is non-null, print one line
-`Plan: {plan_seq} — {plan_title}`. The md table also gains `plan_title` and
-`plan_anchor` columns from the `handlers.mjs` change; the `Plan:` line is
-separate from that table.
+`Print the output verbatim.` Keep both. No second call and no separate
+`Plan:` line. The hint rule below reads `plan_seq` and `plan_project` from the
+printed task row.
 
 Hint line — only when `plan_project` equals the current project:
 
@@ -143,18 +148,18 @@ Hint line — only when `plan_project` equals the current project:
 For the plan and its tasks, run /project-tasks:plan-read {plan_seq}.
 ```
 
-Cross-project — when `plan_project` differs, print
-`Plan: {plan_seq} ({plan_project}) — {plan_title}` and note the plan
-belongs to `{plan_project}`, so `plan-read` must be run from that
-repository. No hint line.
+Cross-project — when `plan_project` differs, print one line noting the plan
+belongs to `{plan_project}`, so `plan-read` must be run from that repository.
+No hint line.
 
 ## Tests
 
 All edits land in `task-db.integration.test.mts`, not `task-db.test.mts`
 (the latter holds parser and doc-lint tests):
 
-Assertions read `runJson(home, [...]).task[0]`, the shape the existing tests
-use. The existing `task get` tests read `parsed[0]`; that form is stale.
+Assertions read the task row from `runJson(home, [...]).task`, as the existing
+`task get` tests do: the non-linked test indexes `task[0]`, and the plan-linked
+and cross-repo tests destructure `const [row] = ….task`.
 
 - **Non-linked control** at line 933 — add
   `strictEqual(task[0].plan_title, null)` and
@@ -184,5 +189,6 @@ parse-checked alongside `SKILL.md` and `references/plans.md`.
 
 ## Commit flow
 
-The repo's `CLAUDE.md` post-commit rules apply: bump `package.json` and
+The root `CLAUDE.md` post-commit rules apply only after this branch is merged
+into `main`, not on the feature branch: bump `package.json` and
 `package-lock.json` patch, update `CHANGELOG.md`, audit `README.md`.
