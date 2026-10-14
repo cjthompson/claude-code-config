@@ -508,6 +508,53 @@ describe('buildModelTiers', () => {
   it('strips "Claude " and "(...context)" decoration before taking the letter', () => {
     strictEqual(stripAnsi(buildModelTiers('Claude Sonnet 4.6 (1M context)')[1]).trim().slice(-1), 'S');
   });
+
+  it('colors the bolt by effort level in both tiers', () => {
+    const BOLT = '\uf0e7';
+    const levels: [string, number][] = [['low', 245], ['medium', 117], ['high', 221], ['xhigh', 215], ['max', 203]];
+    for (const [level, n] of levels) {
+      const tiers = buildModelTiers('Opus 4.6', level);
+      for (const tier of [tiers[0], tiers[1]]) {
+        ok(tier.includes(`\x1b[38;5;${n}m${BOLT}`), `expected level ${level} color ${n} in: ${JSON.stringify(tier)}`);
+      }
+    }
+  });
+
+  it('keeps white before the bolt when level is absent', () => {
+    const BOLT = '\uf0e7';
+    for (const tiers of [buildModelTiers('Opus 4.6'), buildModelTiers('Opus 4.6', undefined)]) {
+      for (const tier of [tiers[0], tiers[1]]) {
+        ok(tier.includes(`\x1b[38;5;255m${BOLT}`), `expected white bolt in: ${JSON.stringify(tier)}`);
+      }
+    }
+  });
+
+  it('keeps white for an unknown level string', () => {
+    const BOLT = '\uf0e7';
+    for (const value of ['bogus', 42 as unknown as string]) {
+      const tiers = buildModelTiers('Opus 4.6', value);
+      for (const tier of [tiers[0], tiers[1]]) {
+        ok(tier.includes(`\x1b[38;5;255m${BOLT}`), `expected white bolt for ${String(value)} in: ${JSON.stringify(tier)}`);
+      }
+    }
+  });
+
+  it('keeps white for prototype keys', () => {
+    const BOLT = '\uf0e7';
+    const tiers = buildModelTiers('Opus 4.6', 'constructor');
+    for (const tier of [tiers[0], tiers[1]]) {
+      ok(tier.includes(`\x1b[38;5;255m${BOLT}`), `expected white bolt in: ${JSON.stringify(tier)}`);
+    }
+  });
+
+  it('does not change visible text', () => {
+    const BOLT = '\uf0e7';
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max', undefined]) {
+      const tiers = buildModelTiers('Opus 4.6', level);
+      strictEqual(stripAnsi(tiers[0]), ` ${BOLT} Opus 4.6 `);
+      strictEqual(stripAnsi(tiers[1]), ` ${BOLT} O `);
+    }
+  });
 });
 
 describe('buildTimeTiers', () => {

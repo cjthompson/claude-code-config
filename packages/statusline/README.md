@@ -139,6 +139,8 @@ Tests and dev tooling for this package live under `tests/packages/statusline/` a
 | Time to context limit | tokens remaining / token rate | `~1h1m left` | 9 |
 | Burn rate | cost / duration (shown after 1 min) | `$12.60/hr` | 10 (last to drop) |
 
+The model segment's lightning-bolt icon is colored by the session's reasoning effort (`session.effort.level`): gray for `low`, cyan for `medium`, yellow for `high`, orange for `xhigh`, and red for `max`. The bolt stays white when the level is absent or unrecognized, such as on models without effort support.
+
 Segments are defined in display order, each with a `priority` number — higher means more important, kept longer. `fitSegments()` repeatedly removes the **lowest**-priority segment until the rendered line fits within `maxWidth`, stopping once only segments at or above `PROTECTED_PRIORITY` (100) remain. Time, model, context window, git branch, and working directory sit at that protected priority and are never *removed* by `fitSegments()` — display order and priority are fully decoupled.
 
 Once every droppable segment is gone and the line still doesn't fit, the five protected segments shrink through their own tiers, **in this order — each one's ladder fully exhausted before the next one starts shrinking at all:**

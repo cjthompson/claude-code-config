@@ -474,16 +474,28 @@ function buildBranchTiers(branch: string): string[] {
 export { buildBranchTiers };
 
 // ── Model tiers ───────────────────────────────────────────────
+// The bolt glyph is colored by effort level; absent/unknown levels use WHITE.
+// Map lookup (not a plain object) so keys like "constructor" fall back to WHITE.
+const EFFORT_BOLT_FG = new Map<string, string>([
+  ['low', GRAY_FG],
+  ['medium', CYAN_FG],
+  ['high', YELLOW_FG],
+  ['xhigh', ORANGE_FG],
+  ['max', RED_FG],
+]);
+
 // Model is protected (never dropped). Its one shrink step abbreviates the
 // full display name down to a single letter from the normalized family
 // name (handles "Claude " prefixes and "(1M context)" suffixes the same
 // way resolveContextWindowSize's lookup does) -- e.g. "Claude Sonnet 4.6"
 // -> "S", "Opus 4.6" -> "O", "Haiku 3.5" -> "H".
-function buildModelTiers(displayName: string): string[] {
+function buildModelTiers(displayName: string, effortLevel?: string): string[] {
   const letter = (normalizeModelName(displayName)[0] ?? '?').toUpperCase();
+  const boltFg = (typeof effortLevel === 'string' ? EFFORT_BOLT_FG.get(effortLevel) : undefined) ?? WHITE;
+  const base = combo(255, 22, true);
   return [
-    `${combo(255, 22, true)} ${ICON_BOLT} ${displayName} `,
-    `${combo(255, 22, true)} ${ICON_BOLT} ${letter} `,
+    `${base} ${boltFg}${ICON_BOLT}${base} ${displayName} `,
+    `${base} ${boltFg}${ICON_BOLT}${base} ${letter} `,
   ];
 }
 
@@ -601,7 +613,7 @@ function main(): void {
   let modelSeg: PowerlineSeg | undefined;
   let modelTiers: string[] | undefined;
   if (model?.display_name && isSectionEnabled(config, SECTION.MODEL)) {
-    modelTiers = buildModelTiers(model.display_name);
+    modelTiers = buildModelTiers(model.display_name, session.effort?.level);
     modelSeg = { section: 22, priority: PROTECTED_PRIORITY, content: modelTiers[0] };
     line1Segs.push(modelSeg);
   }
