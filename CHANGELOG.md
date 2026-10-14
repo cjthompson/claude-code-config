@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.98 - 2026-10-14
+
+### Features
+- **statusline**: the model segment's lightning-bolt icon is colored by the session's effort level: gray for `low`, cyan for `medium`, yellow for `high`, orange for `xhigh`, and red for `max`. The bolt stays white when the level is absent or unrecognized. Width and gating are unchanged.
+
+### Tests
+- **statusline**: `buildModelTiers` tests cover per-level bolt colors in both tiers, white fallbacks, and unchanged visible text.
+
 ## v0.0.97 - 2026-10-04
 
 ### Chores
