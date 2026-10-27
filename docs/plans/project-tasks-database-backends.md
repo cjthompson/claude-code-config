@@ -301,7 +301,7 @@ Completed/already-cancelled tasks remain unchanged. If in-progress/completed tas
 6. Implement shared status/finality/membership/cancellation rules.
 7. Default inline, adapt existing source refresh, add linked-file commit hook.
 8. Update execution/init/delegation/recovery/handoff instructions (including the new `handoff` skill command) and verify both drivers.
-9. Add the one-time whole-database SQLite-to-PostgreSQL import into an empty store (item 24). P001 has tasks for steps 1–8; add a task for this step when its stored body is refreshed.
+9. Add the one-time whole-database SQLite-to-PostgreSQL import into an empty store (item 24). P001 tracks it as task `#021` (task numbers are per project, so it follows `#008`).
 
 These steps are the work breakdown; item 24 groups them into five delivery stages.
 
