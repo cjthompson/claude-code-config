@@ -8,7 +8,7 @@ Support per-project SQLite/PostgreSQL selection, shared-database claims, delegat
 
 Prefer consistent rules over command-specific exceptions. This is a trusted-agent task tracker, not a hardened security boundary. No CI ownership, remote sub-agent execution, background synchronization, or automatic claim expiry is assumed.
 
-The decisions below reflect the discussion so far. Proposed interfaces and unresolved implementation choices are labeled accordingly. One-time SQLite-to-Postgres import remains deferred. Open questions, gaps, and edge cases are at the end.
+The decisions below reflect the discussion so far. Proposed interfaces and unresolved implementation choices are labeled accordingly. A one-time whole-database SQLite-to-PostgreSQL import into an empty store is in scope (item 24). Open questions, gaps, and edge cases are at the end.
 
 The database-focused review has been incorporated into the schema and related contracts below. See the [review findings](project-tasks-database-schema-review.md) and [HTML schema overview](project-tasks-database-schema-review.html). Technical integrity requirements are part of the plan; policy choices and exact DDL still requiring review are identified explicitly. This update also records the runtime, driver, config-location, and timestamp decisions from the review discussion.
 
@@ -705,9 +705,9 @@ Inline default avoids this problem for most plans. Offline warn-only behavior re
 
 ### 21. Inline provenance and source deletion
 
-Decision: approved with a change (2026-10-27). Keep today's import behavior: importing a plan copies it into the database, then deletes the source file after the existing byte-verification. This suits plans written in a worktree, where an imported plan needs no commit and cherry-pick to reach `main`. A `--no-delete-file` option on import keeps the source file instead. `plan detach` is unchanged: it keeps the file unless `--delete-file` is given. The origin path is still recorded as provenance.
+Decision: approved with a change (2026-10-27). Keep today's import behavior: importing a plan copies it into the database, then deletes the source file after the existing byte-verification. This suits plans written in a worktree, where an imported plan needs no commit and cherry-pick to reach `main`. A `--no-delete-file` option keeps the source file instead. Import is an agent procedure in the skill instructions (`references/plans.md`) built on `plan create --content-file`, which never deletes; so the option belongs to that procedure, not to a new helper flag. The procedure rechecks the file's hash immediately before unlinking and refuses to delete if the file changed since it was read. `plan detach` is unchanged: it keeps the file unless `--delete-file` is given. The origin path is still recorded as provenance.
 
-Import deletion keeps the existing byte-verification and changed-source safeguards; a file that fails verification is never deleted. If deletion fails after DB commit, report success of embedding/detaching and failure of deletion separately; never pretend they were atomic.
+Import deletion keeps the existing byte-verification and changed-source safeguards, plus the deletion-time recheck above; a file that fails verification is never deleted. If deletion fails after DB commit, report success of embedding/detaching and failure of deletion separately; never pretend they were atomic.
 
 Store in-repository provenance relative to Git root. Temporary content inputs are not automatically durable origins. If an origin is outside the repository, read it only when explicitly supplied and keep any absolute locator as machine-specific metadata, not a portable link.
 
@@ -742,7 +742,7 @@ Decision: approved (2026-10-27), with one change: a one-time SQLite-to-PostgreSQ
 
 Deliver in reviewable stages while keeping incomplete shared-write workflows unavailable:
 
-Approved (2026-10-27): the 8 steps under "Proposed implementation sequence" are the work breakdown and the task list; these stages are the PR groupings, each covering the steps shown.
+Approved (2026-10-27): the 9 steps under "Proposed implementation sequence" are the work breakdown and the task list; these stages are the PR groupings, each covering the steps shown.
 
 1. Driver/packaging/session/hook proof-of-concept and interface decisions (step 1).
 2. Repository extraction, config, and equivalent backend behavior (steps 2–3).

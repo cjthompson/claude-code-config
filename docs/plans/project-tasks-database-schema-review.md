@@ -141,7 +141,7 @@ Existing finalized tasks have no canonical ending handoffs. Migration must not f
 
 Existing finalized plans retain historical status even if it differs from the new derivation; do not reopen or recalculate them during migration. A mutable legacy plan whose children are all final may need prepared handoffs before reconciliation. Migration should report this condition without inventing an outcome.
 
-SQLite-to-PostgreSQL import remains deferred. New PostgreSQL tables should have native `timestamptz` columns from creation; this does not require rewriting existing SQLite rows or implementing an import. A future explicit import must preserve IDs/sequence values, interpret known legacy timestamps as UTC, and advance identity allocators above imported maxima.
+A one-time whole-database SQLite-to-PostgreSQL import into an empty store is in scope (backends plan item 24). New PostgreSQL tables should have native `timestamptz` columns from creation; this does not require rewriting existing SQLite rows or implementing an import. A future explicit import must preserve IDs/sequence values, interpret known legacy timestamps as UTC, and advance identity allocators above imported maxima.
 
 ## Decisions
 
