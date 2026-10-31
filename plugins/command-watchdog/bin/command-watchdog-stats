@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""command-watchdog-stats: read stats, suggest limits, and manage the opt-in store.
+
+Stats are opt-in: the read commands never create stats.db or its directory. Every file this
+command writes or removes lives in the store directory.
+"""
+from __future__ import annotations
+
+import argparse
+import configparser
+import datetime
+import difflib
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+HOOKS = os.path.join(HERE, "..", "hooks")
+sys.path.insert(0, HOOKS)
+import stats_store as ss  # noqa: E402
+from suggest import CheckInput, suggest_check  # noqa: E402
+from watchdog_config import BUILTIN_GLOBAL, new_parser  # noqa: E402
+
+PROMPT = "stats disabled. Do you want to enable stats collection?"
+OK, STORE_ERROR, USAGE = 0, 1, 2
+OPTIONS = ("tight", "medium", "long")
+# INI key -> (statistic column, kill column, successes column)
+CHECKS = {
+    "idle": ("max_silence_max", "killed_idle", "successful"),
+    "max_runtime": ("execution_max", "killed_max_runtime", "successful"),
+    "poll_cap": ("untargeted_execution_max", "killed_poll_cap", "untargeted_successful"),
+}
+SKIPPED_BY_DEFAULT = ("command:rtk",)
+
+
+class Refusal(Exception):
+    """A refusal that carries its exit code and message."""
+
+    def __init__(self, message, code=STORE_ERROR):
+        super().__init__(message)
+        self.code = code
+
+
+def fail(message, code):
+    print(message, file=sys.stderr)
+    return code
+
+
+def data_ini():
+    return os.path.join(ss.store_dir(), "watchdog-patterns.ini")
+
+
+def open_readonly(path):
+    status = ss.check_schema(path)
+    if status != "ok":
+        raise Refusal("{} is {}; run enable-stats only on a missing store, or delete-stats to start over".format(
+            path, status))
+    conn = ss.connect(path, readonly=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def counter(conn, scope, key="", version=0):
+    return conn.execute("SELECT * FROM counters WHERE scope=? AND key=? AND rule_version=?",
+                        (scope, key, version)).fetchone()
+
+
+def avg(total, count):
+    return total / count if count else 0.0
+
+
+# ---- stats ---------------------------------------------------------------------------------------------
+
+def cmd_stats(path):
+    if not ss.is_enabled(path):
+        print(PROMPT)
+        return OK
+    conn = open_readonly(path)
+    try:
+        g = counter(conn, "global")
+        zero = {name: 0 for name in ("invocations", "successful", "failed", "killed", "rtk_proxies",
+                                     "execution_sum", "cpu_sum", "max_silence_sum", "no_output_sum",
+                                     "execution_max", "cpu_max", "max_silence_max", "no_output_max")}
+        g = dict(g) if g else zero
+        print("invocations: {}".format(g["invocations"]))
+        print("successful: {}".format(g["successful"]))
+        print("failed: {}".format(g["failed"]))
+        print("killed: {}".format(g["killed"]))
+        print("rtk proxied: {}".format(g["rtk_proxies"]))
+        overridden = conn.execute(
+            "SELECT COALESCE(SUM(invocations), 0) FROM counters WHERE scope='rule_override'").fetchone()[0]
+        print("overridden runs: {}".format(overridden))
+        names = {}
+        for row in conn.execute("SELECT override_vars FROM invocations WHERE env_overrides=1"):
+            for name in filter(None, row[0].split(",")):
+                names[name] = names.get(name, 0) + 1
+        for name in sorted(names):
+            print("  {}: {}".format(name, names[name]))
+        print("successful runs, average and max:")
+        for label, stem in (("execution time", "execution"), ("cpu time", "cpu"),
+                            ("max silence", "max_silence"), ("no-output time", "no_output")):
+            print("  {}: avg {:.1f}s, max {:.1f}s".format(
+                label, avg(g[stem + "_sum"], g["successful"]), g[stem + "_max"]))
+
+        total_kills = g["killed"]
+        print("kills by reason:")
+        for row in conn.execute("SELECT key, killed FROM counters WHERE scope='kill_reason' "
+                                "ORDER BY killed DESC, key"):
+            print("kill reason {}: {} ({:.0f}%)".format(row["key"], row["killed"],
+                                                       100.0 * row["killed"] / total_kills if total_kills else 0))
+        fired = conn.execute("SELECT COALESCE(SUM(killed), 0), COALESCE(SUM(killed_idle), 0), "
+                             "COALESCE(SUM(killed_max_runtime), 0), COALESCE(SUM(killed_poll_cap), 0) "
+                             "FROM counters WHERE scope='rule'").fetchone()
+        print("kills by check (runs without overrides):")
+        for label, value in (("idle", fired[1]), ("max_runtime", fired[2]), ("poll_cap", fired[3]),
+                             ("none (target-gone, orphaned)", fired[0] - fired[1] - fired[2] - fired[3])):
+            print("  {}: {} ({:.0f}%)".format(label, value, 100.0 * value / fired[0] if fired[0] else 0))
+
+        print("top processes:")
+        for row in conn.execute("SELECT key, invocations, killed FROM counters WHERE scope='primary_process' "
+                                "ORDER BY killed DESC, invocations DESC, key LIMIT 10"):
+            print("  process {}: {} runs, {} killed".format(row["key"], row["invocations"], row["killed"]))
+
+        keys = [row[0] for row in conn.execute("SELECT DISTINCT key FROM counters WHERE scope='rule' ORDER BY key")]
+        for key in keys:
+            print("rule {}".format(key))
+            rows = conn.execute("SELECT * FROM counters WHERE scope='rule' AND key=? "
+                                "ORDER BY rule_version DESC LIMIT 2", (key,)).fetchall()
+            for index, row in enumerate(rows):
+                print("  version {} ({}): {}".format(row["rule_version"], "current" if index == 0 else "previous",
+                                                    describe_rule(row)))
+    finally:
+        conn.close()
+    return OK
+
+
+def describe_rule(row):
+    n = row["invocations"]
+    return ("{} runs, kill rate {:.0f}%, exec avg {:.1f}s max {:.1f}s, silence avg {:.1f}s max {:.1f}s, "
+            "last succeeded {}, last killed {}").format(
+        n, 100.0 * row["killed"] / n if n else 0,
+        avg(row["execution_sum"], row["successful"]), row["execution_max"],
+        avg(row["max_silence_sum"], row["successful"]), row["max_silence_max"],
+        row["last_succeeded_at"] or "never", row["last_killed_at"] or "never")
+
+
+# ---- suggest-timeouts ----------------------------------------------------------------------------------
+
+def parse_choose(text):
+    chosen = {}
+    if not text or not text.strip():
+        raise Refusal("--choose needs check=option pairs, for example idle=medium,max_runtime=tight", USAGE)
+    for pair in text.split(","):
+        key, sep, option = pair.partition("=")
+        key, option = key.strip(), option.strip()
+        if not sep or not key or not option:
+            raise Refusal("bad --choose entry {!r}; expected check=option".format(pair), USAGE)
+        if key not in CHECKS:
+            raise Refusal("cannot choose {!r}; choices exist only for: {}".format(key, ", ".join(CHECKS)), USAGE)
+        if option not in OPTIONS:
+            raise Refusal("unknown option {!r}; use one of: {}".format(option, ", ".join(OPTIONS)), USAGE)
+        if key in chosen:
+            raise Refusal("{} chosen twice".format(key), USAGE)
+        chosen[key] = option
+    return chosen
+
+
+def known_sections(conn):
+    return [row[0] for row in conn.execute("SELECT DISTINCT key FROM counters WHERE scope='rule' ORDER BY key")]
+
+
+def override_sections(conn):
+    return [row[0] for row in conn.execute(
+        "SELECT DISTINCT key FROM counters WHERE scope='rule_override' ORDER BY key")]
+
+
+def excluded_summary(conn, section):
+    """Describe the runs excluded from SECTION's suggestions by overrides, naming each variable.
+
+    Returns "" when no run was excluded. The total comes from the rule_override counter; the
+    per-variable counts come from the invocation rows still kept.
+    """
+    total = conn.execute("SELECT COALESCE(SUM(invocations), 0) FROM counters "
+                         "WHERE scope='rule_override' AND key=?", (section,)).fetchone()[0]
+    if not total:
+        return ""
+    names = {}
+    for row in conn.execute("SELECT override_vars FROM invocations WHERE env_overrides=1 AND rule_key=?",
+                            (section,)):
+        for name in filter(None, row[0].split(",")):
+            names[name] = names.get(name, 0) + 1
+    detail = ", ".join("{} ({})".format(name, names[name]) for name in sorted(names))
+    return "excluded {} run(s) with overrides{}".format(total, ": " + detail if detail else "")
+
+
+def current_data(conn, section):
+    """Current rule version's counters and the INI values stored with it, or (None, None, None)."""
+    row = conn.execute("SELECT * FROM counters WHERE scope='rule' AND key=? ORDER BY rule_version DESC LIMIT 1",
+                       (section,)).fetchone()
+    if row is None:
+        return None, None, None
+    version_row = conn.execute("SELECT config_json FROM rule_versions WHERE rule_key=? AND version=?",
+                               (section, row["rule_version"])).fetchone()
+    config = json.loads(version_row[0]) if version_row else {}
+    return row["rule_version"], dict(row), config
+
+
+def compute_checks(data, config):
+    results = {}
+    poll = config.get("poll", BUILTIN_GLOBAL["poll"])
+    percent = config.get("acceptable_kill_percent", BUILTIN_GLOBAL["acceptable_kill_percent"])
+    for name, (stat, kill_col, success_col) in CHECKS.items():
+        configured = config.get(name, BUILTIN_GLOBAL[name])
+        if name == "poll_cap" and not data[success_col] and not data[kill_col]:
+            # No polling-loop run has been recorded, so there is nothing to base a poll_cap on.
+            results[name] = (configured, None)
+            continue
+        results[name] = (configured, suggest_check(CheckInput(
+            name=name, configured=configured, successes=data[success_col], maximum=data[stat] or 0.0,
+            kills=data[kill_col], invocations=data["invocations"], poll=poll, acceptable_kill_percent=percent)))
+    return results
+
+
+def show_value(value):
+    return "off" if value is None else str(value)
+
+
+def print_section(section, version, data, config, results):
+    print("section {} (rule version {}, {} runs)".format(section, version, data["invocations"]))
+    print("  {}".format(describe_rule(data)))
+    print("  nice: {} (no suggestions)".format("on" if config.get("nice", BUILTIN_GLOBAL["nice"]) else "off"))
+    for name, (configured, result) in results.items():
+        if result is None:
+            print("{}: current {}; no polling-loop runs recorded, no options".format(name, show_value(configured)))
+            continue
+        print("{}: current {}, trigger {}, {}".format(name, show_value(configured), result.trigger or "none",
+                                                     result.confidence))
+        for option in result.options:
+            marker = "  <- recommended" if option.recommended else ""
+            print("  {}: {}s{}".format(option.name, option.value, marker))
+
+
+def load_data_ini():
+    """Parse the data-directory INI for rewriting. Raises Refusal rather than risk losing content."""
+    ini = data_ini()
+    parser = new_parser()
+    if os.path.islink(ini):
+        raise Refusal("{} is a symlink; not modified".format(ini))
+    if os.path.exists(ini):
+        try:
+            with open(ini, encoding="utf-8") as handle:
+                parser.read_file(handle)
+        except (configparser.Error, UnicodeDecodeError, OSError) as error:
+            raise Refusal("{} cannot be parsed ({}); not modified".format(ini, str(error).splitlines()[0]))
+    return parser
+
+
+def check_rule_section(parser, section):
+    """A [rule:...] section without a regex matches every command, so never create one.
+
+    --apply writes only the chosen keys, so a rule section must already carry its own regex in the
+    data-directory INI.
+    """
+    if section.startswith("rule:") and not (parser.has_section(section) and parser.get(section, "regex", fallback="")):
+        raise Refusal("rule section [{}] is defined only in the plugin file; add its regex to your "
+                      "data-directory INI ({}) first, then re-run".format(section, data_ini()))
+
+
+def render_section(parser, section):
+    if not parser.has_section(section):
+        return []
+    return ["[{}]".format(section)] + ["{} = {}".format(key, value) for key, value in parser.items(section)]
+
+
+def build_new(parser, section, applied):
+    new = new_parser()
+    new.read_dict(parser)
+    if not new.has_section(section):
+        new.add_section(section)
+    for key, value in applied.items():
+        new.set(section, key, str(value))
+    return new
+
+
+def claim_backup(ini):
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return ss.claim_backup_path(ini + ".bak-" + stamp)
+
+
+def write_ini(parser):
+    """Back up the current file (if any) first, then write a temp file and rename it into place."""
+    ini = data_ini()
+    backup = None
+    if os.path.exists(ini):
+        backup = claim_backup(ini)
+        try:
+            shutil.copyfile(ini, backup)
+        except BaseException:
+            os.unlink(backup)
+            raise
+    directory = os.path.dirname(ini)
+    handle, temp = tempfile.mkstemp(dir=directory, prefix="watchdog-patterns.ini.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            parser.write(out)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temp, os.stat(ini).st_mode & 0o777 if os.path.exists(ini) else 0o644)
+        os.replace(temp, ini)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
+    return backup
+
+
+def cmd_suggest(path, section, choose, apply_changes):
+    # Usage errors first: they never depend on the store.
+    if apply_changes and not choose:
+        raise Refusal("--apply requires --choose check=option[,check=option]", USAGE)
+    if apply_changes and not section:
+        raise Refusal("--apply requires a SECTION", USAGE)
+    if choose is not None and not section:
+        raise Refusal("--choose requires a SECTION", USAGE)
+    chosen = parse_choose(choose) if choose is not None else {}
+
+    if not ss.is_enabled(path):
+        print(PROMPT)
+        return OK
+    conn = open_readonly(path)
+    try:
+        sections = known_sections(conn)
+        overridden = override_sections(conn)
+        if section is None:
+            # Sections with only overridden runs are listed too, so a stale launch-time variable
+            # shows up here instead of leaving the list silently empty.
+            for key in sorted(set(sections) | set(overridden)):
+                if key in SKIPPED_BY_DEFAULT:
+                    continue
+                row = conn.execute("SELECT invocations FROM counters WHERE scope='rule' AND key=? "
+                                   "ORDER BY rule_version DESC LIMIT 1", (key,)).fetchone()
+                excluded = excluded_summary(conn, key)
+                print("{}  ({} runs{})".format(key, row[0] if row else 0, "; " + excluded if excluded else ""))
+            print("pass one of these as: suggest-timeouts SECTION (command:rtk only on request)")
+            return OK
+        if section not in sections and section not in overridden and (
+                "command:" + section in sections or "command:" + section in overridden):
+            section = "command:" + section
+        version, data, config = current_data(conn, section)
+        excluded = excluded_summary(conn, section)
+    finally:
+        conn.close()
+
+    if data is None:
+        print("no data for {}".format(section))
+        if excluded:
+            print(excluded)
+        if chosen:
+            raise Refusal("no data for {}; nothing to choose from".format(section), USAGE)
+        return OK
+    results = compute_checks(data, config)
+    print_section(section, version, data, config, results)
+    if excluded:
+        print(excluded)
+
+    applied = {}
+    for name, option in chosen.items():
+        result = results[name][1]
+        if result is None or not result.options:
+            raise Refusal("{} has no options for {}; nothing to choose".format(name, section), USAGE)
+        applied[name] = dict((o.name, o.value) for o in result.options)[option]
+    if not applied:
+        return OK
+
+    parser = load_data_ini()
+    check_rule_section(parser, section)
+    new = build_new(parser, section, applied)
+    diff = list(difflib.unified_diff(render_section(parser, section), render_section(new, section),
+                                     "current " + os.path.basename(data_ini()),
+                                     "proposed " + os.path.basename(data_ini()), lineterm="", n=50))
+    print("preview:")
+    if not diff:
+        # Nothing would change: write nothing, not even a backup.
+        print("(no change)")
+        print("nothing written")
+        return OK
+    print("\n".join(diff))
+    if not apply_changes:
+        print("nothing written; add --apply to write this")
+        return OK
+    backup = write_ini(new)
+    if backup:
+        print("backup (keeps comments): {}".format(backup))
+    print("wrote {} (comments are not kept in the rewritten file)".format(data_ini()))
+    return OK
+
+
+# ---- reset / delete / enable ---------------------------------------------------------------------------
+
+def cmd_reset(path, yes):
+    if not yes:
+        raise Refusal("reset-stats needs --yes", USAGE)
+    if not ss.is_enabled(path):
+        print("stats disabled; nothing to reset")
+        return OK
+    status = ss.check_schema(path)
+    if status != "ok":
+        raise Refusal("{} is {}; not reset".format(path, status))
+    print("backup: {}".format(ss.reset(path)))
+    print("stats cleared; collection stays on")
+    return OK
+
+
+def cmd_delete(path, all_flag, yes):
+    if not (all_flag and yes):
+        raise Refusal("delete-stats needs --all --yes", USAGE)
+    removed = ss.delete_all(path)
+    for name in removed:
+        print("removed {}".format(name))
+    print("removed {} file(s); collection is off".format(len(removed)))
+    return OK
+
+
+def cmd_enable(path):
+    ss.enable(path)
+    print("stats collection enabled at {}".format(path))
+    return OK
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="command-watchdog-stats")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("stats")
+    suggest = sub.add_parser("suggest-timeouts")
+    suggest.add_argument("section", nargs="?")
+    suggest.add_argument("--choose")
+    suggest.add_argument("--apply", action="store_true")
+    reset = sub.add_parser("reset-stats")
+    reset.add_argument("--yes", action="store_true")
+    delete = sub.add_parser("delete-stats")
+    delete.add_argument("--all", action="store_true")
+    delete.add_argument("--yes", action="store_true")
+    sub.add_parser("enable-stats")
+    return parser
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
+    path = ss.db_path()
+    try:
+        if args.command == "stats":
+            return cmd_stats(path)
+        if args.command == "suggest-timeouts":
+            return cmd_suggest(path, args.section, args.choose, args.apply)
+        if args.command == "reset-stats":
+            return cmd_reset(path, args.yes)
+        if args.command == "delete-stats":
+            return cmd_delete(path, args.all, args.yes)
+        return cmd_enable(path)
+    except Refusal as refusal:
+        return fail(str(refusal), refusal.code)
+    except (ss.StoreError, sqlite3.Error, OSError) as error:
+        return fail("store error: {}".format(error), STORE_ERROR)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

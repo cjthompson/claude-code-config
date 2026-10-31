@@ -26,9 +26,12 @@ class HookTests(unittest.TestCase):
         self.root = Path(self.temporary.name) / "plugin with spaces"
         shutil.copytree(PLUGIN / "hooks", self.root / "hooks")
         self.env = dict(os.environ, PATH="/usr/bin:/bin", CLAUDE_PLUGIN_ROOT=str(self.root),
-                        WATCHDOG_IDLE="90", WATCHDOG_POLL="1", WATCHDOG_MAX_RUNTIME="0")
+                        WATCHDOG_POLL="1",
+                        COMMAND_WATCHDOG_HOME=str(Path(self.temporary.name) / "store"))
+        for name in ("WATCHDOG_IDLE", "WATCHDOG_MAX_RUNTIME"):
+            self.env.pop(name, None)
 
-    def rewrite(self, command, host="codex"):
+    def hook_result(self, command, host="codex"):
         payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
                    "tool_input": {"command": command}, "cwd": self.temporary.name,
                    "session_id": "hook-test", "tool_use_id": "call-test"}
@@ -38,14 +41,17 @@ class HookTests(unittest.TestCase):
             env["PLUGIN_ROOT"] = str(self.root)
         config = json.loads((self.root / "hooks/hooks.json").read_text())
         hook_command = config["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        result = subprocess.run(["/bin/sh", "-c", hook_command], input=json.dumps(payload),
-                                text=True, capture_output=True, env=env, timeout=20)
+        return subprocess.run(["/bin/sh", "-c", hook_command], input=json.dumps(payload),
+                              text=True, capture_output=True, env=env, timeout=20)
+
+    def rewrite(self, command, host="codex", final=None):
+        result = self.hook_result(command, host)
         self.assertEqual(result.returncode, 0, result.stderr)
         output = json.loads(result.stdout)["hookSpecificOutput"]
         self.assertEqual(output["hookEventName"], "PreToolUse")
         self.assertEqual(output["permissionDecision"], "allow")
         wrapped = output["updatedInput"]["command"]
-        self.assertEqual(shlex.split(wrapped)[-1], command)
+        self.assertEqual(shlex.split(wrapped)[-1], command if final is None else final)
         return wrapped
 
     def run_wrapped(self, command, host="codex", stdin=""):
@@ -91,6 +97,113 @@ class HookTests(unittest.TestCase):
         result = self.run_wrapped("sleep 30")
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn("max-runtime", result.stdout)
+
+    def test_wrapper_does_not_inject_watchdog_idle(self):
+        out = self.rewrite("npm test")
+        self.assertNotIn("WATCHDOG_IDLE=", out)
+        self.assertEqual(shlex.split(out)[2:5], ["--original", "npm test", "--"])
+
+    def test_lifted_override_becomes_set_argument(self):
+        out = self.rewrite("WATCHDOG_IDLE=600 npm test", final="npm test")
+        parts = shlex.split(out)
+        self.assertEqual(parts[2:9], ["--original", "npm test", "--set", "idle=600", "--", "npm test"])
+        self.assertNotIn("WATCHDOG_IDLE=600", out)
+
+    def test_rtk_decision_call_writes_no_stats_row_while_the_command_does(self):
+        import sqlite3
+        sys.path.insert(0, str(PLUGIN / "hooks"))
+        import stats_store
+        bin_dir = Path(self.temporary.name) / "fake-bin"
+        bin_dir.mkdir()
+        fake_rtk = bin_dir / "rtk"
+        fake_rtk.write_text("#!/bin/sh\ncat > /dev/null\n"
+                            "echo '{\"hookSpecificOutput\": {\"permissionDecision\": \"allow\", "
+                            "\"updatedInput\": {\"command\": \"echo rewritten\"}}}'\n")
+        fake_rtk.chmod(0o755)
+        self.env["PATH"] = "{}:/usr/bin:/bin".format(bin_dir)
+        db = os.path.join(self.env["COMMAND_WATCHDOG_HOME"], "stats.db")
+        stats_store.enable(db)
+        wrapped = self.rewrite("echo original", final="echo rewritten")
+        result = subprocess.run(["/bin/bash", "-c", wrapped], capture_output=True, text=True,
+                                env=self.env, cwd=self.temporary.name, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        conn = sqlite3.connect(db)
+        try:
+            rows = conn.execute("SELECT primary_process, rtk_proxied FROM invocations ORDER BY id").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(rows, [("echo", 1)])
+
+    def test_assignment_only_passes_through_unmodified(self):
+        result = self.hook_result("WATCHDOG_IDLE=600")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "")  # no updatedInput: nothing wrapped
+        self.assertFalse((Path(self.env["COMMAND_WATCHDOG_HOME"]) / "stats.db").exists())
+
+    def assert_wrapped_verbatim(self, command, set_args=()):
+        parts = shlex.split(self.rewrite(command))
+        self.assertEqual(parts[-1], command)  # byte-for-byte, newlines included
+        self.assertEqual(parts[2:4], ["--original", command])
+        self.assertEqual([p for p in parts if p == "--set"], ["--set"] * len(set_args))
+        return parts
+
+    def test_command_with_newline_is_preserved_byte_for_byte(self):
+        command = 'FOO=1\nprintf "[%s]\\n" "$FOO"'
+        self.assertIn("\n", command)
+        self.assert_wrapped_verbatim(command)
+        result = self.run_wrapped(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_space_in_quoted_value_is_preserved(self):
+        command = "FOO=\"a  b\" sh -c 'printf \"%s\" \"$FOO\"'"
+        self.assert_wrapped_verbatim(command)
+        self.assertEqual(self.run_wrapped(command).stdout, "a  b")
+
+    def test_leading_non_lifted_assignment_is_preserved(self):
+        self.assert_wrapped_verbatim("FOO=1 npm test")
+        self.assert_wrapped_verbatim("  FOO=1   npm  test")
+
+    def test_override_before_operator_is_not_lifted_and_command_is_unchanged(self):
+        # Cutting the assignment out would leave `&& echo hi`, a syntax error.
+        # The user's bytes are kept and the command is still supervised, with no --set.
+        command = "WATCHDOG_IDLE=600 && echo hi"
+        parts = self.assert_wrapped_verbatim(command)
+        self.assertNotIn("--set", parts)
+        result = self.run_wrapped(command)
+        self.assertEqual((result.returncode, result.stdout), (0, "hi\n"), result.stderr)
+
+    def test_rejected_override_stays_in_the_command(self):
+        parts = self.assert_wrapped_verbatim("WATCHDOG_IDLE=abc npm test")
+        self.assertNotIn("--set", parts)
+
+    def test_rejected_override_with_quote_or_substitution_hides_later_tokens(self):
+        for command in ('WATCHDOG_IDLE="a WATCHDOG_MAX_RUNTIME=5 b" npm test',
+                        "WATCHDOG_IDLE=$(echo WATCHDOG_MAX_RUNTIME=5 ) npm test"):
+            with self.subTest(command=command):
+                parts = self.assert_wrapped_verbatim(command)
+                self.assertNotIn("--set", parts)
+
+    def test_lift_keeps_the_rest_of_the_command_byte_for_byte(self):
+        command = 'WATCHDOG_IDLE=600 FOO="a  b" sh -c \'printf "%s" "$FOO"\''
+        remaining = 'FOO="a  b" sh -c \'printf "%s" "$FOO"\''
+        wrapped = self.rewrite(command, final=remaining)
+        parts = shlex.split(wrapped)
+        self.assertEqual(parts[2:8], ["--original", remaining, "--set", "idle=600", "--", remaining])
+        result = subprocess.run(["/bin/bash", "-c", wrapped], text=True, capture_output=True,
+                                env=self.env, cwd=self.temporary.name, timeout=20)
+        self.assertEqual(result.stdout, "a  b")
+
+    def test_rule_file_is_ini_and_txt_is_gone(self):
+        self.assertFalse((PLUGIN / "hooks/watchdog-patterns.txt").exists())
+        self.assertTrue((PLUGIN / "hooks/watchdog-patterns.ini").exists())
+
+    def test_malformed_ini_does_not_block_bash(self):
+        (self.root / "hooks/watchdog-patterns.ini").write_text("[global\nidle = = \n[rule:x]\nregex: (\n")
+        os.makedirs(self.env["COMMAND_WATCHDOG_HOME"])
+        (Path(self.env["COMMAND_WATCHDOG_HOME"]) / "watchdog-patterns.ini").write_bytes(b"\xff\xfe[[\n")
+        result = self.run_wrapped("printf 'still runs\\n'; exit 3")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("still runs", result.stdout)
 
     def run_pty(self, command):
         master, slave = pty.openpty()
@@ -142,7 +255,7 @@ class HookTests(unittest.TestCase):
         self.assertIn("SIGTTIN", output)
 
     def test_codex_pty_waiting_for_input_is_subject_to_idle_timeout(self):
-        (self.root / "hooks/watchdog-patterns.txt").write_text(".* 2\n")
+        (self.root / "hooks/watchdog-patterns.ini").write_text("[rule:all]\nregex: .\nidle: 2\n")
         code = "import os; print('ready', flush=True); os.read(0, 1)"
         status, output = self.run_pty("/usr/bin/python3 -u -c " + shlex.quote(code))
         self.assertEqual(status, 124, output)

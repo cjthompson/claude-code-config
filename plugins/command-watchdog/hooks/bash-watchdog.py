@@ -5,7 +5,8 @@ in order — there is no longer a pattern-gated fork between them:
   1. Resolve the command to actually run. If `rtk` is on PATH, ask it for its
      token-saving rewrite (`rtk hook claude`) — but run that decision call
      itself under command-watchdog.py with a short WATCHDOG_MAX_RUNTIME cap
-     (RTK_MAX_RUNTIME below), not a bare subprocess call. rtk's decision is
+     (the built-in `rtk` entry in watchdog_config.BUILTIN_COMMANDS), not a bare subprocess call. It is
+     passed --rtk-decision, so no [rule:] section applies to it and it writes no stats row. rtk's decision is
      supposed to be near-instant; anything past the cap is rtk's own bug, not
      legitimate work, so this needs a hard wall-clock kill rather than the
      idle-only detection meant for long-running commands (see
@@ -14,9 +15,17 @@ in order — there is no longer a pattern-gated fork between them:
      output doesn't parse, fall back to the original, unmodified command.
   2. Wrap whatever command resulted from step 1 in command-watchdog.py's
      idle-hang detection (live output + kill-on-flatline), unconditionally.
-     watchdog-patterns.txt now only controls the per-command IDLE_LIMIT
-     override (e.g. a longer allowance for `rspec` runs) — it no longer
-     gates whether wrapping happens at all.
+     Per-command limits live in watchdog-patterns.ini and are resolved by
+     command-watchdog.py itself; this wrapper injects no limits. Leading
+     `WATCHDOG_*=value` assignments on the command are lifted off the command
+     and passed to command-watchdog.py as `--set key=value` arguments.
+
+     The command-watchdog.py invocation is:
+       command-watchdog.py --original TEXT [--rtk-proxied] [--set k=v]... -- CMD
+     and the rtk decision call is command-watchdog.py --rtk-decision -- RTK_CMD
+     TEXT is the command after lifting assignments and before rtk rewriting;
+     CMD is the final command, passed as ONE shlex-quoted argv element. A
+     command that is only assignments passes through unmodified.
 
 On any error, fall through so a bug here can never block a command.
 
@@ -34,7 +43,6 @@ toggle — the flag file works with a plain `touch`/`rm` and no restart.
 """
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -44,13 +52,16 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WATCHDOG = os.path.join(HERE, "command-watchdog.py")
-PATTERNS_FILE = os.path.join(HERE, "watchdog-patterns.txt")
-DEFAULT_IDLE = 90
+sys.path.insert(0, HERE)
+from command_identity import lift_overrides  # noqa: E402
+from watchdog_config import BUILTIN_COMMANDS  # noqa: E402
+
 # rtk's rewrite decision should be near-instant (string matching + a small
-# rewrite table, no I/O expected). This is a hard wall-clock cap, not an idle
-# window — the incident this replaced was a busy CPU-bound loop inside rtk,
-# which idle-only detection would never have caught (CPU kept advancing).
-RTK_MAX_RUNTIME = 15
+# rewrite table, no I/O expected). The built-in `rtk` entry in BUILTIN_COMMANDS
+# caps it as a hard wall-clock limit, not an idle window — the incident this
+# replaced was a busy CPU-bound loop inside rtk, which idle-only detection would
+# never have caught (CPU kept advancing).
+
 # Fixed /tmp path (not tempfile.gettempdir(), which resolves per-session via
 # $TMPDIR on macOS — unguessable, so `touch`/`cat` from a shell wouldn't hit it).
 DEBUG_FLAG = "/tmp/command-watchdog-debug.on"
@@ -70,36 +81,6 @@ def debug_log(fields):
         pass
 
 
-def load_patterns():
-    """Load [regex, idle_seconds] pairs from the patterns file. A trailing
-    all-digit token is the per-pattern idle override; the rest of the line is
-    the regex (so regexes may contain spaces). Bad regexes are skipped, not
-    fatal."""
-    if not os.path.isfile(PATTERNS_FILE):
-        return []
-
-    patterns = []
-    with open(PATTERNS_FILE) as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            m = re.fullmatch(r"(.*?)\s+(\d+)", line)
-            pattern, idle = (m.group(1), int(m.group(2))) if m else (line, DEFAULT_IDLE)
-            try:
-                patterns.append((re.compile(pattern), idle))
-            except re.error:
-                continue
-    return patterns
-
-
-def strip_env_prefix(cmd):
-    """Strip leading `VAR=val` env assignments so patterns can anchor on the
-    real command (the env prefix is preserved in the actual wrapped command)."""
-    return re.sub(r"\A\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*", "", cmd)
-
-
 def resolve_via_rtk(raw, cmd):
     """Ask rtk for its rewrite of `cmd`, running the decision call itself
     under command-watchdog's hard wall-clock cap. Returns (final_cmd,
@@ -113,6 +94,9 @@ def resolve_via_rtk(raw, cmd):
 
     tmp_path = None
     try:
+        payload = json.loads(raw)
+        payload.setdefault("tool_input", {})["command"] = cmd
+        raw = json.dumps(payload)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, prefix="bash-watchdog-rtk-"
         ) as tmp:
@@ -120,13 +104,11 @@ def resolve_via_rtk(raw, cmd):
             tmp_path = tmp.name
 
         rtk_cmd = "rtk hook claude < {}".format(shlex.quote(tmp_path))
-        env = dict(os.environ)
-        env["WATCHDOG_MAX_RUNTIME"] = str(RTK_MAX_RUNTIME)
-        env["WATCHDOG_IDLE"] = str(RTK_MAX_RUNTIME)
-        # RTK is a watchdog task too, so mandatory lowest priority applies.
-        # Its existing runtime cap bounds latency and skips rewriting on timeout.
+        # The user's WATCHDOG_* settings must not leak into the rtk call. The
+        # built-in [command:rtk] entry caps its runtime (BUILTIN_COMMANDS).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("WATCHDOG_")}
         result = subprocess.run(
-            ["/usr/bin/python3", WATCHDOG, rtk_cmd],
+            ["/usr/bin/python3", WATCHDOG, "--rtk-decision", "--", rtk_cmd],
             capture_output=True, text=True, env=env,
         )
         debug_log({
@@ -135,7 +117,7 @@ def resolve_via_rtk(raw, cmd):
         })
 
         if result.returncode == 124:
-            debug_log({"stage": "rtk-timed-out", "max_runtime": RTK_MAX_RUNTIME})
+            debug_log({"stage": "rtk-timed-out", "max_runtime": BUILTIN_COMMANDS["rtk"]["max_runtime"]})
             return cmd, None
 
         if not result.stdout.strip():
@@ -186,19 +168,28 @@ if tool_name != "Bash" or WATCHDOG in cmd:
     debug_log({"stage": "skipped", "tool_name": tool_name, "command": cmd})
     sys.exit(0)
 
-final_cmd, passthrough = resolve_via_rtk(raw, cmd)
+lifted, rejected, remaining = lift_overrides(cmd)
+for item in rejected:
+    debug_log({"stage": "override-rejected", "assignment": item})
+if not remaining:
+    debug_log({"stage": "no-command-after-overrides", "original_command": cmd})
+    sys.exit(0)  # P5: pass the original text through unmodified
+
+final_cmd, passthrough = resolve_via_rtk(raw, remaining)
 if passthrough is not None:
     print(json.dumps(passthrough))
     sys.exit(0)
 
-core = strip_env_prefix(final_cmd)
-idle = next((p[1] for p in load_patterns() if p[0].search(core)), DEFAULT_IDLE)
-wrapped = "WATCHDOG_IDLE={} /usr/bin/python3 {} {}".format(
-    idle, shlex.quote(WATCHDOG), shlex.quote(final_cmd)
-)
+args = [WATCHDOG, "--original", remaining]
+if final_cmd != remaining:
+    args.append("--rtk-proxied")
+for key, value in lifted.items():
+    args += ["--set", "{}={}".format(key, value)]
+args += ["--", final_cmd]
+wrapped = " ".join(["/usr/bin/python3"] + [shlex.quote(part) for part in args])
 debug_log({
     "stage": "watchdog-wrap", "tool_name": tool_name, "original_command": cmd,
-    "final_command": final_cmd, "idle": idle,
+    "final_command": final_cmd, "lifted": lifted,
 })
 print(json.dumps({
     "hookSpecificOutput": {

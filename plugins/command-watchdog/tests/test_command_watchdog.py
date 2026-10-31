@@ -23,6 +23,27 @@ spec.loader.exec_module(cw)
 BUSY = "import time,sys; t=time.time()\nwhile time.time()-t<{secs}: pass"
 
 
+# Isolate every test in this module from the user's real data directory: rule_paths() reads the
+# data-directory INI and an enabled store would record real rows (ruling R20, as in test_hook.py).
+_HOME = None
+_SAVED_HOME = None
+
+
+def setUpModule():
+    global _HOME, _SAVED_HOME
+    _HOME = tempfile.TemporaryDirectory()
+    _SAVED_HOME = os.environ.get("COMMAND_WATCHDOG_HOME")
+    os.environ["COMMAND_WATCHDOG_HOME"] = _HOME.name
+
+
+def tearDownModule():
+    if _SAVED_HOME is None:
+        os.environ.pop("COMMAND_WATCHDOG_HOME", None)
+    else:
+        os.environ["COMMAND_WATCHDOG_HOME"] = _SAVED_HOME
+    _HOME.cleanup()
+
+
 def run(cmd, **env):
     full_env = dict(os.environ, WATCHDOG_POLL="1", WATCHDOG_IDLE="4")
     full_env.update({k: str(v) for k, v in env.items()})
@@ -220,6 +241,15 @@ class ParseTests(unittest.TestCase):
         waiter = cw.Proc(3, 1, 3, 10, 0, "/bin/bash -c while ! pgrep -f work; do sleep 1; done")
         checker = cw.Proc(4, 3, 3, 1, 0, "/usr/bin/pgrep -f work")
         self.assertTrue(cw.checker_descendant(checker, {1: terminal, 3: waiter, 4: checker}))
+
+class IsolationTests(unittest.TestCase):
+    def test_hook_reads_and_writes_only_the_temporary_data_directory(self):
+        home = os.path.realpath(os.environ["COMMAND_WATCHDOG_HOME"])
+        self.assertEqual(os.path.realpath(_HOME.name), home)
+        data_ini = cw.rule_paths()[1]
+        self.assertEqual(os.path.realpath(os.path.dirname(data_ini)), home)
+        self.assertEqual(os.path.realpath(os.path.dirname(cw.stats_store.db_path())), home)
+
 
 class PollModeTests(unittest.TestCase):
     def test_throttled_work_loop_keeps_output_activity(self):

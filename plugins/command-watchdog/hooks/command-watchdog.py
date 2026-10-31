@@ -80,7 +80,15 @@ Env overrides:
   WATCHDOG_POLL_CAP     wall-clock cap for wait loops with no parseable
                         target (default 1800)
 
-The child command always starts at the lowest CPU priority (niceness 20 on
+Limits resolve as built-in < merged watchdog-patterns.ini < environment, where a
+per-run `--set key=value` (idle, max_runtime, poll_cap) counts as environment
+and wins. Invalid values fall back to the lower layer. Usage:
+  command-watchdog.py [--original CMD] [--rtk-proxied] [--rtk-decision] [--set key=value]... [--] COMMAND...
+`--rtk-decision` marks bash-watchdog's rtk rewrite lookup: no [rule:] sections apply to it and it writes
+no stats row. Its built-in [command:rtk] cap still applies.
+`nice` is read from the ini only (`nice: off` keeps the inherited priority).
+
+The child command starts at the lowest CPU priority unless the ini sets `nice: off` (niceness 20 on
 macOS, 19 elsewhere), inherited by everything it spawns. WATCHDOG_NICE is
 ignored. If setting priority fails, the command is not executed. The watchdog
 itself keeps its inherited priority so hang detection stays responsive under load.
@@ -104,6 +112,7 @@ didn't land, and the exit-code coercion when the child died from a signal
 """
 import os
 import re
+import resource
 import shlex
 import signal
 import subprocess
@@ -113,11 +122,22 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
-IDLE_LIMIT = int(os.environ.get("WATCHDOG_IDLE", "90"))
-POLL = int(os.environ.get("WATCHDOG_POLL", "5"))
-MAX_RUNTIME = int(os.environ.get("WATCHDOG_MAX_RUNTIME", "0"))  # 0 = disabled
-POLL_CAP = int(os.environ.get("WATCHDOG_POLL_CAP", "1800"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from command_identity import primary_process, signature  # noqa: E402
+from output_tail import OutputTail  # noqa: E402
+from watchdog_config import ENV_NAMES, Limits, load_rules, resolve  # noqa: E402
+from watchdog_model import FiredCheck, KillReason, LoopKind  # noqa: E402
+import stats_store  # noqa: E402
+
+# Built-in defaults only. The environment (WATCHDOG_*) is read in configure_run()
+# through resolve(), so a malformed value degrades to a default instead of raising.
+IDLE_LIMIT = 90
+POLL = 5
+MAX_RUNTIME = 0  # 0 = disabled
+POLL_CAP = 1800
 NICE = 20 if sys.platform == "darwin" else 19
+NICE_ENABLED = True
 CPU_EPSILON = 0.05  # seconds of CPU advance that counts as "still working"
 TARGET_GONE_GRACE = 3 * POLL
 PARENT_PID = os.getppid()  # captured before our own parent can possibly exit
@@ -606,7 +626,8 @@ def child_setup() -> None:
     """Create the task's process group and require lowest priority before exec."""
     os.setpgrp()
     try:
-        os.setpriority(os.PRIO_PROCESS, 0, NICE)
+        if NICE_ENABLED:
+            os.setpriority(os.PRIO_PROCESS, 0, NICE)
     except OSError as error:
         # Popen replaces preexec exceptions with a generic SubprocessError.
         # Preserve the OS diagnostic on the child's redirected stderr.
@@ -726,11 +747,189 @@ def kill_group(pgid: int, proc: "subprocess.Popen[bytes]", initial_signal: int =
                 time.sleep(0.1)
 
 
+def parse_args(argv):
+    """Returns (opts, command); opts is None when a flag is missing its operand."""
+    opts = {"original": None, "rtk_proxied": False, "rtk_decision": False, "set": []}
+    args = list(argv)
+    try:
+        while args and args[0] in ("--original", "--rtk-proxied", "--rtk-decision", "--set"):
+            flag = args.pop(0)
+            if flag == "--rtk-proxied":
+                opts["rtk_proxied"] = True
+            elif flag == "--rtk-decision":
+                opts["rtk_decision"] = True
+            elif flag == "--original":
+                opts["original"] = args.pop(0)
+            else:
+                opts["set"].append(args.pop(0))
+    except IndexError:
+        return None, ""
+    if args and args[0] == "--":
+        args.pop(0)
+        # After `--` the words are an argv, not a shell string: keep their quoting.
+        if len(args) > 1:
+            return opts, shlex.join(args).strip()
+    return opts, " ".join(args).strip()
+
+
+def rule_paths() -> List[str]:
+    plugin_rules = os.path.join(HERE, "watchdog-patterns.ini")
+    data_rules = os.path.join(stats_store.store_dir(), "watchdog-patterns.ini")
+    return [plugin_rules, data_rules]
+
+
+def apply_limits(limits: Limits) -> None:
+    global IDLE_LIMIT, MAX_RUNTIME, POLL, POLL_CAP, NICE_ENABLED, TARGET_GONE_GRACE
+    IDLE_LIMIT = limits.idle
+    MAX_RUNTIME = limits.max_runtime or 0
+    POLL = limits.poll
+    POLL_CAP = limits.poll_cap or 0
+    NICE_ENABLED = limits.nice
+    TARGET_GONE_GRACE = 3 * POLL
+
+
+class RunState:
+    """Facts about one supervised run, filled in as it progresses and recorded at exit."""
+
+    def __init__(self, cmd: str, rtk_proxied: bool, rtk_decision: bool = False) -> None:
+        self.cmd = cmd
+        # bash-watchdog's rtk lookup is the hook's own call, not a user command: no stats row.
+        self.rtk_decision = rtk_decision
+        try:
+            self.signature = signature(cmd)
+            self.primary = primary_process(cmd)
+        except Exception as error:  # identity is best effort; never fail the command
+            debug_log({"stage": "identity-failed", "error": repr(error)})
+            self.signature = ""
+            self.primary = ""
+        self.rtk_proxied = rtk_proxied
+        self.start = time.time()
+        self.rule_key = "global"
+        self.ini_values = {}  # type: Dict[str, object]
+        self.overridden = False
+        self.override_vars = ()  # type: Tuple[str, ...]
+        self.loop_kind = LoopKind.NONE
+        self.fired = FiredCheck.NONE
+        self.kill_reason = None  # type: Optional[KillReason]
+        self.cancelled = None  # type: Optional[int]
+        self.launch_failed = False
+        self.exit_code = None  # type: Optional[int]
+        self.max_silence = 0.0
+        self.no_output_time = 0.0  # silence at exit: time from the last activity to the end
+        self.cpu_time = 0.0
+        self.tail = OutputTail()
+        self.recorded = False
+
+
+def configure_run(argv) -> Optional[Tuple["RunState", str]]:
+    """Parse arguments and resolve limits. Config problems degrade to defaults."""
+    opts, cmd = parse_args(argv)
+    if opts is None or not cmd:
+        return None
+    original = opts["original"] if opts["original"] is not None else cmd
+    run = RunState(cmd, opts["rtk_proxied"], opts["rtk_decision"])
+    try:
+        overrides = {}
+        for item in opts["set"]:
+            key, _, value = item.partition("=")
+            if key:
+                overrides[key] = value
+        for key, env_name in ENV_NAMES.items():
+            if env_name in os.environ and key not in overrides:
+                overrides[key] = os.environ[env_name]
+        rules, warnings = load_rules(rule_paths())
+        resolution = resolve(rules, run.signature, original, overrides,
+                             match_rules=not opts["rtk_decision"])
+        apply_limits(resolution.limits)
+        run.rule_key = resolution.rule_key
+        run.ini_values = resolution.ini_values
+        run.overridden = resolution.overridden
+        run.override_vars = resolution.override_vars
+        for warning in list(warnings) + list(resolution.warnings):
+            debug_log({"stage": "config-warning", "message": warning})
+    except Exception as error:
+        debug_log({"stage": "config-failed", "error": repr(error)})
+    return run, cmd
+
+
+def record_activity(state: dict, now: float, run: Optional["RunState"]) -> None:
+    """Advance the last-activity mark to `now`, recording the longest silent span before it.
+
+    A timestamp at or before the mark is stale (a slow sampler finished after the reader
+    thread already moved the mark), so it changes nothing."""
+    last = state["last_activity"]
+    if now <= last:
+        return
+    if run is not None and now - last > run.max_silence:
+        run.max_silence = now - last
+    state["last_activity"] = now
+
+
+def end_silence(state: dict, now: float, run: "RunState") -> float:
+    """Close the span from the last activity to `now` (the run's end), counting it as silence.
+
+    Returns that span's length, which is the run's no_output_time."""
+    gap = max(0.0, now - state["last_activity"])
+    record_activity(state, now, run)
+    return gap
+
+
+def classify(run: "RunState") -> Tuple[str, Optional[int]]:
+    """Map a finished run to (outcome, exit_code). Cancellation and launch failure are never kills."""
+    if run.launch_failed:
+        return "failed", 125
+    if run.cancelled is not None:
+        return "failed", 128 + run.cancelled
+    if run.kill_reason is not None:
+        return "killed", run.exit_code
+    if run.exit_code == 0:
+        return "success", 0
+    return "failed", run.exit_code
+
+
+def record_run_safely(run: "RunState") -> None:
+    """Write this run's stats row. Never raises: a stats failure must not change the exit path."""
+    if run.rtk_decision or run.recorded:
+        return
+    run.recorded = True
+    try:
+        path = stats_store.db_path()
+        if not stats_store.is_enabled(path):
+            return
+        outcome, exit_code = classify(run)
+        killed = outcome == "killed"
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        started = datetime.fromtimestamp(run.start, tz=timezone.utc).isoformat(timespec="seconds")
+        record = stats_store.RunRecord(
+            started_at=started, ended_at=now, command_line=run.cmd,
+            primary_process=run.primary, signature=run.signature,
+            loop_kind=run.loop_kind.value, rule_key=run.rule_key, ini_values=run.ini_values,
+            env_overrides=run.overridden, override_vars=run.override_vars, rtk_proxied=run.rtk_proxied,
+            outcome=outcome,
+            kill_reason=run.kill_reason.value if killed and run.kill_reason is not None else None,
+            fired_check=run.fired.value if killed else "none",
+            exit_code=exit_code,
+            # A launch failure never ran, so its timing columns are 0 (spec: Kill reasons and outcomes).
+            execution_time=0.0 if run.launch_failed else max(0.0, time.time() - run.start),
+            cpu_time=run.cpu_time,
+            max_silence=run.max_silence, no_output_time=run.no_output_time,
+            # The tail is fed for every run but persisted only for killed ones.
+            output_tail=tuple(run.tail.lines()) if killed else (),
+        )
+        stats_store.record_run(path, record, now=now)
+    except BaseException as error:  # signals are blocked here; nothing may escape
+        try:
+            debug_log({"stage": "stats-write-failed", "error": repr(error)})
+        except BaseException:
+            pass
+
+
 def main() -> int:
-    cmd = " ".join(sys.argv[1:]).strip()
-    if not cmd:
+    configured = configure_run(sys.argv[1:])
+    if configured is None:
         print("command-watchdog: no command given", file=sys.stderr)
         return 2
+    run, cmd = configured
 
     # Launch the child in its OWN process group so we can signal the whole tree
     # (e.g. a test runner + any forked browsers/vite). pgid == pid.
@@ -770,14 +969,20 @@ def main() -> int:
             detail = os.read(r_fd, 65_536).decode("utf-8", errors="replace").strip() or str(error)
             debug_log({"stage": "cw-launch-failed", "cmd": cmd, "error": detail})
             print("command-watchdog: unable to start command: {}".format(detail), file=sys.stderr)
-            print("Tasks require lowest CPU priority; if the sandbox denied setup, retry through the host's normal approval flow.", file=sys.stderr)
+            print("Tasks run at lowest CPU priority unless watchdog-patterns.ini sets `nice: off` for the "
+                  "command; if the sandbox denied setup, retry through the host's normal approval flow.",
+                  file=sys.stderr)
+            run.launch_failed = True
             return 125
         os.close(w_fd)
         w_fd = -1
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         # child_setup established pgid == pid before exec. Reading it back
         # can race with an immediately exiting command.
-        return supervise(cmd, proc, proc.pid, r_fd)
+        result = supervise(cmd, proc, proc.pid, r_fd, run)
+        # A watchdog kill stores the code the caller got (124); every other run stores the child's status.
+        run.exit_code = result if run.kill_reason is not None else proc.returncode
+        return result
     except BaseException:
         # Tasks have their own process group, so terminal cancellation of
         # the watchdog does not reach them automatically. Reap our child and
@@ -786,12 +991,14 @@ def main() -> int:
         signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
         for sig in cancel_signals:
             signal.signal(sig, signal.SIG_IGN)
+        run.cancelled = cancelled
         if proc is not None and proc.returncode is None:
             kill_group(proc.pid, proc, cancelled or signal.SIGTERM)
             proc.wait()
         raise
     finally:
         signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+        record_run_safely(run)
         os.close(r_fd)
         if w_fd >= 0:
             os.close(w_fd)
@@ -800,10 +1007,24 @@ def main() -> int:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
-def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -> int:
+def _children_cpu() -> float:
+    """CPU seconds consumed by all reaped children of this process; 0.0 on any error."""
+    try:
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return usage.ru_utime + usage.ru_stime
+    except Exception:
+        return 0.0
 
+
+def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int,
+              run: Optional["RunState"]) -> int:
+    """Stream the child's output and kill it on idle, max-runtime, or target-gone. Facts about the run
+    are written into `run` (None when nothing is recorded)."""
     tracker = PollTracker(cmd, proc.pid, pgid) if is_poll_loop(cmd) else None
     targeted = tracker is not None and tracker.has_targets
+    if run is not None:
+        run.loop_kind = (LoopKind.TARGETED if targeted
+                         else LoopKind.UNTARGETED if tracker is not None else LoopKind.NONE)
     max_runtime = MAX_RUNTIME
     if tracker is not None and not targeted and not max_runtime:
         max_runtime = POLL_CAP
@@ -815,6 +1036,20 @@ def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -
 
     lock = threading.Lock()
     state = {"last_activity": time.time()}
+    ru0 = _children_cpu()
+
+    def touch(now: float) -> None:
+        # Caller holds `lock`.
+        record_activity(state, now, run)
+
+    def feed_tail(chunk: bytes) -> None:
+        # Stats must never raise into (or block) the reader thread.
+        if run is None:
+            return
+        try:
+            run.tail.feed(chunk, time.time())
+        except Exception as error:
+            debug_log({"stage": "tail-feed-failed", "error": repr(error)})
 
     def reader() -> None:
         while True:
@@ -825,11 +1060,12 @@ def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -
             if not chunk:
                 return
             os.write(1, chunk)
+            feed_tail(chunk)
             # A targeted wait loop's own output (`echo -n .`) is not progress
             # unless real work is running inside the group.
             if not targeted or (tracker is not None and tracker.work_present):
                 with lock:
-                    state["last_activity"] = time.time()
+                    touch(time.time())
 
     reader_thread = threading.Thread(target=reader, daemon=True)
     reader_thread.start()
@@ -855,28 +1091,33 @@ def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -
                 active, target_gone = tracker.sample(now)
                 if active:
                     with lock:
-                        state["last_activity"] = now
+                        touch(now)
             else:
                 cpu, _ = group_cpu(pgid)
                 if cpu - last_cpu > CPU_EPSILON:
                     last_cpu = cpu
+                    if run is not None:
+                        run.cpu_time = cpu
                     with lock:
-                        state["last_activity"] = now  # CPU progressed -> still alive
+                        touch(now)  # CPU progressed -> still alive
 
         with lock:
             idle = now - state["last_activity"]
 
         detail = ""
+        fired = FiredCheck.NONE
         if os.getppid() != PARENT_PID:
-            reason = "orphaned"
+            reason = KillReason.ORPHANED
         elif max_runtime and (now - start_time) >= max_runtime:
-            reason = "max-runtime"
+            reason = KillReason.MAX_RUNTIME
+            fired = FiredCheck.MAX_RUNTIME if MAX_RUNTIME else FiredCheck.POLL_CAP
             detail = str(max_runtime)
         elif target_gone:
-            reason = "target-gone"
+            reason = KillReason.TARGET_GONE
             detail = tracker.describe() if tracker else ""
-        elif idle >= IDLE_LIMIT:
-            reason = "poll-idle" if targeted else "idle"
+        elif IDLE_LIMIT is not None and idle >= IDLE_LIMIT:
+            reason = KillReason.POLL_IDLE if targeted else KillReason.IDLE
+            fired = FiredCheck.IDLE
             detail = tracker.describe() if targeted else ""
         else:
             continue
@@ -885,8 +1126,11 @@ def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -
         if proc.poll() is not None:
             break
         hung = True
+        if run is not None:
+            run.fired = fired
+            run.kill_reason = reason
         _, busiest = group_cpu(pgid)
-        dump_diagnostics(pgid, busiest, reason, detail, tracker.grace if tracker else None)
+        dump_diagnostics(pgid, busiest, reason.value, detail, tracker.grace if tracker else None)
         kill_group(pgid, proc)
         try:
             proc.wait()
@@ -895,6 +1139,15 @@ def supervise(cmd: str, proc: "subprocess.Popen[bytes]", pgid: int, r_fd: int) -
         break
 
     reader_thread.join(2)
+
+    if run is not None:
+        try:
+            with lock:
+                run.no_output_time = end_silence(state, time.time(), run)
+            run.tail.flush(time.time())
+            run.cpu_time = max(run.cpu_time, _children_cpu() - ru0)
+        except Exception as error:  # stats are best effort; never change the exit path
+            debug_log({"stage": "run-stats-failed", "error": repr(error)})
 
     if hung:
         debug_log({"stage": "cw-exit", "hung": True, "proc_returncode": proc.returncode, "exit_code": 124})
