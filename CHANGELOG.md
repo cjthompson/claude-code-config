@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.0.99 - 2026-10-31
+
+### Features
+- **command-watchdog**: opt-in run statistics. Enable with `/command-watchdog:enable-stats`; each supervised command is then recorded in `stats.db` with its outcome, exit code, kill reason, timings, and, for killed runs, the last 20 output lines. `/command-watchdog:stats` reports totals and kills by reason, and `/command-watchdog:suggest-timeouts` proposes tight, medium, and long limits per command and applies the one you choose. `/command-watchdog:reset-stats` and `/command-watchdog:delete-stats` manage the data.
+- **command-watchdog**: per-run limits. Leading `WATCHDOG_IDLE`, `WATCHDOG_MAX_RUNTIME`, and `WATCHDOG_POLL_CAP` assignments apply to that command only. `WATCHDOG_IDLE` is no longer injected into commands.
+- **command-watchdog**: limits resolve per key across `[global]`, `[command:…]`, and `[rule:…]` sections in `watchdog-patterns.ini`. The first `[rule:…]` whose regex matches the original command wins.
+- **command-watchdog**: a watchdog kill returns and records exit code 124; cancellation records `128 + signal`; launch failure records 125.
+
+### Fixes
+- **command-watchdog**: the rtk rewrite lookup is not recorded and ignores user `[rule:…]` sections, so no rule can remove its 15-second cap.
+
 ## v0.0.98 - 2026-10-14
 
 ### Features
