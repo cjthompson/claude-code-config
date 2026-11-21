@@ -34,6 +34,9 @@
 
 export const ENUMS = {
   status: ['pending', 'in_progress', 'completed', 'cancelled'],
+  // `task list` only: `all` is every status except cancelled. With no --status the
+  // list defaults to open work (pending + in_progress).
+  listStatus: ['pending', 'in_progress', 'completed', 'cancelled', 'all'],
   type: ['fix', 'task', 'todo'],
   priority: ['high', 'medium', 'low'],
   format: ['md', 'json', 'pipe'],
@@ -164,7 +167,7 @@ export const COMMANDS = {
     handler: 'taskList',
     project: true,
     opts: {
-      '--status': { key: 'status', type: 'enum', values: ENUMS.status },
+      '--status': { key: 'status', type: 'enum', values: ENUMS.listStatus },
     },
   },
 

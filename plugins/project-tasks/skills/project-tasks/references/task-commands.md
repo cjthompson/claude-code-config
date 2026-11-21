@@ -66,8 +66,13 @@ execution-choice prompt. Each task still receives its own context and decision.
 
 ```bash
 $TASK_DB task list --project "$PROJECT" --format md
-$TASK_DB task list --project "$PROJECT" --status pending --format md
+$TASK_DB task list --project "$PROJECT" --status completed --format md
 ```
+
+With no `--status`, the list shows only `pending` and `in_progress` tasks. Pass
+`--status all` for every status except `cancelled`, or a single status
+(`pending`, `in_progress`, `completed`, `cancelled`) to filter to it. Use a
+status flag only when the user asks for completed, cancelled, or all tasks.
 
 Print the output verbatim — never retype or hand-convert rows. Its `tasks` table has
 columns `number`, `type`, `title`, `priority`, `status`, `tags`, `dependencies`, `plan`;

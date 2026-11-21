@@ -1276,7 +1276,8 @@ describe('cli — Group D: enums', () => {
   // Every member of every enum a command actually references must be accepted,
   // and one non-member rejected per enum. Acceptances feed Group C.
   const ENUM_PROBES: Array<{ enumName: string; argv: (v: string) => string[]; bad: string }> = [
-    { enumName: 'status', argv: (v) => ['task', 'list', '--project', 'p', '--status', v], bad: 'done' },
+    { enumName: 'status', argv: (v) => ['task', 'update', '--project', 'p', '--seq', '1', '--status', v], bad: 'done' },
+    { enumName: 'listStatus', argv: (v) => ['task', 'list', '--project', 'p', '--status', v], bad: 'done' },
     {
       enumName: 'type',
       argv: (v) => ['task', 'add', '--project', 'p', '--title', 'x', '--type', v],

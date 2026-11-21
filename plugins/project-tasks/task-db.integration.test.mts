@@ -912,7 +912,7 @@ describe('the 13 ported commands, end to end', () => {
         strictEqual(run(home, ['task', 'add', '--project', 'other', '--type', 'todo', '--title', 'Elsewhere']).out, '#001');
     });
 
-    it('task list is scoped to its project and hides cancelled rows by default', () => {
+    it('task list is scoped to its project and shows only pending and in_progress rows by default', () => {
         const listed = run(home, ['task', 'list', '--project', 'testproj']);
         deepStrictEqual(listed.out.split('\n'), [
             '## tasks',
@@ -920,6 +920,27 @@ describe('the 13 ported commands, end to end', () => {
             '#002|fix|Second\'s task|high|pending (blocked)|["auth","api"]|[1]|',
             '#001|task|First task|medium|pending|[]|[]|',
         ]);
+    });
+
+    it('task list default includes in_progress and excludes completed and cancelled; --status widens it', () => {
+        const add = (title: string) =>
+            run(home, ['task', 'add', '--project', 'listdefault', '--type', 'task', '--title', title]);
+        add('open');
+        add('working');
+        add('done');
+        add('dropped');
+        const set = (seq: number, status: string) =>
+            strictEqual(run(home, ['task', 'update', '--project', 'listdefault', '--seq', String(seq), '--status', status]).code, 0);
+        set(2, 'in_progress');
+        set(3, 'completed');
+        set(4, 'cancelled');
+        const titles = (...extra: string[]) =>
+            runJson(home, ['task', 'list', '--project', 'listdefault', ...extra]).tasks.map((t: any) => t.title);
+        deepStrictEqual(titles(), ['working', 'open']);
+        deepStrictEqual(titles('--status', 'all'), ['done', 'working', 'open']);
+        deepStrictEqual(titles('--status', 'completed'), ['done']);
+        deepStrictEqual(titles('--status', 'cancelled'), ['dropped']);
+        deepStrictEqual(titles('--status', 'in_progress'), ['working']);
     });
 
     it('task get returns JSON', () => {
@@ -1748,7 +1769,8 @@ describe('--format — converted reads', () => {
         ok(body.endsWith('\n'));
         const parsed = JSON.parse(body);
         deepStrictEqual(Object.keys(parsed), ['tasks']);
-        strictEqual(parsed.tasks.length, 4);
+        // Task #1 is completed, so the default (pending + in_progress) list omits it.
+        strictEqual(parsed.tasks.length, 3);
         const status = { status: [{ status: 'success', message: `${Buffer.byteLength(body)} bytes → ${target}` }] };
         strictEqual(r.stdout, `${JSON.stringify(status)}\n`);
     });
