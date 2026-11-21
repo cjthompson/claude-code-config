@@ -21,15 +21,15 @@ database operations with `sqlite3` or by reading the database file directly.
 
 Read only the references needed for the current request:
 
-| Request | Required reference |
-|---|---|
-| Every invocation | [commands/init.md](../../commands/init.md) |
-| Create/list/update/check/complete/cancel/prioritize a task, or generate changelog | [references/task-commands.md](references/task-commands.md) |
-| Run all tasks | [references/task-commands.md](references/task-commands.md) and [references/task-execution.md](references/task-execution.md) |
-| Run one task, dispatch Scout/Executor, accept work, or handle worker failure | [references/task-execution.md](references/task-execution.md) |
-| Validate, repair, restart, clarify, reject, cancel, or recover an executing task | [references/validation-flow.md](references/validation-flow.md) |
-| Run a plan | [references/plans.md](references/plans.md) and [references/task-execution.md](references/task-execution.md) |
-| Any plan operation | [references/plans.md](references/plans.md) |
+| Request | Required reference | Covers |
+|---|---|---|
+| Every invocation | [commands/init.md](../../commands/init.md) | helper resolution, database setup, project ID, host capabilities, recovery of interrupted `in_progress` tasks |
+| Create/list/update/check/complete/cancel/prioritize a task, hide or show the task list, recent context, or generate changelog | [references/task-commands.md](references/task-commands.md) | task logging syntax, task CRUD, plan-link removal, check verdicts, hide list, changelog |
+| Run all tasks | [references/task-commands.md](references/task-commands.md) and [references/task-execution.md](references/task-execution.md) | batch rules, isolation, per-task pipeline |
+| Run one task, dispatch Scout/Executor, accept work, or handle worker failure | [references/task-execution.md](references/task-execution.md) | preconditions, isolation, baseline and `ownedPaths` derivation, task-list lifecycle, dispatch prompts, Accept and commit |
+| Validate, repair, restart, clarify, reject, or cancel an executing task | [references/validation-flow.md](references/validation-flow.md) | callback matching and stale callbacks, validation, repair and restart pipelines, cancellation cleanup |
+| Run a plan | [references/plans.md](references/plans.md) and [references/task-execution.md](references/task-execution.md) | pending/unblocked child-task selection, then per-task pipeline |
+| Any plan operation | [references/plans.md](references/plans.md) | `P###` vs `--plan-id`, propose/apply, drift, notes, `--output-file` |
 
 For a completion decision after a worker returns, read both
 `task-execution.md` and `validation-flow.md`. References are one level deep;
@@ -107,53 +107,15 @@ runningTasks[seq] = {
     isolation: worktree | direct,
     path, branch, baseCommit, baselineSnapshot,
     worktreeCreatedByTask?, branchCreatedByTask?,
-    ownedPaths: repository-relative POSIX paths[],
+    ownedPaths: deduplicated, normalized repository-relative POSIX paths[],
     recoveryRequired?
   }
 }
 ```
 
-Generate a fresh opaque `executionGeneration` before the initial Scout and
-before every confirmed repair or restart pipeline. Each dispatch record contains
-that generation, a stage, and the host dispatch ID. A callback may mutate state
-only when all three still match and cancellation was not requested.
-
-`ownedPaths` is a deduplicated list of normalized repository-relative POSIX
-paths currently attributable to the task. The parent recomputes it from the
-recorded baseline after every Executor and revalidates it before staging,
-selective restore, or removal. It is evidence for acceptance and cleanup, not a
-write-authorization list: Executors may make any repository changes required by
-their Implementation Map. Workers report changes but never decide ownership.
-
-## Task-list lifecycle
-
-Use stable entry IDs `scout-{seq}` and `execute-{seq}`. Never create duplicate
-entries for validation, repair, or restart.
-
-| Phase | Scout entry | Execute entry |
-|---|---|---|
-| pending | pending | absent |
-| scouting | in progress | pending if already present |
-| executing | completed | in progress |
-| awaiting_decision | preserve honest Scout result | awaiting decision |
-| validating | preserve honest Scout result | validating |
-| completed | completed | completed |
-| cancelled/failed | clear or mark terminal, never completed |
-
-Every synchronization updates `runningTasks[seq].status` first. If the user has
-hidden the list, update only in-memory state and do not create, update, or show
-task-list entries.
-
-The persistent task-list UI is optional. When the host does not expose one,
-maintain the same `runningTasks` lifecycle in memory and report phase changes in
-normal progress messages; do not treat the missing UI as an execution blocker.
-
-At session start, query `in_progress` tasks. A task without live session context
-is recovered into `awaiting_decision` with `recoveryRequired: true`. Do not
-accept, repair, restart, revert, delete, or dispatch from that entry. Offer to
-leave it for manual recovery or explicitly adopt the current checkout as a new
-baseline. Adoption requires no active worker, clears previous ownership and
-validation state, creates a fresh generation, and starts a new initial Scout.
+`ownedPaths` is evidence for acceptance and cleanup, not a write-authorization
+list: Executors may make any repository changes their Implementation Map
+requires, and workers never decide ownership.
 
 ## Completion decision
 
@@ -167,9 +129,7 @@ c) Validate with Top tier — run a read-only verifier
 d) Reject / Cancel — cancel the task and choose what happens to the work
 ```
 
-There is no Retry choice. Validation never mutates work. Repair preserves the
-current implementation; restart is the only validation outcome that discards
-task-owned implementation work, and it requires confirmation.
+There is no Retry choice.
 
 ## Output formats
 
@@ -186,22 +146,4 @@ to `pipe`. These reads return formatted results: `task get`, `task list`,
   not the top level. An empty part is `[]`.
 
 Never parse `pipe` output. `plan get --content-only` prints the raw body and rejects
-`--format`. With `--output-file`, the formatted output goes to the file and stdout
-gets a `status` part in the same format.
-
-## Quick reference
-
-| User request | Action |
-|---|---|
-| `task:` / `fix:` | Log and ask Run Now / Log Only / Auto-Run All |
-| `todo:` | Log only |
-| `log task:` / `log fix:` | Log only |
-| `run task:` / `run fix:` | Log and run immediately |
-| `run task #NNN` | Run one pending task |
-| runner completion | Accept, Validate Strong/Top, or Reject / Cancel |
-| `check task #NNN` | Read-only verification; no status change |
-| `run all tasks` | Run all unblocked pending tasks |
-| `hide list` | Hide task-list entries; workers continue |
-| `generate changelog` | Rebuild from completed tasks |
-| any `plan` request | Read `references/plans.md` first |
-| Show or read helper results | `--format md` (print verbatim) or `--format json` (read fields) |
+`--format`.

@@ -79,6 +79,9 @@ Set `hideListRequested = true`, clear/hide visible entries without changing
 their task phase, and confirm that workers continue silently. Later lifecycle
 updates affect in-memory state only until the user shows the list again.
 
+When the user asks to show the list, clear `hideListRequested` and resync
+entries from `runningTasks`.
+
 ## Complete manually
 
 Use the real time and task commit when one exists:

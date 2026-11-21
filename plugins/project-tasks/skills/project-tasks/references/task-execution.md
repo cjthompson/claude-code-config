@@ -6,12 +6,13 @@ acting on the post-execution decision menu.
 
 ## Contents
 
-- Preconditions and isolation
-- Execution context and ownership
-- Planning Scout
-- Execution Agent
-- Completion and Accept
-- Worker failures
+- Preconditions
+- Isolation
+- Execution context
+- Task-list lifecycle
+- Start the task (Planning Scout, Execution Agent)
+- Accept
+- Failures and interruption
 
 ## Preconditions
 
@@ -42,7 +43,7 @@ Never infer branch ownership merely because the task created a worktree.
 
 ## Execution context
 
-Before any write-capable dispatch, record:
+Before the Planning Scout (and any later write-capable dispatch), record:
 
 - isolation mode, absolute path, current branch, and `git rev-parse HEAD`;
 - separate `worktreeCreatedByTask` and `branchCreatedByTask` flags;
@@ -51,13 +52,38 @@ Before any write-capable dispatch, record:
 - the untracked-path manifest and relevant ignored-path state.
 
 This is `baselineSnapshot`. Generate a fresh `executionGeneration` and include
-it in every dispatch identity for this pass.
+it in every dispatch identity for this pass. A Restart records a new clean
+baseline; a Repair keeps the original baseline and records a separate
+pre-repair snapshot.
 
 When the Executor returns, recheck path, branch, and base commit. Derive
 `ownedPaths` from changes relative to the baseline, including task-created
 untracked files. If a path was already dirty or concurrent changes make
 ownership ambiguous, preserve everything and refuse automatic commit or
 cleanup.
+
+## Task-list lifecycle
+
+Use stable entry IDs `scout-{seq}` and `execute-{seq}`. Never create duplicate
+entries for validation, repair, or restart.
+
+| Phase | Scout entry | Execute entry |
+|---|---|---|
+| pending | pending | absent |
+| scouting | in progress | pending if already present |
+| executing | completed | in progress |
+| awaiting_decision | preserve honest Scout result | awaiting decision |
+| validating | preserve honest Scout result | validating |
+| completed | completed | completed |
+| cancelled/failed | clear or mark terminal, never completed |
+
+Every synchronization updates `runningTasks[seq].status` first. While
+`hideListRequested` is set, update only in-memory state; do not create, update,
+or show task-list entries.
+
+The persistent task-list UI is optional. When the host does not expose one,
+maintain the same `runningTasks` lifecycle in memory and report phase changes in
+normal progress messages; do not treat the missing UI as an execution blocker.
 
 ## Start the task
 
