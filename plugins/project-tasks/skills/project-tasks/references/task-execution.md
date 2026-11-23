@@ -97,8 +97,9 @@ If the task has a `plan_id`, this also promotes its plan to `in_progress`.
 
 ### Planning Scout
 
-Sync `scouting`, then dispatch the read-only Planning Scout at Strong tier in
-the recorded execution location. Record `{generation, stage: scout, id}`.
+Sync `scouting`, then dispatch the read-only Planning Scout in the recorded
+execution location at the tier `model-selection.md` yields (Strong by
+baseline). Record `{generation, stage: scout, id}`.
 
 Prompt shape:
 
@@ -129,8 +130,9 @@ store the full map as both `originalImplementationMap` and
 ### Execution Agent
 
 Before dispatch, recheck that the checkout still matches the baseline. Sync
-`executing`, dispatch the write-capable Execution Agent at Fast tier in the same
-location, and record `{generation, stage: executor, id}`.
+`executing`, dispatch the write-capable Execution Agent in the same location at
+the tier `model-selection.md` yields (Fast by baseline), and record
+`{generation, stage: executor, id}`.
 
 Prompt shape:
 
