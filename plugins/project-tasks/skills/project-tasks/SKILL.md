@@ -21,18 +21,22 @@ database operations with `sqlite3` or by reading the database file directly.
 
 Read only the references needed for the current request:
 
-| Request | Required reference |
-|---|---|
-| Every invocation | [commands/init.md](../../commands/init.md) |
-| Create/list/update/check/complete/cancel/prioritize a task, or generate changelog | [references/task-commands.md](references/task-commands.md) |
-| Run all tasks | [references/task-commands.md](references/task-commands.md) and [references/task-execution.md](references/task-execution.md) |
-| Run one task, dispatch Scout/Executor, accept work, or handle worker failure | [references/task-execution.md](references/task-execution.md) |
-| Validate, repair, restart, clarify, reject, cancel, or recover an executing task | [references/validation-flow.md](references/validation-flow.md) |
-| Run a plan | [references/plans.md](references/plans.md) and [references/task-execution.md](references/task-execution.md) |
-| Any plan operation | [references/plans.md](references/plans.md) |
+| Request | Required reference | Covers |
+|---|---|---|
+| Every invocation | [commands/init.md](../../commands/init.md) | helper resolution, database setup, project ID, host capabilities, recovery of interrupted `in_progress` tasks |
+| Create/list/update/check/complete/cancel/prioritize a task, hide or show the task list, recent context, or generate changelog | [references/task-commands.md](references/task-commands.md) | task logging syntax, task CRUD, plan-link removal, check verdicts, hide list, changelog |
+| Run all tasks | [references/task-commands.md](references/task-commands.md) and [references/task-execution.md](references/task-execution.md) | batch rules, isolation, per-task pipeline |
+| Run one task, dispatch Scout/Executor, accept work, or handle worker failure | [references/task-execution.md](references/task-execution.md) | preconditions, isolation, baseline and `ownedPaths` derivation, task-list lifecycle, dispatch prompts, Accept and commit |
+| Validate, repair, restart, clarify, reject, or cancel an executing task | [references/validation-flow.md](references/validation-flow.md) | callback matching and stale callbacks, validation, repair and restart pipelines, cancellation cleanup |
+| Dispatch the initial Scout or Executor for a task, or present the completion menu | [references/model-selection.md](references/model-selection.md) | signals for recommending a tier above the baseline, the pre-dispatch tier question, the `(Recommended)` marker on the completion menu |
+| Run a plan | [references/plans.md](references/plans.md) and [references/task-execution.md](references/task-execution.md) | pending/unblocked child-task selection, then per-task pipeline |
+| Any plan operation | [references/plans.md](references/plans.md) | `P###` vs `--plan-id`, propose/apply, drift, notes, `--output-file` |
 
-For a completion decision after a worker returns, read both
-`task-execution.md` and `validation-flow.md`. References are one level deep;
+The `model-selection.md` row applies in addition to any row that reads
+`task-execution.md` when dispatching a task's initial Scout and Executor. Repair, restart,
+re-validation, and `check` dispatches use the tiers their own references fix.
+For a completion decision after a worker returns, read `task-execution.md`,
+`validation-flow.md`, and `model-selection.md`. References are one level deep;
 do not look for another workflow file through a reference.
 
 ## Core invariants
@@ -63,10 +67,32 @@ do not look for another workflow file through a reference.
 | Execution Agent | Read/edit/write/shell/worktree | Fast |
 | Verifier | Read/search/network/worktree; no write, skill, agent, or MCP delegation | User-selected Strong or Top |
 
-Resolve `Fast < Strong < Top` through the current host's model roster. Omit the
-`model` parameter when the host cannot select one. The frontmatter
-`model: haiku` controls skill exercise/verification; it does not select nested
-agents.
+The tiers above are baselines; `references/model-selection.md` covers when to
+recommend a higher one. Resolve each tier to a model and reasoning level with this table, written
+`<model> @ <reasoning level>`:
+
+| Tier | Claude host | Codex host |
+|---|---|---|
+| Fast | Haiku @ xhigh | gpt-6-luna @ xhigh |
+| Strong | Sonnet 5.5 @ high | gpt-6.1-terra @ high |
+| Top | Opus 5.5 @ high | gpt-6.2-sol @ high |
+
+Use the column for the host running the lead agent. Pass the resolved model and
+reasoning level as dispatch parameters, alongside any `lean-agents` profile
+below; the table's model overrides the profile's default. When the host accepts
+only model-family aliases, pass the family alias (`haiku`, `sonnet`, `opus`).
+
+A model the user explicitly names for the Planning Scout, the Execution Agent,
+or the Verifier takes priority over this table; keep the reasoning level the
+table gives for that role's tier (for the Verifier, the tier the user picked)
+unless the user also states one. This is the only exception: `gpt-6.2-astra` and
+`fable` are never used unless the user names them this way. Otherwise use only
+the models in this table; never substitute a different model because it looks
+more capable. If a listed model is not in the host's roster, do not
+dispatch with another model: tell the user and ask how to proceed. Omit only a
+reasoning level the host cannot set, and tell the user it was not applied. The
+frontmatter `model: haiku` controls skill exercise/verification; it does not
+select nested agents.
 
 When the host's agent roster includes the optional `lean-agents` plugin, use
 the fully qualified `lean-agents:read-only` profile for Planning Scouts and
@@ -107,53 +133,15 @@ runningTasks[seq] = {
     isolation: worktree | direct,
     path, branch, baseCommit, baselineSnapshot,
     worktreeCreatedByTask?, branchCreatedByTask?,
-    ownedPaths: repository-relative POSIX paths[],
+    ownedPaths: deduplicated, normalized repository-relative POSIX paths[],
     recoveryRequired?
   }
 }
 ```
 
-Generate a fresh opaque `executionGeneration` before the initial Scout and
-before every confirmed repair or restart pipeline. Each dispatch record contains
-that generation, a stage, and the host dispatch ID. A callback may mutate state
-only when all three still match and cancellation was not requested.
-
-`ownedPaths` is a deduplicated list of normalized repository-relative POSIX
-paths currently attributable to the task. The parent recomputes it from the
-recorded baseline after every Executor and revalidates it before staging,
-selective restore, or removal. It is evidence for acceptance and cleanup, not a
-write-authorization list: Executors may make any repository changes required by
-their Implementation Map. Workers report changes but never decide ownership.
-
-## Task-list lifecycle
-
-Use stable entry IDs `scout-{seq}` and `execute-{seq}`. Never create duplicate
-entries for validation, repair, or restart.
-
-| Phase | Scout entry | Execute entry |
-|---|---|---|
-| pending | pending | absent |
-| scouting | in progress | pending if already present |
-| executing | completed | in progress |
-| awaiting_decision | preserve honest Scout result | awaiting decision |
-| validating | preserve honest Scout result | validating |
-| completed | completed | completed |
-| cancelled/failed | clear or mark terminal, never completed |
-
-Every synchronization updates `runningTasks[seq].status` first. If the user has
-hidden the list, update only in-memory state and do not create, update, or show
-task-list entries.
-
-The persistent task-list UI is optional. When the host does not expose one,
-maintain the same `runningTasks` lifecycle in memory and report phase changes in
-normal progress messages; do not treat the missing UI as an execution blocker.
-
-At session start, query `in_progress` tasks. A task without live session context
-is recovered into `awaiting_decision` with `recoveryRequired: true`. Do not
-accept, repair, restart, revert, delete, or dispatch from that entry. Offer to
-leave it for manual recovery or explicitly adopt the current checkout as a new
-baseline. Adoption requires no active worker, clears previous ownership and
-validation state, creates a fresh generation, and starts a new initial Scout.
+`ownedPaths` is evidence for acceptance and cleanup, not a write-authorization
+list: Executors may make any repository changes their Implementation Map
+requires, and workers never decide ownership.
 
 ## Completion decision
 
@@ -167,9 +155,11 @@ c) Validate with Top tier — run a read-only verifier
 d) Reject / Cancel — cancel the task and choose what happens to the work
 ```
 
-There is no Retry choice. Validation never mutates work. Repair preserves the
-current implementation; restart is the only validation outcome that discards
-task-owned implementation work, and it requires confirmation.
+Mark exactly one option `(Recommended)` as `model-selection.md` describes. The
+recommendation is advice only. Never act on it without the user's explicit
+choice.
+
+There is no Retry choice.
 
 ## Output formats
 
@@ -186,22 +176,4 @@ to `pipe`. These reads return formatted results: `task get`, `task list`,
   not the top level. An empty part is `[]`.
 
 Never parse `pipe` output. `plan get --content-only` prints the raw body and rejects
-`--format`. With `--output-file`, the formatted output goes to the file and stdout
-gets a `status` part in the same format.
-
-## Quick reference
-
-| User request | Action |
-|---|---|
-| `task:` / `fix:` | Log and ask Run Now / Log Only / Auto-Run All |
-| `todo:` | Log only |
-| `log task:` / `log fix:` | Log only |
-| `run task:` / `run fix:` | Log and run immediately |
-| `run task #NNN` | Run one pending task |
-| runner completion | Accept, Validate Strong/Top, or Reject / Cancel |
-| `check task #NNN` | Read-only verification; no status change |
-| `run all tasks` | Run all unblocked pending tasks |
-| `hide list` | Hide task-list entries; workers continue |
-| `generate changelog` | Rebuild from completed tasks |
-| any `plan` request | Read `references/plans.md` first |
-| Show or read helper results | `--format md` (print verbatim) or `--format json` (read fields) |
+`--format`.

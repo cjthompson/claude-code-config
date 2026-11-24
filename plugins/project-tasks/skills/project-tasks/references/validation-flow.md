@@ -5,10 +5,11 @@ restart, clarification, rejection, or cancellation.
 
 ## Contents
 
-- Validation contract
-- Accept, repair, restart, and clarify
+- Decision gate
+- Validate
+- Accept, Repair, Restart, and Clarify recommendations
 - Reject / Cancel
-- Recovered and failed validation
+- Validator failure
 
 ## Decision gate
 

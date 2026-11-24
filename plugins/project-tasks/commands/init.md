@@ -155,6 +155,30 @@ For (a) or (b), create
 there is no Git root, containing a `projectName` field. For (a), stage only
 that file. Never commit it automatically.
 
+## Recover interrupted tasks
+
+Once per session for each project, after `$PROJECT` is resolved for a
+project-scoped operation, query:
+
+```bash
+$TASK_DB task list --project "$PROJECT" --status in_progress --format json
+```
+
+A row in the `tasks` part with no `runningTasks` entry in this session was not
+started in this session. Recover it into `awaiting_decision` with
+`recoveryRequired: true`. Do not accept, repair, restart, revert, delete, or
+dispatch from that entry. Tell the user each task's number and title, and offer:
+
+```text
+a) Leave it for manual recovery
+b) Adopt the current checkout as a new baseline (only if no other Claude or
+   Codex session is working on this task)
+```
+
+Adoption requires no active worker, clears previous ownership and validation
+state, creates a fresh generation, and starts a new initial Scout under
+`task-execution.md`. After the user chooses (a) or (b), continue with the original request.
+
 ## Slash-command completion
 
 When invoked as `/project-tasks:init`, load the `project-tasks` skill after

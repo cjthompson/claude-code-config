@@ -350,7 +350,13 @@ function taskGet(action) {
 function taskList(action) {
     const p = esc(action.global.project);
     const status = action.opts.status;
-    const where = status ? `AND t.status='${esc(status)}'` : "AND t.status!='cancelled'";
+    // No --status: open work only (pending + in_progress). `all` is every status except
+    // cancelled, the previous default; any other value filters to exactly that status.
+    const where = status === 'all'
+        ? "AND t.status!='cancelled'"
+        : status
+            ? `AND t.status='${esc(status)}'`
+            : "AND t.status IN ('pending','in_progress')";
     const rows = sqlJson(
         `SELECT printf('#%03d',t.seq) AS number, t.type, t.title, t.priority,
                 CASE WHEN t.status='pending' AND EXISTS (SELECT 1 FROM json_each(t.depends_on) j JOIN tasks d ON d.project=t.project AND d.seq=j.value WHERE d.status!='completed') THEN 'pending (blocked)' ELSE t.status END AS status,
